@@ -1,4 +1,4 @@
-import 'package:dshell/dshell.dart';
+import 'package:dcli/dcli.dart';
 
 class Helper {
   static String askForPassPhrase(String passPhrase) {

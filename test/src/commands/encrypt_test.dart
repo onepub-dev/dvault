@@ -1,4 +1,4 @@
-import 'package:dshell/dshell.dart';
+import 'package:dcli/dcli.dart';
 import 'package:dvault/src/commands/encrypt.dart';
 import 'package:test/test.dart';
 import 'package:args/command_runner.dart';

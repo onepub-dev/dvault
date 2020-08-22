@@ -1,4 +1,4 @@
-#! /usr/bin/env dshell
+#! /usr/bin/env dcli
 
 
 import 'package:args/command_runner.dart';

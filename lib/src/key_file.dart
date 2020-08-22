@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:dshell/dshell.dart';
+import 'package:dcli/dcli.dart';
 import 'package:encrypt/encrypt.dart';
 import 'package:pointycastle/pointycastle.dart';
 
