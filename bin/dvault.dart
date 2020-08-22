@@ -2,7 +2,7 @@
 
 
 import 'package:args/command_runner.dart';
-import 'package:dvault/src/commands/create_keys.dart';
+import 'package:dvault/src/commands/init.dart';
 import 'package:dvault/src/commands/decrypt.dart';
 import 'package:dvault/src/commands/encrypt.dart';
 
@@ -22,7 +22,7 @@ String backupPath;
 ///
 void main(List<String> args) {
   var runner = CommandRunner<void>('vault', 'Encrypts/decrypts a file to a "vault" using your ssh keys.');
-  runner.addCommand(CreateKeysCommand());
+  runner.addCommand(InitCommand());
   runner.addCommand(EncryptCommand());
   runner.addCommand(DecryptCommand());
 
