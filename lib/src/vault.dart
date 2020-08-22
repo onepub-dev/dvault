@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:dshell/dshell.dart' hide fetch;
-import 'package:dshell/dshell.dart' as d;
+import 'package:dcli/dcli.dart' hide fetch;
+import 'package:dcli/dcli.dart' as d;
 import 'package:meta/meta.dart';
 
 /// Provide a simple tool which encrypts a text into  encrypted text using the system ssh keys.

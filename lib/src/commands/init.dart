@@ -3,7 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:args/command_runner.dart';
-import 'package:dshell/dshell.dart';
+import 'package:dcli/dcli.dart';
 import 'package:pointycastle/api.dart';
 import 'package:pointycastle/key_generators/rsa_key_generator.dart';
 import 'package:pointycastle/pointycastle.dart';

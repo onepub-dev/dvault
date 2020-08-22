@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
-import 'package:dshell/dshell.dart';
+import 'package:dcli/dcli.dart';
 import 'package:dvault/src/key_file.dart';
 import 'package:encrypt/encrypt.dart';
 

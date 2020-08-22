@@ -1,4 +1,4 @@
-import 'package:dshell/dshell.dart';
+import 'package:dcli/dcli.dart';
 import 'package:dvault/src/commands/init.dart';
 import 'package:dvault/src/key_file.dart';
 import 'package:test/test.dart';
