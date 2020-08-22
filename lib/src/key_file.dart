@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:dshell/dshell.dart';
-import 'package:dvault/src/commands/create_keys.dart';
 import 'package:encrypt/encrypt.dart';
 import 'package:pointycastle/pointycastle.dart';
+
+import 'util/strong_key.dart';
 
 class KeyFile {
   static const String version = '1';
@@ -21,13 +24,17 @@ class KeyFile {
     _appendPrivateKey(privateKey, passPhrase, iv);
     storagePath.append('');
     _appendPublicKey(publicKey);
+
+    if (!Platform.isWindows) {
+      /// read only use and no one else.
+      'chmod 600 $storagePath'.run;
+    }
   }
 
   /// Loads the key pair from disk decrypting the private key.
   AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> load(String passPhrase) {
     Settings().verbose('Loading Keyfile from: $storagePath');
 
-    passPhrase = CreateKeysCommand.extendPassPhrase(passPhrase);
     var lines = read(storagePath).toList();
 
     var version = _parseVersion(lines[0]);
@@ -66,8 +73,7 @@ class KeyFile {
     var exponent = rsaPublic.exponent.toString();
 
     var plainTextPrivateKey = '''modulus:$modulus
-                    exponent:$exponent
-                    ''';
+exponent:$exponent''';
 
     storagePath.append(BEGIN_PUBLIC);
     storagePath.append(plainTextPrivateKey);
@@ -85,12 +91,12 @@ class KeyFile {
     var q = rsaPrivate.q.toString();
 
     var plainTextPrivateKey = '''modulus:$modulus
-                    exponent:$exponent
-                    p:$p
-                    q:$q
-                    ''';
+exponent:$exponent
+p:$p
+q:$q''';
 
     final key = Key.fromUtf8(passPhrase);
+    key.stretch(128);
 
     final encrypter = Encrypter(AES(key));
 
@@ -131,9 +137,11 @@ class KeyFile {
 
     var encrypted = Encrypted.fromBase64(base64Encrypted);
 
-    final key = Key.fromUtf8(passPhrase);
+    final key = StrongKey.fromPassPhrase(passPhrase);
+    final salt = StrongKey.generateSalt;
+    key.secureStretch(salt);
 
-    final encrypter = Encrypter(AES(key));
+    final encrypter = Encrypter(AES(key, mode: AESMode.sic));
     final decrypted = encrypter.decrypt(encrypted, iv: iv).trim().split('\n');
 
     if (decrypted.length != 4) {

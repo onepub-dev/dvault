@@ -3,20 +3,32 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 import 'package:dshell/dshell.dart';
 import 'package:dvault/src/key_file.dart';
-import 'package:dvault/src/vault.dart';
 import 'package:encrypt/encrypt.dart';
-import 'package:pointycastle/pointycastle.dart';
 
 class EncryptCommand extends Command<void> {
   @override
   String get description => '''Encrypts the passed in file to a vault.
-  vault encrypt -f <pathname to encrypt> -v <pathname of resulting vault>''';
+  Generating a vault called important.vault.
+    dvault encrypt path/to/important.txt
+  
+  Generate the vault in an alternate file/path
+    dvault encrypt -v ~/mysavednotes/important.vault /path/to/important.txt
+
+  Overwrite the vault if it already exists.
+    dvault encrypt -o  /path/to/important.txt
+
+  Encrypt the contents of a directory into a single vault file.
+    dvault encrypt /path/to/encrypt
+
+  Recursively encrypt the contents of a directory into a single vault file.
+    dvault encrypt -r /path/to/encrypt
+
+  ''';
 
   @override
   String get name => 'encrypt';
 
   EncryptCommand() {
-    argParser.addOption('file', abbr: 'f', help: 'The path to the file that is to be encrypted.');
     argParser.addOption('vault', abbr: 'v', help: '''The path and filename to store the encrypted file into.
     If you don't pass a vault then the [file] name will be used with a .vault extension''');
     argParser.addFlag('overwrite',

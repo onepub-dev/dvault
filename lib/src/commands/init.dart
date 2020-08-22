@@ -13,14 +13,15 @@ import '../env.dart';
 import '../key_file.dart';
 import 'helper.dart';
 
-class CreateKeysCommand extends Command<void> {
+class InitCommand extends Command<void> {
   @override
-  String get description => 'Creates an RSA key pair used to encrypt/decrypt files';
+  String get description => '''Initialise dvault creating an RSA key pair used to encrypt/decrypt files.
+  dvault init''';
 
   @override
-  String get name => 'create';
+  String get name => 'init';
 
-  CreateKeysCommand() {
+  InitCommand() {
     argParser.addFlag('env',
         abbr: 'e',
         negatable: false,
@@ -49,7 +50,6 @@ class CreateKeysCommand extends Command<void> {
       exit(1);
     }
 
-    passPhrase = extendPassPhrase(passPhrase);
     var keyPair = generateKeyPair();
     printKeys(keyPair);
 
@@ -104,19 +104,5 @@ class CreateKeysCommand extends Command<void> {
     print('    d = ${rsaPrivate.exponent}'); // private exponent
     print('    p = ${rsaPrivate.p}'); // the two prime numbers
     print('    q = ${rsaPrivate.q}');
-  }
-
-  /// the pass phrase must be 256 bits so we double up the phrase
-  /// until it hits the required length.
-  /// This makes for a crappy key and perhaps we should up the minimum
-  /// length of the pass phrase to at least 16 characters (128 bits).
-  static String extendPassPhrase(String passPhrase) {
-    var extended = passPhrase;
-
-    while (extended.length < 32) {
-      extended += passPhrase;
-    }
-
-    return extended.substring(0, 32);
   }
 }

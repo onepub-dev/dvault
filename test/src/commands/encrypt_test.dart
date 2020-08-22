@@ -1,6 +1,5 @@
 import 'package:dshell/dshell.dart';
 import 'package:dvault/src/commands/encrypt.dart';
-import 'package:dvault/src/key_file.dart';
 import 'package:test/test.dart';
 import 'package:args/command_runner.dart';
 

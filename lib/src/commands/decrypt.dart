@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dshell/dshell.dart';
-import 'package:dvault/src/vault.dart';
 import 'package:encrypt/encrypt.dart';
 
 import '../env.dart';
@@ -12,7 +11,7 @@ import 'helper.dart';
 class DecryptCommand extends Command<void> {
   @override
   String get description => '''Decrypts the passed in vault.
-  vault decrypt <vaultname.vault>
+  dvault decrypt <vaultname.vault>
   ''';
 
   @override
