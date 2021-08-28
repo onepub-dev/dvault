@@ -5,7 +5,7 @@ import 'package:dcli/dcli.dart';
 import 'package:dvault/src/key_file.dart';
 import 'package:encrypt/encrypt.dart';
 
-class EncryptCommand extends Command<void> {
+class LockCommand extends Command<void> {
   @override
   String get description => '''Encrypts the passed in file to a vault.
   Generating a vault called important.vault.
@@ -28,7 +28,7 @@ class EncryptCommand extends Command<void> {
   @override
   String get name => 'encrypt';
 
-  EncryptCommand() {
+  LockCommand() {
     argParser.addOption('vault', abbr: 'v', help: '''The path and filename to store the encrypted file into.
     If you don't pass a vault then the [file] name will be used with a .vault extension''');
     argParser.addFlag('overwrite',

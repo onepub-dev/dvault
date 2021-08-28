@@ -13,25 +13,37 @@ class KeyFile {
   static const BEGIN_PUBLIC = '---- BEGIN DVAULT PUBLIC KEY ----';
   static const END_PUBLIC = '---- END DVAULT PUBLIC KEY ----';
 
+  /// Path to the .dvault file which we used to store the public/private key pair.
   String get storagePath => truepath(join(HOME, '.dvault'));
 
   /// Saves the key pair to disk encrypting the private key.
-  void save(PrivateKey privateKey, PublicKey publicKey, String passPhrase) {
+  void save(PrivateKey privateKey, PublicKey publicKey, String passphrase) {
     storagePath.write('version:$version');
     final iv = IV.fromLength(16);
     storagePath.append('iv:${iv.base64}');
 
-    _appendPrivateKey(privateKey, passPhrase, iv);
+    _appendPrivateKey(privateKey, passphrase, iv);
     storagePath.append('');
     _appendPublicKey(publicKey);
 
     if (!Platform.isWindows) {
-      /// read only use and no one else.
-      'chmod 600 $storagePath'.run;
+      /// read only access for user and no one else.
+      chmod(600, storagePath);
     }
   }
 
-  /// Loads the key pair from disk decrypting the private key.
+  void simple(
+      PrivateKey privateKey, PublicKey publicKey, String passphrase, IV iv) {
+    var encrypter = _encrypterFromPassphrase(passphrase);
+    final text = 'Hellow World';
+
+    final encrypted = encrypter.encrypt(text, iv: iv);
+    final decrypted = encrypter.decrypt(encrypted, iv: iv);
+
+    print('in $text out: $decrypted');
+  }
+
+  /// Loads the key pair from key file decrypting the private key.
   AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> load(String passPhrase) {
     Settings().verbose('Loading Keyfile from: $storagePath');
 
@@ -49,7 +61,7 @@ class KeyFile {
     return AsymmetricKeyPair(publicKey, privateKey);
   }
 
-  /// Loads just the public key file.
+  /// Loads just the public key from this key file.
   /// Used when we are encrypting and don't need the private key.
   RSAPublicKey loadPublic() {
     Settings().verbose('Loading Keyfile from: $storagePath');
@@ -65,40 +77,45 @@ class KeyFile {
   }
 
   ///
-  /// Append the Public Key to the storage file
+  /// Append the Public Key to the key file
   ///
   void _appendPublicKey(PublicKey publicKey) {
     final rsaPublic = publicKey as RSAPublicKey;
     var modulus = rsaPublic.modulus.toString();
     var exponent = rsaPublic.exponent.toString();
 
-    var plainTextPrivateKey = '''modulus:$modulus
+    var plainTextPublicKey = '''
+modulus:$modulus
 exponent:$exponent''';
 
     storagePath.append(BEGIN_PUBLIC);
-    storagePath.append(plainTextPrivateKey);
+    storagePath.append(plainTextPublicKey);
     storagePath.append(END_PUBLIC);
   }
 
   ///
-  /// Append the Private Key to the storage file
+  /// Append the Private Key to the key file
   ///
-  void _appendPrivateKey(PrivateKey privateKey, String passPhrase, IV iv) {
+  void _appendPrivateKey(PrivateKey privateKey, String passphrase, IV iv) {
     final rsaPrivate = privateKey as RSAPrivateKey;
     var modulus = rsaPrivate.modulus.toString();
     var exponent = rsaPrivate.exponent.toString();
     var p = rsaPrivate.p.toString();
     var q = rsaPrivate.q.toString();
 
-    var plainTextPrivateKey = '''modulus:$modulus
+    /// create a textual version of the private key
+    var plainTextPrivateKey = '''
+modulus:$modulus
 exponent:$exponent
 p:$p
 q:$q''';
 
-    final key = Key.fromUtf8(passPhrase);
-    key.stretch(128);
+    // /// use the passphrase as the key to encrypt the private key
+    // var key = Key.fromUtf8(passPhrase);
+    // key = key.stretch(32);
 
-    final encrypter = Encrypter(AES(key));
+    // final encrypter = Encrypter(AES(key));
+    final encrypter = _encrypterFromPassphrase(passphrase);
 
     final encrypted = encrypter.encrypt(plainTextPrivateKey, iv: iv);
 
@@ -107,41 +124,29 @@ q:$q''';
     storagePath.append(END_PRIVATE);
   }
 
-  String _parseVersion(String line) {
-    var parts = line.split(':');
-
-    if (parts.length != 2) {
-      throw DVaultException('Invalid key file $storagePath. Version no. not found. Found $line');
-    }
-    return parts[1];
-  }
-
   ///
   /// Load the private key
   ///
-  RSAPrivateKey _loadPrivateKey(List<String> lines, String passPhrase, IV iv) {
+  RSAPrivateKey _loadPrivateKey(List<String> lines, String passphrase, IV iv) {
     Settings().verbose('Loading PrivateKey ');
-    final keyLines = lines
-        .where((element) => element.trim().isNotEmpty) // filter empty lines.
-        .skipWhile((row) => !row.startsWith(BEGIN_PRIVATE))
-        .takeWhile((row) => !row.startsWith(END_PRIVATE))
-        .map((row) => row.trim())
-        .toList();
 
-    if (keyLines.length != 2) {
+    var keyLines = _extractKey(lines, BEGIN_PRIVATE, END_PRIVATE);
+
+    if (keyLines.length != 3) {
       throw DVaultException(
-          'Invalid key file $storagePath. The Private Key should consist of 3 lines, found ${keyLines.length + 1}. Found $keyLines\n');
+          'Invalid key file $storagePath. The Private Key should consist of 3 lines, found ${keyLines.length}. Found $keyLines\n');
     }
 
     var base64Encrypted = keyLines[1];
 
     var encrypted = Encrypted.fromBase64(base64Encrypted);
 
-    final key = StrongKey.fromPassPhrase(passPhrase);
-    final salt = StrongKey.generateSalt;
-    key.secureStretch(salt);
+    // var key = StrongKey.fromPassPhrase(passPhrase);
+    // final salt = StrongKey.generateSalt;
+    // key = key.stretch(256, iterationCount: 100000, salt: salt);
 
-    final encrypter = Encrypter(AES(key, mode: AESMode.sic));
+    // final encrypter = Encrypter(AES(key, mode: AESMode.sic));
+    final encrypter = _encrypterFromPassphrase(passphrase);
     final decrypted = encrypter.decrypt(encrypted, iv: iv).trim().split('\n');
 
     if (decrypted.length != 4) {
@@ -162,12 +167,8 @@ q:$q''';
   ///
   RSAPublicKey _loadPublicKey(List<String> lines) {
     Settings().verbose('Loading PublicKey ');
-    final keyLines = lines
-        .where((element) => element.trim().isNotEmpty) // filter empty lines.
-        .skipWhile((row) => !row.startsWith(BEGIN_PUBLIC))
-        .takeWhile((row) => !row.startsWith(END_PUBLIC))
-        .map((row) => row.trim())
-        .toList();
+
+    var keyLines = _extractKey(lines, BEGIN_PUBLIC, END_PUBLIC);
 
     Settings().verbose('Read PublicKey: $keyLines');
 
@@ -181,29 +182,77 @@ q:$q''';
     return RSAPublicKey(modulus, exponent);
   }
 
+  String _parseVersion(String line) {
+    var parts = line.split(':');
+
+    if (parts.length != 2) {
+      throw DVaultException(
+          'Invalid key file $storagePath. Version no. not found. Found $line');
+    }
+    return parts[1];
+  }
+
+  Encrypter _encrypterFromPassphrase(String passphrase) {
+    var strongKey = StrongKey.fromPassPhrase(passphrase);
+    final salt = StrongKey.generateSalt;
+
+    // TODO: chagne interation count to 100,000 and change ui to
+    // indicate the user should wait.
+    var key = strongKey.stretch(32, iterationCount: 100, salt: salt);
+
+    return Encrypter(AES(key, mode: AESMode.sic, padding: null));
+  }
+
   /// parse big int from line.
   BigInt parseBigInt(String keyLine, String key, String keyType) {
     var parts = keyLine.trim().split(':');
     if (parts.length != 2) {
-      throw DVaultException('$keyType does not have a valid modulus in $storagePath');
+      throw DVaultException(
+          '$keyType does not have a valid modulus in $storagePath');
     }
 
     if (parts[0] != key) {
-      throw DVaultException('$keyType does not have a valid modulus in $storagePath');
+      throw DVaultException(
+          '$keyType does not have a valid modulus in $storagePath');
     }
 
     return BigInt.parse(parts[1]);
+  }
+
+  /// parses the key components (including the begin and end lines)
+  /// out of [lines] loaded from the key file.
+  List<String> _extractKey(List<String> lines, String begin, String end) {
+    final keyLines = <String>[];
+    var inKey = false;
+    for (var line in lines) {
+      line = line.trim();
+      if (line.isEmpty) continue;
+      if (line.startsWith(end)) {
+        keyLines.add(line);
+        break;
+      }
+      if (inKey) {
+        keyLines.add(line);
+      }
+      if (line.startsWith(begin)) {
+        keyLines.add(line);
+        inKey = true;
+      }
+    }
+    return keyLines;
   }
 
   /// Parse the IV from a line.
   IV _parseIV(String line) {
     var parts = line.split(':');
     if (parts.length != 2) {
-      throw DVaultException('Invalid key file $storagePath. IV not found. Found $line');
+      throw DVaultException(
+          'Invalid key file $storagePath. IV not found. Found $line');
     }
 
     if (parts[0] != 'iv') {
-      throw DVaultException('Invalid key file $storagePath. IV not found. Found $line');
+      throw DVaultException(
+          'Invalid key file $storagePath. IV not found. Found $line');
     }
 
     return IV.fromBase64(parts[1]);

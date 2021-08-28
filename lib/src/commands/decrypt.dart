@@ -8,7 +8,7 @@ import '../env.dart';
 import '../key_file.dart';
 import 'helper.dart';
 
-class DecryptCommand extends Command<void> {
+class UnlockCommand extends Command<void> {
   @override
   String get description => '''Decrypts the passed in vault.
   dvault decrypt <vaultname.vault>
@@ -17,17 +17,24 @@ class DecryptCommand extends Command<void> {
   @override
   String get name => 'decrypt';
 
-  DecryptCommand() {
-    argParser.addOption('vault', abbr: 'v', help: 'The path and filename of the vault to decrypt.');
-    argParser.addOption('file', abbr: 'f', help: '''The path to store the decrypted data in.
+  UnlockCommand() {
+    argParser.addOption('vault',
+        abbr: 'v', help: 'The path and filename of the vault to decrypt.');
+    argParser.addOption('file',
+        abbr: 'f', help: '''The path to store the decrypted data in.
     If not specified than the basename of the vault will be used.''');
     argParser.addFlag('overwrite',
-        abbr: 'o', negatable: false, help: 'Overwrites the output if it already exists', defaultsTo: false);
+        abbr: 'o',
+        negatable: false,
+        help: 'Overwrites the output if it already exists',
+        defaultsTo: false);
     argParser.addFlag('env',
         abbr: 'e',
         negatable: false,
-        help: 'If set the pass phrase will be read from the ${Constants.DVAULT_PASSPHRASE} environment variable.');
-    argParser.addFlag('debug', abbr: 'd', help: 'Output debug information', defaultsTo: false);
+        help:
+            'If set the passphrase will be read from the ${Constants.DVAULT_PASSPHRASE} environment variable.');
+    argParser.addFlag('debug',
+        abbr: 'd', help: 'Output debug information', defaultsTo: false);
   }
 
   @override
@@ -50,7 +57,8 @@ class DecryptCommand extends Command<void> {
     var outputPath = argResults['file'] as String;
 
     // no output so use the vaultPath after stripping the .vault extension.
-    outputPath ??= join(dirname(vaultPath), basenameWithoutExtension(vaultPath));
+    outputPath ??=
+        join(dirname(vaultPath), basenameWithoutExtension(vaultPath));
 
     var overwrite = argResults['overwrite'] as bool;
 
@@ -65,12 +73,12 @@ class DecryptCommand extends Command<void> {
 
     String passPhrase;
     if (argResults['env']) {
-      passPhrase = env(Constants.DVAULT_PASSPHRASE);
+      passPhrase = env[Constants.DVAULT_PASSPHRASE];
     } else {
       passPhrase = Helper.askForPassPhrase(passPhrase);
     }
     if (passPhrase.length < 16) {
-      printerr(red('The pass phrase must be at least 16 characters long.'));
+      printerr(red('The passphrase must be at least 16 characters long.'));
       print(argParser.usage);
       exit(1);
     }

@@ -41,20 +41,27 @@ class SSHVault {
   ///
   /// If [overwrite] is false and the [vaultName] file exists then
   /// a [SSHVaultException] will be thrown.
-  void store({@required String text, @required String vaultName, bool overwrite = false}) {
+  void store(
+      {@required String text,
+      @required String vaultName,
+      bool overwrite = false}) {
     if (!vaultName.endsWith('.vault')) {
-      throw SSHVaultException('Invalid vaultName. The [vaultName] must end in ".vault".');
+      throw SSHVaultException(
+          'Invalid vaultName. The [vaultName] must end in ".vault".');
     }
 
     var vaultPath = join(storagePath, vaultName);
 
     install();
     print('creating your vault');
-    var lines = ('echo $text' | '${_vaultExePath} -u ${Shell.current.loggedInUser} create').toList();
+    var lines = ('echo $text' |
+            '$_vaultExePath -u ${Shell.current.loggedInUser} create')
+        .toList();
 
     if (exists(vaultPath)) {
       if (!overwrite) {
-        throw SSHVaultException('The vault at ${truepath(vaultPath)} already exists.');
+        throw SSHVaultException(
+            'The vault at ${truepath(vaultPath)} already exists.');
       }
       delete(vaultPath);
     }
@@ -65,23 +72,30 @@ class SSHVault {
     }
   }
 
-  void storeFile({@required String path, @required String vaultName, bool overwrite = false}) {
+  void storeFile(
+      {@required String path,
+      @required String vaultName,
+      bool overwrite = false}) {
     if (!vaultName.endsWith('.vault')) {
-      throw SSHVaultException('Invalid vaultName. The [vaultName] must end in ".vault".');
+      throw SSHVaultException(
+          'Invalid vaultName. The [vaultName] must end in ".vault".');
     }
 
     var vaultPath = join(storagePath, vaultName);
 
     if (exists(vaultPath)) {
       if (!overwrite) {
-        throw SSHVaultException('The vault at ${truepath(vaultPath)} already exists.');
+        throw SSHVaultException(
+            'The vault at ${truepath(vaultPath)} already exists.');
       }
       delete(vaultPath);
     }
 
     install();
     print('creating your vault');
-    ('cat $path' | '${_vaultExePath} -u ${Shell.current.loggedInUser} create $vaultPath').run;
+    ('cat $path' |
+            '$_vaultExePath -u ${Shell.current.loggedInUser} create $vaultPath')
+        .run;
   }
 
   String fetch({
@@ -93,9 +107,14 @@ class SSHVault {
     print('fetching $vaultPath');
     if (_isPrivKeyProtected(privateKeyPath)) {
       var passphrase = ask('Private Key Passphrase:', hidden: true);
-      text = ('echo $passphrase' | '$_vaultExePath  -k $privateKeyPath view $vaultPath ').toList().join('\n');
+      text = ('echo $passphrase' |
+              '$_vaultExePath  -k $privateKeyPath view $vaultPath ')
+          .toList()
+          .join('\n');
     } else {
-      text = ('$_vaultExePath  -k $privateKeyPath view $vaultPath').toList().join('\n');
+      text = ('$_vaultExePath  -k $privateKeyPath view $vaultPath')
+          .toList()
+          .join('\n');
     }
 
     return text;
@@ -113,7 +132,9 @@ class SSHVault {
     }
 
     print('Downloading vault.');
-    d.fetch(url: 'https://dl.bintray.com/nbari/ssh-vault/$version.tar.gz', saveToPath: tar);
+    d.fetch(
+        url: 'https://dl.bintray.com/nbari/ssh-vault/$version.tar.gz',
+        saveToPath: tar);
 
     final bytes = File(tar).readAsBytesSync();
 

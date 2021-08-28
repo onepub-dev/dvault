@@ -1,11 +1,14 @@
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/commands/init.dart';
 
 class Helper {
   static String askForPassPhrase(String passPhrase) {
     var comfirmed = false;
     do {
-      passPhrase = ask('Pass Phrase:', hidden: true, validator: AskMinLength(12));
-      var confirm = ask('Confirm Pass Phrase:', hidden: true);
+      passPhrase = ask('Passphrase:',
+          hidden: true,
+          validator: Ask.lengthMin(InitCommand.minPassPhraseLength));
+      var confirm = ask('Confirm Passphrase:', hidden: true);
 
       if (passPhrase == confirm) {
         break;
