@@ -5,7 +5,7 @@ import 'package:args/command_runner.dart';
 
 void main() {
   test('encrypt ...', () async {
-    var cmd = CommandRunner('dvault', 'stores encrypted stuff')..addCommand(EncryptCommand());
+    var cmd = CommandRunner('dvault', 'stores encrypted stuff')..addCommand(LockCommand());
     waitForEx(cmd.run(['encrypt', '-f', 'test/data/test_one.txt']));
   });
 }

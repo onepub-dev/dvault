@@ -1,6 +1,5 @@
 #! /usr/bin/env dcli
 
-
 import 'package:args/command_runner.dart';
 import 'package:dvault/src/commands/init.dart';
 import 'package:dvault/src/commands/decrypt.dart';
@@ -21,10 +20,11 @@ String backupPath;
 ///
 ///
 void main(List<String> args) {
-  var runner = CommandRunner<void>('vault', 'Encrypts/decrypts a file to a "vault" using your ssh keys.');
+  var runner = CommandRunner<void>('vault',
+      'Locks/Unlocks a file by encrypting it to a transportable "vault".');
   runner.addCommand(InitCommand());
-  runner.addCommand(EncryptCommand());
-  runner.addCommand(DecryptCommand());
+  runner.addCommand(LockCommand());
+  runner.addCommand(UnlockCommand());
 
   runner.run(args);
 }

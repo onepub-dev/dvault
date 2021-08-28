@@ -5,8 +5,8 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Create Keys",
-            "program": "test/src/commands/create_keys_test.dart",
+            "name": "Init Keys",
+            "program": "test/src/commands/init_test.dart",
             "request": "launch",
             "type": "dart",
             "console": "terminal"
