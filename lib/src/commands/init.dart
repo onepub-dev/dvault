@@ -1,14 +1,8 @@
 import 'dart:io';
-import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
 import 'package:dvault/src/util/generator.dart';
-import 'package:pointycastle/api.dart';
-import 'package:pointycastle/key_generators/rsa_key_generator.dart';
-import 'package:pointycastle/pointycastle.dart';
-import 'package:pointycastle/random/fortuna_random.dart';
 
 import '../env.dart';
 import '../key_file.dart';
@@ -35,24 +29,27 @@ class InitCommand extends Command<void> {
 
   @override
   void run() {
-    String passPhrase;
-    if (argResults['env']) {
+    String? passPhrase;
+    if (argResults!['env']) {
       passPhrase = env[Constants.DVAULT_PASSPHRASE];
     } else {
-      print('To protect your keys we lock them with a passphrase.');
-      passPhrase = Helper.askForPassPhrase(passPhrase);
+      print(
+          'To protect your keys we lock them with a passphrase with a minimum length of ${InitCommand.minPassPhraseLength}).');
+      passPhrase = Helper.askForPassPhrase();
     }
 
-    if (passPhrase.length < minPassPhraseLength) {
-      printerr(red('The passphrase must be at least 16 characters long.'));
+    if (passPhrase!.length < minPassPhraseLength) {
+      printerr(red(
+          'The passphrase must be at least ${InitCommand.minPassPhraseLength} characters long.'));
       print(argParser.usage);
       exit(1);
     }
 
+    print('Generating and saving key pair. Be patient this can take a while.');
     var keyPair = Generator().generateKeyPair();
-    // printKeys(keyPair);
 
     KeyFile().save(keyPair.privateKey, keyPair.publicKey, passPhrase);
+    print('Key pair generation complete');
 
     print('');
     print(orange('*' * 80));

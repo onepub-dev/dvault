@@ -39,9 +39,9 @@ class LockCommand extends Command<void> {
   @override
   void run() {
     Settings().setVerbose(enabled: true);
-    var overwrite = argResults['overwrite'] as bool;
+    var overwrite = argResults!['overwrite'] as bool?;
 
-    var filePath = argResults['file'] as String;
+    var filePath = argResults!['file'] as String;
 
     if (!exists(filePath)) {
       printerr("The passed file path ${truepath(filePath)} doesn't exists.");
@@ -49,10 +49,10 @@ class LockCommand extends Command<void> {
       exit(1);
     }
 
-    var vaultPath = argResults['vault'] as String;
+    var vaultPath = argResults!['vault'] as String?;
 
     if (vaultPath != null && exists(vaultPath)) {
-      if (overwrite) {
+      if (overwrite!) {
         delete(vaultPath);
       } else {
         printerr('The passed vault path ${truepath(vaultPath)} already exists.');

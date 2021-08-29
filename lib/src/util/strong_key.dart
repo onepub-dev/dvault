@@ -15,8 +15,8 @@ class StrongKey extends Key {
   }
 
   @override
-  Key stretch(int desiredKeyLength, {int iterationCount = 100, Uint8List salt}) {
-    final params = Pbkdf2Parameters(salt, iterationCount, desiredKeyLength);
+  Key stretch(int desiredKeyLength, {int iterationCount = 100, Uint8List? salt}) {
+    final params = Pbkdf2Parameters(salt!, iterationCount, desiredKeyLength);
     final pbkdf2 = PBKDF2KeyDerivator(Mac('SHA-512/HMAC'))..init(params);
 
     return Key(pbkdf2.process(bytes));

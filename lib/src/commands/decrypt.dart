@@ -39,8 +39,8 @@ class UnlockCommand extends Command<void> {
 
   @override
   void run() {
-    Settings().setVerbose(enabled: argResults['debug'] as bool);
-    var vaultPath = argResults['vault'] as String;
+    Settings().setVerbose(enabled: argResults!['debug'] as bool);
+    var vaultPath = argResults!['vault'] as String?;
 
     if (vaultPath == null) {
       printerr("You must pass a 'vault'.");
@@ -54,16 +54,16 @@ class UnlockCommand extends Command<void> {
       exit(1);
     }
 
-    var outputPath = argResults['file'] as String;
+    var outputPath = argResults!['file'] as String?;
 
     // no output so use the vaultPath after stripping the .vault extension.
     outputPath ??=
         join(dirname(vaultPath), basenameWithoutExtension(vaultPath));
 
-    var overwrite = argResults['overwrite'] as bool;
+    var overwrite = argResults!['overwrite'] as bool?;
 
     if (exists(outputPath)) {
-      if (!overwrite) {
+      if (!overwrite!) {
         printerr('The output path ${truepath(outputPath)} already exists.');
         print(argParser.usage);
         exit(1);
@@ -71,13 +71,13 @@ class UnlockCommand extends Command<void> {
       delete(outputPath);
     }
 
-    String passPhrase;
-    if (argResults['env']) {
+    String? passPhrase;
+    if (argResults!['env']) {
       passPhrase = env[Constants.DVAULT_PASSPHRASE];
     } else {
-      passPhrase = Helper.askForPassPhrase(passPhrase);
+      passPhrase = Helper.askForPassPhrase();
     }
-    if (passPhrase.length < 16) {
+    if (passPhrase!.length < 16) {
       printerr(red('The passphrase must be at least 16 characters long.'));
       print(argParser.usage);
       exit(1);

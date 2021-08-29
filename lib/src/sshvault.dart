@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:dcli/dcli.dart' hide fetch;
 import 'package:dcli/dcli.dart' as d;
-import 'package:meta/meta.dart';
 
 /// Provide a simple tool which encrypts a text into  encrypted text using the system ssh keys.
 ///
@@ -14,11 +13,11 @@ class SSHVault {
   static const vaultExe = 'ssh-vault';
   static const version = 'ssh-vault_0.12.6_linux_amd64';
 
-  String storagePath;
+  String? storagePath;
 
-  String privateKeyPath;
+  String? privateKeyPath;
 
-  String publicKeyPath;
+  String? publicKeyPath;
 
   /// [storagePath] is the path (directory)
   /// where we are going to store the resulting vault.
@@ -31,7 +30,7 @@ class SSHVault {
     publicKeyPath ??= join(HOME, '.ssh', 'id_rsa.pub');
   }
 
-  String get _vaultExePath => join(storagePath, vaultExe);
+  String get _vaultExePath => join(storagePath!, vaultExe);
 
   /// Stores the passed [text] into a vault located at [storagePath].
   /// If [overwrite] is true and a vault with the name [vaultName]
@@ -42,15 +41,15 @@ class SSHVault {
   /// If [overwrite] is false and the [vaultName] file exists then
   /// a [SSHVaultException] will be thrown.
   void store(
-      {@required String text,
-      @required String vaultName,
+      {required String text,
+      required String vaultName,
       bool overwrite = false}) {
     if (!vaultName.endsWith('.vault')) {
       throw SSHVaultException(
           'Invalid vaultName. The [vaultName] must end in ".vault".');
     }
 
-    var vaultPath = join(storagePath, vaultName);
+    var vaultPath = join(storagePath!, vaultName);
 
     install();
     print('creating your vault');
@@ -68,20 +67,20 @@ class SSHVault {
 
     touch(vaultPath, create: true);
     for (var line in lines) {
-      vaultPath.append(line);
+      vaultPath.append(line!);
     }
   }
 
   void storeFile(
-      {@required String path,
-      @required String vaultName,
+      {required String path,
+      required String vaultName,
       bool overwrite = false}) {
     if (!vaultName.endsWith('.vault')) {
       throw SSHVaultException(
           'Invalid vaultName. The [vaultName] must end in ".vault".');
     }
 
-    var vaultPath = join(storagePath, vaultName);
+    var vaultPath = join(storagePath!, vaultName);
 
     if (exists(vaultPath)) {
       if (!overwrite) {
@@ -99,9 +98,9 @@ class SSHVault {
   }
 
   String fetch({
-    String vaultName,
+    String? vaultName,
   }) {
-    var vaultPath = join(storagePath, vaultName);
+    var vaultPath = join(storagePath!, vaultName);
     String text;
 
     print('fetching $vaultPath');
@@ -141,9 +140,9 @@ class SSHVault {
     print('expanding vault tar');
     final expanded = TarDecoder().decodeBytes(GZipDecoder().decodeBytes(bytes));
 
-    var vaultArchive = expanded.findFile(join(version, vaultExe));
+    var vaultArchive = expanded.findFile(join(version, vaultExe))!;
     final data = vaultArchive.content as List<int>;
-    File(join(storagePath, vaultExe))
+    File(join(storagePath!, vaultExe))
       ..createSync(recursive: true)
       ..writeAsBytesSync(data);
 
@@ -153,7 +152,7 @@ class SSHVault {
 
 /// Check if the ssh private key file located at [path]
 /// is password protected
-bool _isPrivKeyProtected(String path) {
+bool _isPrivKeyProtected(String? path) {
   // run
   // ssh-keygen -y -P "" -f rsa_enc
   //

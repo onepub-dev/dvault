@@ -14,11 +14,7 @@ class Generator {
   Generator._internal();
 
   AsymmetricKeyPair<PublicKey, PrivateKey> generateKeyPair() {
-    print('Generating key pair. Be patient this can take a while.');
     var keyPair = getRsaKeyPair(getSecureRandom());
-
-    print('Key pair generation complete');
-
     return keyPair;
   }
 
@@ -57,7 +53,7 @@ class Generator {
     print('  Public:');
     print('    e = ${rsaPublic.exponent}'); // public exponent
     print('    n = ${rsaPublic.modulus}');
-    print('  Private: n.bitlength = ${rsaPrivate.modulus.bitLength}');
+    print('  Private: n.bitlength = ${rsaPrivate.modulus!.bitLength}');
     print('    n = ${rsaPrivate.modulus}');
     print('    d = ${rsaPrivate.exponent}'); // private exponent
     print('    p = ${rsaPrivate.p}'); // the two prime numbers
