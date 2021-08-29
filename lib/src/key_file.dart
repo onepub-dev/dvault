@@ -1,6 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/util/exceptions.dart';
 import 'package:encrypt/encrypt.dart';
 import 'package:pointycastle/pointycastle.dart';
 
@@ -22,43 +25,78 @@ class KeyFile {
     final iv = IV.fromLength(16);
     storagePath.append('iv:${iv.base64}');
 
-    _appendPrivateKey(privateKey, passphrase, iv);
+    final salt = StrongKey.generateSalt;
+    final encodedSalt = base64Encode(salt);
+
+    storagePath.append('salt:$encodedSalt');
+    var encrypter = _encrypterFromPassphrase(passphrase, salt);
+
+    // store a test message so we can easily check the passphrase
+    // is correct.
+    var testMessage = encrypter.encrypt('test', iv: iv);
+    storagePath.append('test:${testMessage.base64}');
+
+    storagePath.append('');
+    _appendPrivateKey(privateKey, encrypter, iv);
     storagePath.append('');
     _appendPublicKey(publicKey);
 
     if (!Platform.isWindows) {
-      /// read only access for user and no one else.
+      /// read/write only access for user and no one else.
       chmod(600, storagePath);
     }
   }
 
-  void simple(
-      PrivateKey privateKey, PublicKey publicKey, String passphrase, IV iv) {
-    var encrypter = _encrypterFromPassphrase(passphrase);
-    final text = 'Hellow World';
-
-    final encrypted = encrypter.encrypt(text, iv: iv);
-    final decrypted = encrypter.decrypt(encrypted, iv: iv);
-
-    print('in $text out: $decrypted');
-  }
-
   /// Loads the key pair from key file decrypting the private key.
-  AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> load(String passPhrase) {
+  AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> load(String passphrase) {
     Settings().verbose('Loading Keyfile from: $storagePath');
 
     var lines = read(storagePath).toList();
 
     var version = _parseVersion(lines[0]);
     var iv = _parseIV(lines[1]);
-
+    var salt = _parseSalt(lines[2]);
+    var test = _parseTest(lines[3]);
     Settings().verbose('Storage Version: $version');
 
-    var privateKey = _loadPrivateKey(lines, passPhrase, iv);
+    final encrypter = _encrypterFromPassphrase(passphrase, salt);
+
+    if (!_validatePassphrase(passphrase, encrypter, test, iv)) {
+      throw InvalidPassphraseException();
+    }
+
+    var privateKey = _loadPrivateKey(lines, encrypter, iv);
 
     var publicKey = _loadPublicKey(lines);
 
     return AsymmetricKeyPair(publicKey, privateKey);
+  }
+
+  void resetPassphrase(
+      {required String current, required String newPassphrase}) {
+    var pair = load(current);
+
+    save(pair.privateKey, pair.publicKey, newPassphrase);
+  }
+
+  bool _validatePassphrase(
+      String passphrase, Encrypter encrypter, String base64TestMessage, IV iv) {
+    var encrypted = Encrypted.fromBase64(base64TestMessage);
+
+    var testConfirm = encrypter.decrypt(encrypted, iv: iv);
+
+    return (testConfirm == 'test');
+  }
+
+  bool validatePassphrase(String passphrase) {
+    var lines = read(storagePath).toList();
+    var iv = _parseIV(lines[1]);
+    var salt = _parseSalt(lines[2]);
+    var base64TestMessage = _parseTest(lines[3]);
+
+    final encrypter = _encrypterFromPassphrase(passphrase, salt);
+
+    return _validatePassphrase(passphrase, encrypter, base64TestMessage, iv);
   }
 
   /// Loads just the public key from this key file.
@@ -96,7 +134,7 @@ exponent:$exponent''';
   ///
   /// Append the Private Key to the key file
   ///
-  void _appendPrivateKey(PrivateKey privateKey, String passphrase, IV iv) {
+  void _appendPrivateKey(PrivateKey privateKey, Encrypter encrypter, IV iv) {
     final rsaPrivate = privateKey as RSAPrivateKey;
     var modulus = rsaPrivate.modulus.toString();
     var exponent = rsaPrivate.exponent.toString();
@@ -115,7 +153,6 @@ q:$q''';
     // key = key.stretch(32);
 
     // final encrypter = Encrypter(AES(key));
-    final encrypter = _encrypterFromPassphrase(passphrase);
 
     final encrypted = encrypter.encrypt(plainTextPrivateKey, iv: iv);
 
@@ -127,7 +164,8 @@ q:$q''';
   ///
   /// Load the private key
   ///
-  RSAPrivateKey _loadPrivateKey(List<String> lines, String passphrase, IV iv) {
+  RSAPrivateKey _loadPrivateKey(
+      List<String> lines, Encrypter encrypter, IV iv) {
     Settings().verbose('Loading PrivateKey ');
 
     var keyLines = _extractKey(lines, BEGIN_PRIVATE, END_PRIVATE);
@@ -138,15 +176,7 @@ q:$q''';
     }
 
     var base64Encrypted = keyLines[1];
-
     var encrypted = Encrypted.fromBase64(base64Encrypted);
-
-    // var key = StrongKey.fromPassPhrase(passPhrase);
-    // final salt = StrongKey.generateSalt;
-    // key = key.stretch(256, iterationCount: 100000, salt: salt);
-
-    // final encrypter = Encrypter(AES(key, mode: AESMode.sic));
-    final encrypter = _encrypterFromPassphrase(passphrase);
     final decrypted = encrypter.decrypt(encrypted, iv: iv).trim().split('\n');
 
     if (decrypted.length != 4) {
@@ -172,7 +202,7 @@ q:$q''';
 
     Settings().verbose('Read PublicKey: $keyLines');
 
-    if (keyLines.length != 3) {
+    if (keyLines.length != 4) {
       throw DVaultException(
           'Invalid key file $storagePath. The Public Key should consist of 4 lines, found ${keyLines.length + 1}.');
     }
@@ -192,13 +222,14 @@ q:$q''';
     return parts[1];
   }
 
-  Encrypter _encrypterFromPassphrase(String passphrase) {
+  Encrypter _encrypterFromPassphrase(String passphrase, Uint8List salt) {
     var strongKey = StrongKey.fromPassPhrase(passphrase);
-    final salt = StrongKey.generateSalt;
 
-    // TODO: chagne interation count to 100,000 and change ui to
+    // TODO: change interation count to 100,000 and change ui to
     // indicate the user should wait.
-    var key = strongKey.stretch(32, iterationCount: 100, salt: salt);
+    // Need advice on this as using 100,000 interations takes a
+    // long time. This means unlocking a file is going to take a long time.
+    var key = strongKey.stretch(32, iterationCount: 1000, salt: salt);
 
     return Encrypter(AES(key, mode: AESMode.sic, padding: null));
   }
@@ -256,6 +287,40 @@ q:$q''';
     }
 
     return IV.fromBase64(parts[1]);
+  }
+
+  /// Parse the base64 encoded salt from a line
+  /// and return the decoded salt
+  Uint8List _parseSalt(String line) {
+    var parts = line.split(':');
+    if (parts.length != 2) {
+      throw DVaultException(
+          'Invalid key file $storagePath. Salt not found. Found $line');
+    }
+
+    if (parts[0] != 'salt') {
+      throw DVaultException(
+          'Invalid key file $storagePath. Salt not found. Found $line');
+    }
+
+    return base64Decode(parts[1].trim());
+  }
+
+  /// Parse the base64 encoded test message from a line
+  /// and return the test message still base 64 encoded.
+  String _parseTest(String line) {
+    var parts = line.split(':');
+    if (parts.length != 2) {
+      throw DVaultException(
+          'Invalid key file $storagePath. Test not found. Found $line');
+    }
+
+    if (parts[0] != 'test') {
+      throw DVaultException(
+          'Invalid key file $storagePath. Test not found. Found $line');
+    }
+
+    return parts[1].trim();
   }
 }
 
