@@ -6,14 +6,15 @@ import 'package:pointycastle/key_generators/rsa_key_generator.dart';
 import 'package:pointycastle/pointycastle.dart';
 import 'package:pointycastle/random/fortuna_random.dart';
 
-class Generator {
-  static final Generator _self = Generator._internal();
+/// Class to generator RSAKeyPairs
+class RSAGenerator {
+  static final RSAGenerator _self = RSAGenerator._internal();
 
-  factory Generator() => _self;
+  factory RSAGenerator() => _self;
 
-  Generator._internal();
+  RSAGenerator._internal();
 
-  AsymmetricKeyPair<PublicKey, PrivateKey> generateKeyPair() {
+  AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> generateKeyPair() {
     var keyPair = getRsaKeyPair(getSecureRandom());
     return keyPair;
   }
@@ -22,14 +23,17 @@ class Generator {
   ///
   /// Returns a [AsymmetricKeyPair] based on the [RSAKeyGenerator] with custom parameters,
   /// including a [SecureRandom]
-  AsymmetricKeyPair<PublicKey, PrivateKey> getRsaKeyPair(
+  AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> getRsaKeyPair(
       SecureRandom secureRandom) {
     /// Set BitStrength to [1024, 2048 or 4096]
     var rsapars = RSAKeyGeneratorParameters(BigInt.from(65537), 4096, 5);
     var params = ParametersWithRandom(rsapars, secureRandom);
     var keyGenerator = RSAKeyGenerator();
     keyGenerator.init(params);
-    return keyGenerator.generateKeyPair();
+    var pair = keyGenerator.generateKeyPair();
+
+    return AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey>(
+        pair.publicKey as RSAPublicKey, pair.privateKey as RSAPrivateKey);
   }
 
   // Generates a [SecureRandom] to use in computing RSA key pair
