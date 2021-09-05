@@ -2,10 +2,11 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/util/generator.dart';
+import 'package:dvault/src/rsa/rsa_generator.dart';
+import 'package:dvault/src/util/messages.dart';
 
 import '../env.dart';
-import '../key_file.dart';
+import '../dot_vault_file.dart';
 import 'helper.dart';
 
 class InitCommand extends Command<void> {
@@ -29,6 +30,25 @@ class InitCommand extends Command<void> {
 
   @override
   void run() {
+    if (exists(DotVaultFile.storagePath)) {
+      print(red(('*' * 40) + ' WARNING' + ('*' * 40)));
+      print(orange('Your .dvault file already exists.'));
+      print(orange(
+          'If you continue you will lose access to all existing vaults.'));
+      print(blue("If you want to change your passphrase use 'dvault reset'."));
+      if (!confirm(
+          (red('Are you sure you want to lose access to existing vaults?')))) {
+        print('Init stopped.');
+        exit(1);
+      } else {
+        backupFile(DotVaultFile.storagePath);
+        print('');
+        print(blue(
+            'Your .dvault file has been backed up to a .bak subdirectory'));
+        print('');
+        delete(DotVaultFile.storagePath);
+      }
+    }
     String? passPhrase;
     if (argResults!['env']) {
       passPhrase = env[Constants.DVAULT_PASSPHRASE];
@@ -46,17 +66,11 @@ class InitCommand extends Command<void> {
     }
 
     print('Generating and saving key pair. Be patient this can take a while.');
-    var keyPair = Generator().generateKeyPair();
+    var keyPair = RSAGenerator().generateKeyPair();
 
-    KeyFile().save(keyPair.privateKey, keyPair.publicKey, passPhrase);
+    DotVaultFile.create(keyPair.privateKey, keyPair.publicKey, passPhrase);
     print('Key pair generation complete');
 
-    print('');
-    print(orange('*' * 80));
-    print(orange('*'));
-    print(orange(
-        '* If you lose your passphrase you will irretrievably lose access to all files protected with DVault'));
-    print(orange('*'));
-    print(orange('*' * 80));
+    printBackupMessage(DotVaultFile.storagePath);
   }
 }

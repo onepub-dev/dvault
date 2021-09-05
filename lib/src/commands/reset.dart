@@ -1,7 +1,8 @@
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/util/messages.dart';
 
-import '../key_file.dart';
+import '../dot_vault_file.dart';
 import 'helper.dart';
 
 class ResetCommand extends Command<void> {
@@ -23,25 +24,22 @@ class ResetCommand extends Command<void> {
     print(
         'To protect your keys we lock them with a passphrase with a minimum length of ${ResetCommand.minPassPhraseLength}).');
 
-    String current;
+    String? current;
     do {
+      if (current != null) {
+        print(red('Invalid passphrase.'));
+      }
       current = ask('Current passphrase:', hidden: true);
-    } while (!KeyFile().validatePassphrase(current));
+    } while (!DotVaultFile.load().validatePassphrase(current));
 
     var newPassphrase = Helper.askForPassPhrase(prompt: 'New passphrase');
 
-    var keyfile = KeyFile();
+    var keyfile = DotVaultFile.load();
     keyfile.resetPassphrase(current: current, newPassphrase: newPassphrase);
 
     print('');
     print(green('Your passphrase has been reset.'));
 
-    print('');
-    print(orange('*' * 80));
-    print(orange('*'));
-    print(orange(
-        '* If you lose your passphrase you will irretrievably lose access to all files protected with DVault'));
-    print(orange('*'));
-    print(orange('*' * 80));
+    printBackupMessage(DotVaultFile.storagePath);
   }
 }

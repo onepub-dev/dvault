@@ -2,8 +2,8 @@
 
 import 'package:args/command_runner.dart';
 import 'package:dvault/src/commands/init.dart';
-import 'package:dvault/src/commands/decrypt.dart';
-import 'package:dvault/src/commands/encrypt.dart';
+import 'package:dvault/src/commands/unlock.dart';
+import 'package:dvault/src/commands/lock.dart';
 import 'package:dvault/src/commands/reset.dart';
 
 String? sshPubKey;
@@ -22,7 +22,7 @@ String? backupPath;
 ///
 void main(List<String> args) {
   var runner = CommandRunner<void>('vault',
-      'Locks/Unlocks a file by encrypting it to a transportable "vault".');
+      'Locks/Unlocks a file by encrypting it into a transportable "vault".');
   runner.addCommand(InitCommand());
   runner.addCommand(LockCommand());
   runner.addCommand(UnlockCommand());

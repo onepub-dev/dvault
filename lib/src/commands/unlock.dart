@@ -5,7 +5,7 @@ import 'package:dcli/dcli.dart';
 import 'package:encrypt/encrypt.dart';
 
 import '../env.dart';
-import '../key_file.dart';
+import '../dot_vault_file.dart';
 import 'helper.dart';
 
 class UnlockCommand extends Command<void> {
@@ -71,21 +71,21 @@ class UnlockCommand extends Command<void> {
       delete(outputPath);
     }
 
-    String? passPhrase;
+    String? passphrase;
     if (argResults!['env']) {
-      passPhrase = env[Constants.DVAULT_PASSPHRASE];
+      passphrase = env[Constants.DVAULT_PASSPHRASE];
     } else {
-      passPhrase = Helper.askForPassPhrase();
+      passphrase = Helper.askForPassPhrase();
     }
-    if (passPhrase!.length < 16) {
+    if (passphrase!.length < 16) {
       printerr(red('The passphrase must be at least 16 characters long.'));
       print(argParser.usage);
       exit(1);
     }
 
-    var keyPair = KeyFile().load(passPhrase);
+    var keyPair = DotVaultFile.load();
 
-    var encrypter = Encrypter(RSA(privateKey: keyPair.privateKey));
+    var encrypter = Encrypter(RSA(privateKey: keyPair.privateKey(passphrase: passphrase)));
 
     var file = File(vaultPath);
     var encrypted = file.readAsBytesSync();

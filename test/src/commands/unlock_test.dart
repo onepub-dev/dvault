@@ -1,6 +1,6 @@
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/commands/decrypt.dart';
-import 'package:dvault/src/key_file.dart';
+import 'package:dvault/src/commands/unlock.dart';
+import 'package:dvault/src/dot_vault_file.dart';
 import 'package:test/test.dart';
 import 'package:args/command_runner.dart';
 
@@ -20,6 +20,6 @@ void main() {
     ]));
 
     //  ask('passphrase');
-    KeyFile().load(passPhrase);
+    DotVaultFile.load();
   });
 }
