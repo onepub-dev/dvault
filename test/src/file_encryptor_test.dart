@@ -1,93 +1,91 @@
 @Timeout(Duration(minutes: 5))
+import 'dart:cli';
 import 'dart:io';
 
 import 'package:async/async.dart';
+import 'package:dcli/dcli.dart' hide equals;
 import 'package:dvault/src/file_encryptor.dart';
 import 'package:test/test.dart';
-import 'package:dcli/dcli.dart' hide equals;
 
 void main() {
-  test('file encryptor ...', () async {
-    var encryptor = FileEncryptor.noEncryption();
+  test('file encryptor ...', () {
+    final encryptor = FileEncryptor.noEncryption();
 
-    final testFile = 'testfile.txt';
+    const testFile = 'testfile.txt';
     testFile.write('1Hello World');
     testFile.append('2Hello World');
 
-    final vault = 'testfile.vault';
-    var writeTo = File(vault).openWrite();
-
-    /// encrypt the file
-    try {
-      await encryptor.encrypt(testFile, writeTo);
-    } finally {
-      await writeTo.close();
-    }
+    const pathToVvault = 'testfile.vault';
+    withOpenFile(pathToVvault, (vault) {
+      /// encrypt the file
+      encryptor.encrypt(testFile, vault);
+    });
 
     // decrypt the file
-    final resultFile = 'result.txt';
+    const resultFile = 'result.txt';
     if (exists(resultFile)) delete(resultFile);
-    var resultSink = File(resultFile).openWrite();
-    final reader = ChunkedStreamReader(File(vault).openRead());
+    final resultSink = File(resultFile).openWrite();
+    final reader =
+        ChunkedReader(ChunkedStreamReader(File(pathToVvault).openRead()));
     try {
-      await encryptor.decryptStream(reader, resultSink);
+      encryptor.decryptReader(reader, resultSink);
     } finally {
-      await resultSink.close();
-      await reader.cancel();
+      waitFor(resultSink.close());
+      reader.cancel();
     }
 
     expect(stat(resultFile).size, equals(stat(testFile).size));
     expect(
-        read(resultFile).toParagraph(), equals(read(testFile).toParagraph()));
+      read(resultFile).toParagraph(),
+      equals(read(testFile).toParagraph()),
+    );
   });
 
-  test('Test Padding', () async {
-    var encryptor = FileEncryptor.noEncryption();
+  test('Test Padding', () {
+    final encryptor = FileEncryptor.noEncryption();
 
     // 32 chars
-    var text = 'abcdefghijklmnopqrstuvwxyz01234567';
+    const text = 'abcdefghijklmnopqrstuvwxyz01234567';
 
-    final testFile = 'testfile.txt';
+    const testFile = 'testfile.txt';
     for (var size = 2; size <= 32; size++) {
-      var toStore = text.substring(0, size);
-      var file = File(testFile);
+      final toStore = text.substring(0, size);
+      final file = File(testFile);
       file.writeAsStringSync(toStore);
-      var encryptedFile = await _lock(testFile, encryptor);
+      final encryptedFile = _lock(testFile, encryptor);
       // block size is 16 bits so should always be multiple of two
       // the mini vault has an 8 byte header to store
       /// the actual size of the file.
-      var expectedContent = stat(encryptedFile).size - 8;
+      final expectedContent = stat(encryptedFile).size - 8;
       expect((expectedContent % 2) == 0, isTrue);
 
-      var resultsFile = await _unlock(encryptedFile, encryptor);
+      final resultsFile = _unlock(encryptedFile, encryptor);
       expect(stat(resultsFile).size == size, isTrue);
       expect(read(resultsFile).toParagraph(), equals(toStore));
     }
   });
 }
 
-Future<String> _lock(String pathToPlainText, FileEncryptor encryptor) async {
-  final vault = 'testfile.vault';
-  var writeTo = File(vault).openWrite();
+String _lock(String pathToPlainText, FileEncryptor encryptor) {
+  const pathToVault = 'testfile.vault';
+  withOpenFile(pathToVault, (vault) {
+    encryptor.encrypt(pathToPlainText, vault);
+  });
 
-  try {
-    await encryptor.encrypt(pathToPlainText, writeTo);
-  } finally {
-    await writeTo.close();
-  }
-
-  return vault;
+  return pathToVault;
 }
 
-Future<String> _unlock(
-    String pathToEncryptedFile, FileEncryptor encryptor) async {
-  final resultFile = 'result.txt';
+String _unlock(
+  String pathToEncryptedFile,
+  FileEncryptor encryptor,
+) {
+  const resultFile = 'result.txt';
 
-  var writeTo = File(resultFile).openWrite();
+  final writeTo = File(resultFile).openWrite();
   try {
-    await encryptor.decrypt(pathToEncryptedFile, writeTo);
+    encryptor.decrypt(pathToEncryptedFile, writeTo);
   } finally {
-    await writeTo.close();
+    writeTo.close();
   }
 
   return resultFile;

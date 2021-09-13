@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/util/raf_helper.dart';
 
 import 'file_encryptor.dart';
 import 'toc_entry.dart';
@@ -10,49 +11,59 @@ class TableOfContents {
 
   List<TOCEntry> entries = <TOCEntry>[];
 
-  void addFile(String pathTo) {
-    entries.add(TOCEntry(pathTo));
+  void addFile({required String pathToFile, required String relativeTo}) {
+    entries.add(TOCEntry(pathToFile: pathToFile, relativeTo: relativeTo));
   }
 
-  void addDirectory(String pathTo, {bool recursive = false}) {
-    var types = [Find.file];
+  void addDirectory({
+    required String pathTo,
+    required String relativeTo,
+    bool recursive = false,
+  }) {
+    final types = [Find.file];
     if (recursive) {
       types.add(Find.directory);
     }
     find('*', workingDirectory: pathTo, recursive: recursive, types: types)
         .forEach((path) {
       if (isFile(path)) {
-        entries.add(TOCEntry(path));
+        entries.add(TOCEntry(pathToFile: path, relativeTo: relativeTo));
       }
     });
   }
 
-  Future<void> saveFiles(String pathToVault, int startOfFiles) async {
-    var encryptor = FileEncryptor();
+  void saveFiles(FileSync vault, int startOfFiles) {
+    final encryptor = FileEncryptor();
 
-    final vaultSink = File(pathToVault).openWrite(mode: FileMode.append);
+    // inal vaultSink = File(pathToVault).openWrite(mode: FileMode.append);
 
     var offset = startOfFiles;
     for (final entry in entries) {
-      entry.length = await addFileToVault(vaultSink, entry.path, encryptor);
+      entry.length = addFileToVault(vault, entry, encryptor);
       entry.offset = offset;
       offset += entry.length;
     }
 
-    await vaultSink.close();
+    //await vaultSink.close();
   }
 
-  Future<int> addFileToVault(
-      IOSink vaultSink, String filePath, FileEncryptor encryptor) async {
-    return await encryptor.encrypt(filePath, vaultSink);
+  int addFileToVault(
+    FileSync vault,
+    TOCEntry entry,
+    FileEncryptor encryptor,
+  ) {
+    return encryptor.encrypt(
+      join(entry.relativeTo!, entry.relativePathToFile),
+      vault,
+    );
   }
 
-  String get _tocEntryCountLine => 'entries: ${entries.length}';
+  String get _tocEntryCountLine => 'entries:${entries.length}';
 
-  void saveToc(String pathToVault) {
-    pathToVault.append(_tocEntryCountLine);
-    for (var entry in entries) {
-      pathToVault.append(entry.asLine);
+  void saveToc(FileSync vault) {
+    vault.append(_tocEntryCountLine);
+    for (final entry in entries) {
+      vault.append(entry.asLine);
     }
   }
 
@@ -60,9 +71,18 @@ class TableOfContents {
   /// at position [startOfToc]
   void load(int startOfToc, RandomAccessFile raf) {
     raf.setPositionSync(startOfToc);
+
+    final entryCount = parseNo(readLine(raf, 'entries'), 'entries');
+
+    for (var i = 0; i < entryCount; i++) {
+      final entry = TOCEntry.fromLine(readLine(raf, 'offset'));
+      entries.add(entry);
+    }
   }
 
+  // // ignore: unused_field
+  // int? _startOfFiles;
 
-  int? _startOfFiles;
-  void setStartOfFiles(int startOfFiles) => _startOfFiles = startOfFiles;
+  // // ignore: avoid_setters_without_getters
+  // set setStartOfFiles(int startOfFiles) => _startOfFiles = startOfFiles;
 }

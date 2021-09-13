@@ -1,4 +1,3 @@
-class Constants
-{
-  static const DVAULT_PASSPHRASE = 'DVAULT_PASSPHRASE';
+class Constants {
+  static const dvaultPassphrase = 'DVAULT_PASSPHRASE';
 }

@@ -1,23 +1,30 @@
-import 'dart:async';
 import 'dart:cli';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dcli/dcli.dart';
 import 'package:dvault/src/file_encryptor.dart';
 import 'package:dvault/src/table_of_content.dart';
+import 'package:dvault/src/toc_entry.dart';
 import 'package:dvault/src/util/exceptions.dart';
 import 'package:dvault/src/util/raf_helper.dart';
+import 'package:dvault/src/util/strong_key.dart';
 import 'package:dvault/src/version/version.dart';
+import 'package:encrypt/encrypt.dart';
 
 import 'dot_vault_file.dart';
 
 /// Class for reading and writing vaults
 /// A vault consists of serveral areas
 ///```
-///magic: <magic code>
-///version: x
+///magic: 17e64d12-c347-4c67-9899-f52b015183ec
+///version: 1
 ///created: by DVault Version x.x.x.
 ///author: S. Brett Sutton
+///salt: <base64 encoded salt>
+///iv: <base 64 encoded iv>
+///test: <test phrase used to validate passphrase>
 ///<clear text public key>
 ///<encrypted private key>
 ///Ctrl-Z
@@ -28,152 +35,229 @@ import 'dot_vault_file.dart';
 class VaultFile {
   TableOfContents toc = TableOfContents();
 
-  VaultFile();
+  /// Create a new vault object ready to add files to.
+  VaultFile(this.pathToVault) {
+    iv = IV.fromSecureRandom(16);
+    salt = StrongKey.generateSalt;
+  }
+
+  /// Use this ctor when you are going to load the vault from disk
+  VaultFile._forLoading(this.pathToVault);
+
+  String pathToVault;
+  late final Uint8List salt;
+  late final IV iv;
 
   /// This value must never be changed even across versions
   /// of DVault and
-  static final MAGIC_CODE = '17e64d12-c347-4c67-9899-f52b015183ec';
-  void saveTo(String pathToVault) {
-    final dotVaultFile = DotVaultFile.load();
-    pathToVault.append(_magicLine);
-    pathToVault.append(_versionLine);
-    pathToVault.append(_createdByLine);
-    pathToVault.append(_authorLine);
-    pathToVault.append(_saltLine(dotVaultFile.salt));
-    pathToVault.append(_IVLine(dotVaultFile.iv));
-    pathToVault
-        .append(dotVaultFile.extractPrivateKeyLines().join(Platform().eol));
-    pathToVault
-        .append(dotVaultFile.extractPublicKeyLines().join(Platform().eol));
-    pathToVault.append('');
+  static const magicCode = '17e64d12-c347-4c67-9899-f52b015183ec';
 
-    var startOfFiles = stat(pathToVault).size;
-    waitFor(_saveFiles(pathToVault, startOfFiles));
-    var startOfTOC = stat(pathToVault).size + 1;
-    toc.saveToc(pathToVault);
-    pathToVault.append(_startOfFilesLine(startOfFiles));
-    pathToVault.append(_startOfTocLine(startOfTOC));
+  /// Saves the added files and directories into the vault
+  /// at [pathToVault]
+  /// encrypting them (locking) as it goes.
+  void saveTo() {
+    final dotVaultFile = DotVaultFile.load();
+    withOpenFile(pathToVault, (vault) {
+      vault.append(_magicLine);
+      vault.append(_versionLine);
+      vault.append(_createdByLine);
+      vault.append(_authorLine);
+      vault.append(_saltLine(dotVaultFile.salt));
+      vault.append(_ivLine(dotVaultFile.iv));
+      vault.append(dotVaultFile.extractPrivateKeyLines().join(Platform().eol));
+      vault.append(dotVaultFile.extractPublicKeyLines().join(Platform().eol));
+      vault.append('');
+      final startOfFiles = vault.length;
+      _saveFiles(vault, startOfFiles);
+      final startOfTOC = vault.length;
+      toc.saveToc(vault);
+      vault.append(_startOfFilesLine(startOfFiles));
+      vault.append(_startOfTocLine(startOfTOC));
+    });
   }
 
-  VaultFile.load(String pathToVault) {
-    var vault = File(pathToVault);
-    final file = waitFor(vault.open(mode: FileMode.read));
-    _readMagic(pathToVault, file);
-    _readVersion(pathToVault, file);
-    _readCreatedBy(pathToVault, file);
-    _readAuthor(pathToVault, file);
-    _readSalt(pathToVault, file);
-    _readIV(pathToVault, file);
-    _readPrivateKey(pathToVault, file);
-    _readPublicKey(pathToVault, file);
+  // ignore: prefer_constructors_over_static_methods
+  static VaultFile load(String pathToVault) {
+    // final vault = File(pathToVault);
 
-    toc = _loadToc(pathToVault, file);
-    _extractFiles(pathToVault, file);
+    final vault = VaultFile._forLoading(pathToVault);
+    final raf = waitFor(File(pathToVault).open());
+    try {
+      vault._readMagic(pathToVault, raf);
+      vault._readVersion(pathToVault, raf);
+      vault._readCreatedBy(pathToVault, raf);
+      vault._readAuthor(pathToVault, raf);
+      vault._readSalt(pathToVault, raf);
+      vault._readIV(pathToVault, raf);
+      vault._readPrivateKey(pathToVault, raf);
+      vault._readPublicKey(pathToVault, raf);
 
-    waitFor(file.close());
+      vault.toc = vault._loadToc(pathToVault, raf);
+    } finally {
+      waitFor(raf.close());
+    }
+    return vault;
+  }
+
+  /// Extracts all files from the vault into [pathToExtractTo].
+  ///```dart
+  /// var vault = Vault.load(pathToVault);
+  /// vault.extractFiles();
+  /// ```
+  void extractFiles(String pathToExtractTo) {
+    final raf = waitFor(File(pathToVault).open());
+    try {
+      final fileEncryptor = FileEncryptor();
+      for (final entry in toc.entries) {
+        _extractFile(fileEncryptor, raf, entry, pathToExtractTo);
+      }
+    } finally {
+      waitFor(raf.close());
+    }
   }
 
   int get version => 1;
-  String get _magicLine => 'magic: $MAGIC_CODE';
-  String get _versionLine => 'version: $version';
-  String get _createdByLine => 'created: by DVault Version $packageVersion';
-  String get _authorLine => 'author: S. Brett Sutton';
+  static const magicKey = 'magic';
+  static const versionKey = 'version';
+  static const createdKey = 'created';
+  static const authorKey = 'author';
+  static const saltKey = 'salt';
+  static const ivKey = 'iv';
+  static const startOfTocKey = 'start of toc';
+  static const startOfFilesKey = 'start of files';
 
-  String _saltLine(String salt) => 'salt: $salt';
-  String _IVLine(String iv) => 'iv: $iv';
+  String get _magicLine => '$magicKey:$magicCode';
+  String get _versionLine => '$versionKey:$version';
+  String get _createdByLine => '$createdKey:by DVault Version $packageVersion';
+  String get _authorLine => '$authorKey:S. Brett Sutton';
+
+  String _saltLine(Uint8List salt) => '$saltKey:${base64Encode(salt)}';
+  String _ivLine(IV iv) => '$ivKey:${iv.base64}';
 
   /// The start of toc and start of files lines
   /// a re fixed width as we need be able to seek directly
   /// to them at the end of the file.
   String _startOfFilesLine(int startOfFiles) =>
-      '$_startOfFilesPrefix $startOfFiles'.padRight(80);
+      '$startOfFilesKey:$startOfFiles'.padRight(80);
   String _startOfTocLine(int startOfToc) =>
-      '$_startOfTocPrefix $startOfToc'.padRight(80);
-
-  String get _startOfTocPrefix => 'start of toc:';
-
-  String get _startOfFilesPrefix => 'start of files:';
+      '$startOfTocKey:$startOfToc'.padRight(80);
 
   TableOfContents _loadToc(String pathToVault, RandomAccessFile raf) {
-    var length = raf.lengthSync();
+    final length = raf.lengthSync();
 
-    raf.setPositionSync(length - 162);
-    var startOfFiles = _loadStartOfFiles(pathToVault, raf);
-    var startOfToc = _loadStartOfToc(pathToVault, raf);
+    raf.setPositionSync(length - (2 * (80 + Platform().eol.length)));
+    _loadStartOfFiles(pathToVault, raf);
+    final startOfToc = _loadStartOfToc(pathToVault, raf);
 
-    return TableOfContents()
-      ..load(startOfToc, raf)
-      ..setStartOfFiles(startOfFiles);
+    return TableOfContents()..load(startOfToc, raf);
+    // ..setStartOfFiles = startOfFiles;
   }
 
   void _readMagic(String pathToVault, RandomAccessFile file) {
-    var magic = readLine(file, 'Magic');
-    if (!_compareLine(magic, _magicLine)) {
+    final magic = readLine(file, 'Magic');
+    if (magic != _magicLine) {
       throw VaultReadException(
-          'Unexpected Magic Code. Are you sure ${truepath(pathToVault)} is a vault?');
+        'Unexpected Magic Code. Are you sure ${truepath(pathToVault)} is a vault?',
+      );
     }
   }
 
   void _readVersion(String pathToVault, RandomAccessFile file) {
-    var version = readLine(file, 'Version');
-    if (version.substring(0, version.length - 1) != _versionLine) {
+    final version = readLine(file, versionKey);
+    if (version != _versionLine) {
       throw VaultReadException(
-          'Unexpected Version. Expected $_versionLine, found $version');
+        'Unexpected Version. Expected $_versionLine, found $version',
+      );
     }
   }
 
   void _readCreatedBy(String pathToVault, RandomAccessFile file) {
-    var createdBy = readLine(file, 'created');
+    final createdBy = readLine(file, createdKey);
     if (!createdBy.startsWith('created:')) {
       throw VaultReadException(
-          'Unexpected Created. Expected $_createdByLine, found $createdBy');
+        'Unexpected Created. Expected $_createdByLine, found $createdBy',
+      );
     }
   }
 
   void _readAuthor(String pathToVault, RandomAccessFile file) {
-    var author = readLine(file, 'Author');
-    if (author.substring(0, author.length - 1) != _authorLine) {
+    final author = readLine(file, authorKey);
+    if (author != _authorLine) {
       throw VaultReadException(
-          'Unexpected Author. Expected $_authorLine, found $author');
+        'Unexpected Author. Expected $_ivLine, found $author',
+      );
     }
+  }
+
+  void _readSalt(String pathToVault, RandomAccessFile file) {
+    final _salt = readLine(file, saltKey);
+    if (!_salt.startsWith('$saltKey:')) {
+      throw VaultReadException(
+        'Unexpected Salt. Expected $_saltLine, found $_salt',
+      );
+    }
+    salt = base64Decode(_salt.substring(saltKey.length + 1));
+  }
+
+  void _readIV(String pathToVault, RandomAccessFile file) {
+    final _iv = readLine(file, saltKey);
+    if (!_iv.startsWith('$ivKey:')) {
+      throw VaultReadException(
+        'Unexpected IV. Expected $_saltLine, found $_iv',
+      );
+    }
+    iv = IV.fromBase64(_iv.substring(ivKey.length + 1));
   }
 
   int _loadStartOfToc(String pathToVault, RandomAccessFile file) {
-    var startOfToc = readLine(file, _startOfTocPrefix);
-    if (!startOfToc.startsWith(_startOfTocPrefix)) {
+    final startOfToc = readLine(file, startOfTocKey);
+    if (!startOfToc.startsWith(startOfTocKey)) {
       throw VaultReadException(
-          'Unexpected Start of TOC Prefix. Expected $_startOfTocPrefix, found $startOfToc');
+        'Unexpected Start of TOC Prefix. Expected $startOfTocKey, found $startOfToc',
+      );
     }
-    return parseNo(startOfToc, _startOfTocPrefix);
+    return parseNo(startOfToc, startOfTocKey);
   }
 
   int _loadStartOfFiles(String pathToVault, RandomAccessFile file) {
-    var startOfFiles = readLine(file, _startOfFilesPrefix);
-    if (!startOfFiles.startsWith(_startOfFilesPrefix)) {
+    final startOfFiles = readLine(file, startOfFilesKey);
+    if (!startOfFiles.startsWith(startOfFilesKey)) {
       throw VaultReadException(
-          'Unexpected Start of TOC Prefix. Expected $_startOfFilesPrefix, found $startOfFiles');
+        'Unexpected Start of TOC Prefix. Expected $startOfFilesKey, found $startOfFiles',
+      );
     }
-    return parseNo(startOfFiles, _startOfFilesPrefix);
+    return parseNo(startOfFiles, startOfFilesKey);
   }
 
-  bool _compareLine(String line, String expectedString) {
-    return (line.substring(0, line.length - 1) != expectedString);
+  /// Adds the file located at [pathTo] into the vault
+  /// The path of the file is converted to a path
+  /// which is relative to [relativeTo]. If [relativeTo] is
+  /// not passed then the current working directory is assumed.
+  void addFile(String pathTo, {String? relativeTo}) {
+    relativeTo ??= pwd;
+
+    toc.addFile(pathToFile: pathTo, relativeTo: relativeTo);
   }
 
-  void addFile(String pathTo) {
-    toc.addFile(pathTo);
+  void _saveFiles(FileSync vault, int startOfFiles) {
+    toc.saveFiles(vault, startOfFiles);
   }
 
-  Future<void> _saveFiles(String pathToVault, int startOfFiles) async {
-    await toc.saveFiles(pathToVault, startOfFiles);
-  }
-
-  void addDirectory(String filePath, {required bool recursive}) {
-    toc.addDirectory(filePath, recursive: recursive);
+  void addDirectory({
+    required String pathToDirectory,
+    String? relativeTo,
+    required bool recursive,
+  }) {
+    relativeTo ??= pwd;
+    toc.addDirectory(
+      pathTo: pathToDirectory,
+      relativeTo: relativeTo,
+      recursive: recursive,
+    );
   }
 
   List<String> _readPrivateKey(String pathToVault, RandomAccessFile file) {
-    var lines = <String>[];
+    final lines = <String>[];
     lines.add(readLine(file, 'Private Key Line 1'));
     lines.add(readLine(file, 'Private Key Line 2'));
     lines.add(readLine(file, 'Private Key Line 3'));
@@ -181,7 +265,7 @@ class VaultFile {
   }
 
   List<String> _readPublicKey(String pathToVault, RandomAccessFile file) {
-    var lines = <String>[];
+    final lines = <String>[];
     lines.add(readLine(file, 'Public Key Line 1'));
     lines.add(readLine(file, 'Public Key Line 2'));
     lines.add(readLine(file, 'Public Key Line 3'));
@@ -190,17 +274,24 @@ class VaultFile {
     return lines;
   }
 
-  void _extractFiles(
-      String pathToVault, RandomAccessFile raf, FileEncryptor fileEncryptor) {
-    for (var entry in toc.entries) {
-      raf.setPosition(entry.offset);
+  /// Extracts [entry] from the vault saving the file with its original
+  /// relative path into [extractToDirectory].
+  void _extractFile(
+    FileEncryptor fileEncryptor,
+    RandomAccessFile rafVault,
+    TOCEntry entry,
+    String extractToDirectory,
+  ) {
+    final pathToExtractedFile =
+        join(extractToDirectory, entry.relativePathToFile);
 
-      withTempDir((dir) {
-        var pathToExtractedFile = join(dir, entry.path);
+    final writeTo = File(pathToExtractedFile).openWrite();
 
-        var writeTo = File(pathToExtractedFile).openWrite();
-        fileEncryptor.decryptEntry(entry, raf, writeTo);
-      }, keep: true);
+    try {
+      rafVault.setPositionSync(entry.offset);
+      fileEncryptor.decryptEntry(entry, rafVault, writeTo);
+    } finally {
+      waitFor(writeTo.close());
     }
   }
 }

@@ -2,14 +2,26 @@ import 'dart:io';
 
 import 'exceptions.dart';
 
-String readLine(RandomAccessFile raf, String key) {
-  var line = '';
+/// Reads a single line from [raf] and returns
+/// it after removing any platform specific line
+/// terminators.
+/// The [description] is used only if an error message is generated
+/// and is used to describe the line being read.
+/// If the line contains a key:value pair then pass the key as the
+/// [description].
+String readLine(RandomAccessFile raf, String description) {
+  final line = StringBuffer();
+  var terminatorLength = 1;
   try {
     var byte = 0;
 
     while (byte != -1) {
       byte = raf.readByteSync();
-      line += String.fromCharCode(byte);
+
+      line.write(String.fromCharCode(byte));
+      if (byte == '\r'.codeUnitAt(0)) {
+        terminatorLength++;
+      }
       if (byte == '\n'.codeUnitAt(0)) {
         break;
       }
@@ -18,35 +30,38 @@ String readLine(RandomAccessFile raf, String key) {
       throw UnexpectedEndOfFileException();
     }
   } on UnexpectedEndOfFileException catch (_) {
-    throw VaultReadException('Unexpected EOF reading $key');
+    throw VaultReadException('Unexpected EOF reading $description');
   }
 
-  return line;
+  /// we have to assume we are reading a file created on another platform
+  /// that may have written different line terminators.
+  return line.toString().substring(0, line.length - terminatorLength);
 }
 
 int parseNo(String line, String key) {
-  var value = parseValue(line, key);
-  var no = int.tryParse(value);
+  final value = parseValue(line, key);
+  final no = int.tryParse(value);
   if (no == null) {
     throw VaultReadException(
-        'Expected integer for value in key:value pair for $key. Found $line');
+      'Expected integer for value in key:value pair for $key. Found $line',
+    );
   }
 
   return no;
 }
 
 String parseValue(String keyValuePair, String key) {
-  var parts = keyValuePair.split(':');
-  if (parts.length != 2) {
+  final keyPrefix = '$key:';
+
+  final _keyValuePair = keyValuePair.trim();
+
+  if (!_keyValuePair.startsWith(keyPrefix)) {
     throw VaultReadException(
-        'Expected key:value pair for $key. Found $keyValuePair');
-  }
-  if (parts[0].trim() != key) {
-    throw VaultReadException(
-        'Expected Key: $key in key:value pair. Found $keyValuePair');
+      "Expected Key: '$key:' in key: value pair. Found $_keyValuePair",
+    );
   }
 
-  var value = parts[1];
+  final value = _keyValuePair.substring(keyPrefix.length).trim();
 
   return value;
 }

@@ -7,7 +7,8 @@ import '../vault.dart';
 
 class LockCommand extends Command<void> {
   @override
-  String get description => '''Locks the passed in file by adding it to a vault.
+  String get description => '''
+Locks the passed in file by adding it to a vault.
   Generating a vault called important.vault.
     dvault lock path/to/important.txt
   
@@ -30,30 +31,34 @@ class LockCommand extends Command<void> {
   String get name => 'lock';
 
   LockCommand() {
-    argParser.addOption('vault',
-        abbr: 'v',
-        help: '''The path and filename of the vault to store the file into.
-    If you don't pass a vault then the [file] name will be used with a .vault extension''');
-    argParser.addFlag('overwrite',
-        abbr: 'o',
-        negatable: false,
-        help: 'Overwrites the vault if it already exists',
-        defaultsTo: false);
-    argParser.addFlag('children',
-        abbr: 'c',
-        negatable: false,
-        help: 'Include child directories and their files in vault',
-        defaultsTo: false);
-    argParser.addFlag('debug',
-        abbr: 'd', help: 'Output debug information', defaultsTo: false);
+    argParser.addOption(
+      'vault',
+      abbr: 'v',
+      help: '''
+  The path and filename of the vault to store the file into.
+    If you don't pass a vault then the [file] name will be used with a .vault extension''',
+    );
+    argParser.addFlag(
+      'overwrite',
+      abbr: 'o',
+      negatable: false,
+      help: 'Overwrites the vault if it already exists',
+    );
+    argParser.addFlag(
+      'children',
+      abbr: 'c',
+      negatable: false,
+      help: 'Include child directories and their files in vault',
+    );
+    argParser.addFlag('debug', abbr: 'd', help: 'Output debug information');
   }
 
   @override
   void run() {
     Settings().setVerbose(enabled: true);
-    var overwrite = argResults!['overwrite'] as bool;
+    final overwrite = argResults!['overwrite'] as bool;
 
-    var incudeChildren = argResults!['children'] as bool;
+    final incudeChildren = argResults!['children'] as bool;
 
     var vaultPath = argResults!['vault'] as String?;
 
@@ -62,16 +67,17 @@ class LockCommand extends Command<void> {
       print(argParser.usage);
       exit(1);
     }
-    var filePaths = argResults!.rest;
+    final filePaths = argResults!.rest;
 
     if (vaultPath == null) {
       if (filePaths.length > 1) {
-        printerr(red(
-            'As you have passed multiple paths you must pass a vault name via the -v option'));
+        printerr(
+          red('As you have passed multiple paths you must pass a vault name via the -v option'),
+        );
         print(argParser.usage);
         exit(1);
       }
-      var file = filePaths.first;
+      final file = filePaths.first;
       // just a single file to lock, derive the vault name from the filename.
       vaultPath =
           '${join(dirname(file), basenameWithoutExtension(file))}.vault';
@@ -81,19 +87,23 @@ class LockCommand extends Command<void> {
       if (overwrite) {
         delete(vaultPath);
       } else {
-        printerr(red(
-            'The passed vault path ${truepath(vaultPath)} already exists.'));
+        printerr(
+          red('The passed vault path ${truepath(vaultPath)} already exists.'),
+        );
         print(argParser.usage);
         exit(1);
       }
     }
 
-    addToVault(filePaths, incudeChildren, vaultPath);
+    addToVault(filePaths, vaultPath, incudeChildren: incudeChildren);
   }
 
   void addToVault(
-      List<String> filePaths, bool incudeChildren, String vaultPath) {
-    final vault = VaultFile();
+    List<String> filePaths,
+    String vaultPath, {
+    required bool incudeChildren,
+  }) {
+    final vault = VaultFile(vaultPath);
 
     for (final filePath in filePaths) {
       if (!exists(filePath)) {
@@ -104,10 +114,14 @@ class LockCommand extends Command<void> {
       if (isFile(filePath)) {
         vault.addFile(filePath);
       } else if (isDirectory(filePath)) {
-        vault.addDirectory(filePath, recursive: incudeChildren);
+        vault.addDirectory(
+          pathToDirectory: filePath,
+          recursive: incudeChildren,
+        );
       } else {
         print('Skipping $filePath');
       }
     }
+    vault.saveTo();
   }
 }

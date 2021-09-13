@@ -7,10 +7,13 @@ import 'package:pointycastle/pointycastle.dart';
 /// suitable for storage.
 
 class RSAConvertor {
-  static const BEGIN_PRIVATE = '---- BEGIN DVAULT PRIVATE KEY ----';
-  static const END_PRIVATE = '---- END DVAULT PRIVATE KEY ----';
-  static const BEGIN_PUBLIC = '---- BEGIN DVAULT PUBLIC KEY ----';
-  static const END_PUBLIC = '---- END DVAULT PUBLIC KEY ----';
+  factory RSAConvertor() => _self;
+  RSAConvertor._internal();
+  static final RSAConvertor _self = RSAConvertor._internal();
+  static const beginPrivate = '---- BEGIN DVAULT PRIVATE KEY ----';
+  static const endPrivate = '---- END DVAULT PRIVATE KEY ----';
+  static const beginPublic = '---- BEGIN DVAULT PUBLIC KEY ----';
+  static const endPublic = '---- END DVAULT PUBLIC KEY ----';
 
   static int get privateKeyLines => 3;
   static int get publicKeyLines => 4;
@@ -25,14 +28,14 @@ class RSAConvertor {
   /// public key.
   ///
   static String publicKeyAsText(RSAPublicKey publicKey) {
-    var modulus = publicKey.modulus.toString();
-    var exponent = publicKey.exponent.toString();
+    final modulus = publicKey.modulus.toString();
+    final exponent = publicKey.exponent.toString();
 
-    var text = '''
-$BEGIN_PUBLIC
+    final text = '''
+$beginPublic
 modulus:$modulus
 exponent:$exponent
-$END_PUBLIC''';
+$endPublic''';
     return text;
   }
 
@@ -43,14 +46,17 @@ $END_PUBLIC''';
   /// to key it from prying eyes.
   ///
   static String privateKeyAsText(
-      RSAPrivateKey privateKey, Encrypter encrypter, IV iv) {
-    var modulus = privateKey.modulus.toString();
-    var exponent = privateKey.exponent.toString();
-    var p = privateKey.p.toString();
-    var q = privateKey.q.toString();
+    RSAPrivateKey privateKey,
+    Encrypter encrypter,
+    IV iv,
+  ) {
+    final modulus = privateKey.modulus.toString();
+    final exponent = privateKey.exponent.toString();
+    final p = privateKey.p.toString();
+    final q = privateKey.q.toString();
 
     /// create a textual version of the private key
-    var parts = '''
+    final parts = '''
 modulus:$modulus
 exponent:$exponent
 p:$p
@@ -64,9 +70,9 @@ q:$q''';
     final encrypted = encrypter.encrypt(parts, iv: iv);
 
     return '''
-    $BEGIN_PRIVATE);
+    $beginPrivate);
     ${encrypted.base64};
-    $END_PRIVATE''';
+    $endPrivate''';
   }
 
   ///
@@ -77,39 +83,45 @@ q:$q''';
   /// created via the [privateKeyAsText] method.
   ///
   static RSAPrivateKey extractPrivateKey(
-      List<String> lines, Encrypter encrypter, IV iv) {
+    List<String> lines,
+    Encrypter encrypter,
+    IV iv,
+  ) {
     Settings().verbose('Loading PrivateKey ');
 
-    var keyLines = _extractKey(lines, BEGIN_PRIVATE, END_PRIVATE);
+    final keyLines = _extractKey(lines, beginPrivate, endPrivate);
 
     if (keyLines.length != privateKeyLines) {
       throw KeyException(
-          'The Private Key should consist of 3 lines, found ${keyLines.length}. Found $keyLines\n');
+        'The Private Key should consist of 3 lines, found ${keyLines.length}. Found $keyLines\n',
+      );
     }
 
-    var base64Encrypted = keyLines[1];
-    var encrypted = Encrypted.fromBase64(base64Encrypted);
+    final base64Encrypted = keyLines[1];
+    final encrypted = Encrypted.fromBase64(base64Encrypted);
     final decrypted = encrypter.decrypt(encrypted, iv: iv).trim().split('\n');
 
     if (decrypted.length != 4) {
       throw KeyException(
-          'The decrypted Private Key should consist of 4 lines, found ${keyLines.length}.');
+        'The decrypted Private Key should consist of 4 lines, found ${keyLines.length}.',
+      );
     }
 
-    var modulus = parseBigInt(decrypted[0], 'modulus', 'private');
-    var exponent = parseBigInt(decrypted[1], 'exponent', 'private');
-    var p = parseBigInt(decrypted[2], 'p', 'private');
-    var q = parseBigInt(decrypted[3], 'q', 'private');
+    final modulus = parseBigInt(decrypted[0], 'modulus', 'private');
+    final exponent = parseBigInt(decrypted[1], 'exponent', 'private');
+    final p = parseBigInt(decrypted[2], 'p', 'private');
+    final q = parseBigInt(decrypted[3], 'q', 'private');
 
     return RSAPrivateKey(modulus, exponent, p, q);
   }
 
   static List<String> extractPrivateKeyLines(List<String> lines) {
-    var keyLines = _extractKey(lines, BEGIN_PRIVATE, END_PRIVATE);
+    final keyLines = _extractKey(lines, beginPrivate, endPrivate);
 
     if (keyLines.length != privateKeyLines) {
       throw KeyException(
-          'The Private Key should consist of 3 lines, found ${keyLines.length}. Found $keyLines\n');
+        'The Private Key should consist of 3 lines, found ${keyLines.length}. Found $keyLines\n',
+      );
     }
     return keyLines;
   }
@@ -125,22 +137,23 @@ q:$q''';
   static RSAPublicKey extractPublicKey(List<String> lines) {
     Settings().verbose('Loading PublicKey ');
 
-    var keyLines = extractPublicKeyLines(lines);
+    final keyLines = extractPublicKeyLines(lines);
     Settings().verbose('Read PublicKey: $keyLines');
 
-    var modulus = parseBigInt(keyLines[1], 'modulus', 'public');
-    var exponent = parseBigInt(keyLines[2], 'exponent', 'public');
+    final modulus = parseBigInt(keyLines[1], 'modulus', 'public');
+    final exponent = parseBigInt(keyLines[2], 'exponent', 'public');
     return RSAPublicKey(modulus, exponent);
   }
 
   static List<String> extractPublicKeyLines(List<String> lines) {
     Settings().verbose('Loading PublicKey ');
 
-    var keyLines = _extractKey(lines, BEGIN_PUBLIC, END_PUBLIC);
+    final keyLines = _extractKey(lines, beginPublic, endPublic);
 
     if (keyLines.length != publicKeyLines) {
       throw KeyException(
-          'The Public Key should consist of 4 lines, found ${keyLines.length + 1}.');
+        'The Public Key should consist of 4 lines, found ${keyLines.length + 1}.',
+      );
     }
 
     return keyLines;
@@ -148,7 +161,7 @@ q:$q''';
 
   /// parse big int from line.
   static BigInt parseBigInt(String keyLine, String key, String keyType) {
-    var parts = keyLine.trim().split(':');
+    final parts = keyLine.trim().split(':');
     if (parts.length != 2) {
       throw KeyException('$keyType does not have a valid modulus.');
     }
@@ -163,7 +176,10 @@ q:$q''';
   /// parses the key components (including the begin and end lines)
   /// out of [lines] loaded from the key file.
   static List<String> _extractKey(
-      List<String> lines, String begin, String end) {
+    List<String> lines,
+    String begin,
+    String end,
+  ) {
     final keyLines = <String>[];
     var inKey = false;
     for (var line in lines) {
