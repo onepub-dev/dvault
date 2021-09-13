@@ -1,23 +1,26 @@
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/commands/unlock.dart';
 import 'package:dvault/src/dot_vault_file.dart';
+import 'package:dvault/src/dvault.dart';
 import 'package:test/test.dart';
-import 'package:args/command_runner.dart';
 
 void main() {
-  test('decrypt ...', () async {
-    var passPhrase = 'one and a two and a three';
+  test('decrypt ...', () {
+    const passPhrase = 'one and a two and a three';
     env['DVAULT_PASSPHRASE'] = passPhrase;
-    var cmd = CommandRunner('dvault', 'stores encrypted stuff')
-      ..addCommand(UnlockCommand());
-    waitForEx(cmd.run([
-      'decrypt',
-      '--env',
-      '-v',
-      'test/data/test_one.txt.vault',
-      '-f',
-      'test/data/test_one.txt.result'
-    ]));
+
+    /// create a test vault
+    ///
+
+    runCommand(
+      [
+        'decrypt',
+        '--env',
+        '-v',
+        'test/data/test_one.txt.vault',
+        '-f',
+        'test/data/test_one.txt.result'
+      ],
+    );
 
     //  ask('passphrase');
     DotVaultFile.load();

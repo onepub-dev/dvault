@@ -9,8 +9,8 @@ class ResetCommand extends Command<void> {
   static int minPassPhraseLength = 12;
 
   @override
-  String get description =>
-      '''Reset your passphrase whilst preserving your public/private keys.
+  String get description => '''
+  Reset your passphrase whilst preserving your public/private keys.
   dvault reset''';
 
   @override
@@ -22,7 +22,8 @@ class ResetCommand extends Command<void> {
   void run() {
     print(blue('Preparing to reset your passphrase.'));
     print(
-        'To protect your keys we lock them with a passphrase with a minimum length of ${ResetCommand.minPassPhraseLength}).');
+      'To protect your keys we lock them with a passphrase with a minimum length of ${ResetCommand.minPassPhraseLength}).',
+    );
 
     String? current;
     do {
@@ -32,9 +33,9 @@ class ResetCommand extends Command<void> {
       current = ask('Current passphrase:', hidden: true);
     } while (!DotVaultFile.load().validatePassphrase(current));
 
-    var newPassphrase = Helper.askForPassPhrase(prompt: 'New passphrase');
+    final newPassphrase = askForPassPhrase(prompt: 'New passphrase');
 
-    var keyfile = DotVaultFile.load();
+    final keyfile = DotVaultFile.load();
     keyfile.resetPassphrase(current: current, newPassphrase: newPassphrase);
 
     print('');

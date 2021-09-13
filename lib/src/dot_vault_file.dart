@@ -25,34 +25,37 @@ class DotVaultFile {
   /// Path to the .dvault file which we used to store the public/private key pair.
   static late final String storagePath = truepath(join(HOME, '.dvault'));
 
-  var lines = <String>[];
+  var _lines = <String>[];
 
   RSAPrivateKey? _privateKey;
   RSAPublicKey? _publicKey;
 
-  var _iv;
-  var _salt;
-  var _test;
+  late final IV iv;
+  late final Uint8List salt;
+  late final String _test;
 
   /// Saves the key pair to disk encrypting the private key.
   static void create(
-      RSAPrivateKey privateKey, RSAPublicKey publicKey, String passphrase) {
+    RSAPrivateKey privateKey,
+    RSAPublicKey publicKey,
+    String passphrase,
+  ) {
     storagePath.write('version:$version');
-    var iv = IV.fromLength(16);
-    storagePath.append('iv:${iv.base64}');
+    final _iv = IV.fromSecureRandom(16);
+    storagePath.append('iv:${_iv.base64}');
 
     final salt = StrongKey.generateSalt;
 
     storagePath.append('salt:${base64Encode(salt)}');
-    var encrypter = _encrypterFromPassphrase(passphrase, salt);
+    final encrypter = _encrypterFromPassphrase(passphrase, salt);
 
     // store a test message so we can easily check the passphrase
     // is correct.
-    final test = encrypter.encrypt('test', iv: iv).base64;
+    final test = encrypter.encrypt('test', iv: _iv).base64;
     storagePath.append('test:$test');
 
     storagePath.append('');
-    _appendPrivateKey(privateKey, encrypter, iv);
+    _appendPrivateKey(privateKey, encrypter, _iv);
     storagePath.append('');
     _appendPublicKey(publicKey);
 
@@ -66,24 +69,24 @@ class DotVaultFile {
   DotVaultFile.load() {
     Settings().verbose('Loading Keyfile from: $storagePath');
 
-    lines = read(storagePath).toList();
+    _lines = read(storagePath).toList();
 
-    var version = _parseVersion(lines[0]);
-    _iv = _parseIV(lines[1]);
-    _salt = _parseSalt(lines[2]);
-    _test = _parseTest(lines[3]);
+    final version = _parseVersion(_lines[0]);
+    iv = _parseIV(_lines[1]);
+    salt = _parseSalt(_lines[2]);
+    _test = _parseTest(_lines[3]);
     Settings().verbose('Storage Version: $version');
   }
 
   RSAPrivateKey privateKey({required String passphrase}) {
     if (_privateKey == null) {
-      final encrypter = _encrypterFromPassphrase(passphrase, _salt);
+      final encrypter = _encrypterFromPassphrase(passphrase, salt);
 
       if (!_validatePassphrase(passphrase, encrypter)) {
         throw InvalidPassphraseException();
       }
 
-      _privateKey = RSAConvertor.extractPrivateKey(lines, encrypter, _iv);
+      _privateKey = RSAConvertor.extractPrivateKey(_lines, encrypter, iv);
     }
     return _privateKey!;
   }
@@ -92,7 +95,10 @@ class DotVaultFile {
   /// stored in the .dvault file.
   String privateKeyAsText(String passphrase) {
     return RSAConvertor.privateKeyAsText(
-        privateKey(passphrase: passphrase), encryptor(passphrase), _iv);
+      privateKey(passphrase: passphrase),
+      encryptor(passphrase),
+      iv,
+    );
   }
 
   /// Returns the public key stored in the .dvault file
@@ -105,16 +111,21 @@ class DotVaultFile {
   /// Loads just the public key from this key file.
   /// Used when we are encrypting and don't need the private key.
   RSAPublicKey get publicKey {
-    _publicKey ??= _loadPublicKey(lines);
+    _publicKey ??= _loadPublicKey(_lines);
     return _publicKey!;
   }
 
-  void resetPassphrase(
-      {required String current, required String newPassphrase}) {
+  void resetPassphrase({
+    required String current,
+    required String newPassphrase,
+  }) {
     backupFile(DotVaultFile.storagePath);
     delete(DotVaultFile.storagePath);
     DotVaultFile.create(
-        privateKey(passphrase: current), publicKey, newPassphrase);
+      privateKey(passphrase: current),
+      publicKey,
+      newPassphrase,
+    );
   }
 
   // /// Encryptes the passed text using
@@ -128,15 +139,22 @@ class DotVaultFile {
   // }
 
   bool _validatePassphrase(String passphrase, Encrypter encrypter) {
-    var encrypted = Encrypted.fromBase64(_test);
+    final encrypted = Encrypted.fromBase64(_test);
 
-    var testConfirm = encrypter.decrypt(encrypted, iv: _iv);
-
-    return (testConfirm == 'test');
+    String testConfirm;
+    try {
+      testConfirm = encrypter.decrypt(encrypted, iv: iv);
+      // ignore: avoid_catching_errors
+    } on ArgumentError catch (_) {
+      // a pad block error is what we get if the
+      // password doesn't match.
+      return false;
+    }
+    return testConfirm == 'test';
   }
 
   bool validatePassphrase(String passphrase) {
-    final encrypter = _encrypterFromPassphrase(passphrase, _salt);
+    final encrypter = _encrypterFromPassphrase(passphrase, salt);
 
     return _validatePassphrase(passphrase, encrypter);
   }
@@ -153,30 +171,33 @@ class DotVaultFile {
   /// Append the Private Key to the key file
   ///
   static void _appendPrivateKey(
-      RSAPrivateKey privateKey, Encrypter encrypter, IV iv) {
+    RSAPrivateKey privateKey,
+    Encrypter encrypter,
+    IV _iv,
+  ) {
     storagePath
-        .append(RSAConvertor.privateKeyAsText(privateKey, encrypter, iv));
+        .append(RSAConvertor.privateKeyAsText(privateKey, encrypter, _iv));
   }
 
   /// Creates an AES [Encryptor] from the given [passphrase]
   /// and the salt held in the .vault file.
   Encrypter encryptor(String passphrase) {
-    return _encrypterFromPassphrase(passphrase, _salt);
+    return _encrypterFromPassphrase(passphrase, salt);
   }
 
   /// Creates an AES encryptor from [passphrase]
   /// We use this encryptor for encrypting/decrypting the text
   /// representation of the PrivateKey.
   static Encrypter _encrypterFromPassphrase(String passphrase, Uint8List salt) {
-    var strongKey = StrongKey.fromPassPhrase(passphrase);
+    final strongKey = StrongKey.fromPassPhrase(passphrase);
 
     // TODO: change interation count to 100,000 and change ui to
     // indicate the user should wait.
     // Need advice on this as using 100,000 interations takes a
     // long time. This means unlocking a file is going to take a long time.
-    var key = strongKey.stretch(32, iterationCount: 1000, salt: salt);
-
-    return Encrypter(AES(key, mode: AESMode.sic, padding: null));
+    final key = strongKey.stretch(32, iterationCount: 1000, salt: salt);
+    // padding was null but I think we resolved the issue.
+    return Encrypter(AES(key));
   }
 
   RSAPublicKey _loadPublicKey(List<String> lines) {
@@ -191,18 +212,18 @@ class DotVaultFile {
   /// The key is extracted verbatium and as such is
   /// still encrypted.
   List<String> extractPrivateKeyLines() {
-    return RSAConvertor.extractPrivateKeyLines(lines);
+    return RSAConvertor.extractPrivateKeyLines(_lines);
   }
 
   /// Extract the Private Key from the .vault file
   /// The key is extracted verbatium and as such is
   /// still encrypted.
   List<String> extractPublicKeyLines() {
-    return RSAConvertor.extractPublicKeyLines(lines);
+    return RSAConvertor.extractPublicKeyLines(_lines);
   }
 
   String _parseVersion(String line) {
-    var parts = line.split(':');
+    final parts = line.split(':');
 
     if (parts.length != 2) {
       throw DotVaultException('Version no. not found. Found $line');
@@ -212,7 +233,7 @@ class DotVaultFile {
 
   /// Parse the IV from a line.
   static IV _parseIV(String line) {
-    var parts = line.split(':');
+    final parts = line.split(':');
     if (parts.length != 2) {
       throw DotVaultException('IV not found. Found $line');
     }
@@ -227,7 +248,7 @@ class DotVaultFile {
   /// Parse the base64 encoded salt from a line
   /// and return the decoded salt
   Uint8List _parseSalt(String line) {
-    var parts = line.split(':');
+    final parts = line.split(':');
     if (parts.length != 2) {
       throw KeyException('Salt not found. Found $line');
     }
@@ -242,7 +263,7 @@ class DotVaultFile {
   /// Parse the base64 encoded test message from a line
   /// and return the test message still base 64 encoded.
   String _parseTest(String line) {
-    var parts = line.split(':');
+    final parts = line.split(':');
     if (parts.length != 2) {
       throw KeyException('Test not found. Found $line');
     }
@@ -254,3 +275,5 @@ class DotVaultFile {
     return parts[1].trim();
   }
 }
+
+

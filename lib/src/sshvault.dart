@@ -40,52 +40,58 @@ class SSHVault {
   ///
   /// If [overwrite] is false and the [vaultName] file exists then
   /// a [SSHVaultException] will be thrown.
-  void store(
-      {required String text,
-      required String vaultName,
-      bool overwrite = false}) {
+  void store({
+    required String text,
+    required String vaultName,
+    bool overwrite = false,
+  }) {
     if (!vaultName.endsWith('.vault')) {
       throw SSHVaultException(
-          'Invalid vaultName. The [vaultName] must end in ".vault".');
+        'Invalid vaultName. The [vaultName] must end in ".vault".',
+      );
     }
 
-    var vaultPath = join(storagePath!, vaultName);
+    final vaultPath = join(storagePath!, vaultName);
 
     install();
     print('creating your vault');
-    var lines = ('echo $text' |
+    final lines = ('echo $text' |
             '$_vaultExePath -u ${Shell.current.loggedInUser} create')
         .toList();
 
     if (exists(vaultPath)) {
       if (!overwrite) {
         throw SSHVaultException(
-            'The vault at ${truepath(vaultPath)} already exists.');
+          'The vault at ${truepath(vaultPath)} already exists.',
+        );
       }
       delete(vaultPath);
     }
 
     touch(vaultPath, create: true);
-    for (var line in lines) {
+    for (final line in lines) {
       vaultPath.append(line!);
     }
   }
 
-  void storeFile(
-      {required String path,
-      required String vaultName,
-      bool overwrite = false}) {
+  void storeFile({
+    required String path,
+    required String vaultName,
+    bool overwrite = false,
+  }) {
     if (!vaultName.endsWith('.vault')) {
       throw SSHVaultException(
-          'Invalid vaultName. The [vaultName] must end in ".vault".');
+        'Invalid vaultName. The [vaultName] must end in ".vault".',
+      );
     }
 
-    var vaultPath = join(storagePath!, vaultName);
+    final vaultPath = join(storagePath!, vaultName);
 
     if (exists(vaultPath)) {
       if (!overwrite) {
         throw SSHVaultException(
-            'The vault at ${truepath(vaultPath)} already exists.');
+          'The vault at ${truepath(vaultPath)} already exists.',
+        );
       }
       delete(vaultPath);
     }
@@ -100,18 +106,18 @@ class SSHVault {
   String fetch({
     String? vaultName,
   }) {
-    var vaultPath = join(storagePath!, vaultName);
+    final vaultPath = join(storagePath!, vaultName);
     String text;
 
     print('fetching $vaultPath');
     if (_isPrivKeyProtected(privateKeyPath)) {
-      var passphrase = ask('Private Key Passphrase:', hidden: true);
+      final passphrase = ask('Private Key Passphrase:', hidden: true);
       text = ('echo $passphrase' |
               '$_vaultExePath  -k $privateKeyPath view $vaultPath ')
           .toList()
           .join('\n');
     } else {
-      text = ('$_vaultExePath  -k $privateKeyPath view $vaultPath')
+      text = '$_vaultExePath  -k $privateKeyPath view $vaultPath'
           .toList()
           .join('\n');
     }
@@ -125,22 +131,23 @@ class SSHVault {
 
     print('Installing vault');
 
-    var tar = 'vault.tar.gz';
+    const tar = 'vault.tar.gz';
     if (exists(tar)) {
       delete(tar);
     }
 
     print('Downloading vault.');
     d.fetch(
-        url: 'https://dl.bintray.com/nbari/ssh-vault/$version.tar.gz',
-        saveToPath: tar);
+      url: 'https://dl.bintray.com/nbari/ssh-vault/$version.tar.gz',
+      saveToPath: tar,
+    );
 
     final bytes = File(tar).readAsBytesSync();
 
     print('expanding vault tar');
     final expanded = TarDecoder().decodeBytes(GZipDecoder().decodeBytes(bytes));
 
-    var vaultArchive = expanded.findFile(join(version, vaultExe))!;
+    final vaultArchive = expanded.findFile(join(version, vaultExe))!;
     final data = vaultArchive.content as List<int>;
     File(join(storagePath!, vaultExe))
       ..createSync(recursive: true)
@@ -162,7 +169,7 @@ bool _isPrivKeyProtected(String? path) {
   // If there is no password
   // ssh-rsa AAAAB3NzaC1y...
 
-  var line = 'ssh-keygen -y -P "" -f $path'.toList(nothrow: true).first;
+  final line = 'ssh-keygen -y -P "" -f $path'.toList(nothrow: true).first;
   return line.startsWith('Load key');
 }
 
@@ -174,11 +181,11 @@ class SSHVaultException implements Exception {
 }
 
 void main() {
-  var vault = SSHVault(storagePath: join(HOME, 'vault'));
-  var text = 'How now brown cow';
+  final vault = SSHVault(storagePath: join(HOME, 'vault'));
+  const text = 'How now brown cow';
   vault.store(text: text, vaultName: 'cows', overwrite: true);
 
-  var decrypted = vault.fetch(vaultName: 'cows');
+  final decrypted = vault.fetch(vaultName: 'cows');
 
   if (text != decrypted) {
     print('bad $text');
