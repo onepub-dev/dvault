@@ -1,14 +1,8 @@
 import 'dart:io';
-import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
 import 'package:dvault/src/util/generator.dart';
-import 'package:pointycastle/api.dart';
-import 'package:pointycastle/key_generators/rsa_key_generator.dart';
-import 'package:pointycastle/pointycastle.dart';
-import 'package:pointycastle/random/fortuna_random.dart';
 
 import '../env.dart';
 import '../key_file.dart';
