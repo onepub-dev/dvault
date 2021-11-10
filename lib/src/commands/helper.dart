@@ -1,21 +1,22 @@
 import 'package:dcli/dcli.dart';
 import 'package:dvault/src/commands/init.dart';
 
-class Helper {
-  static String askForPassPhrase(String passPhrase) {
-    var comfirmed = false;
-    do {
-      passPhrase = ask('Passphrase:',
-          hidden: true,
-          validator: Ask.lengthMin(InitCommand.minPassPhraseLength));
-      var confirm = ask('Confirm Passphrase:', hidden: true);
+String askForPassPhrase({String prompt = 'Passphrase'}) {
+  const comfirmed = false;
+  String passphrase;
+  do {
+    passphrase = ask(
+      '$prompt:',
+      hidden: true,
+      validator: Ask.lengthMin(InitCommand.minPassPhraseLength),
+    );
+    final confirm = ask('Confirm $prompt:', hidden: true);
 
-      if (passPhrase == confirm) {
-        break;
-      }
+    if (passphrase == confirm) {
+      break;
+    }
 
-      print("The two phrases didn't match.");
-    } while (!comfirmed);
-    return passPhrase;
-  }
+    print("The two phrases didn't match.");
+  } while (!comfirmed);
+  return passphrase;
 }

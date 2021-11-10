@@ -6,19 +6,16 @@ import 'package:pointycastle/key_generators/rsa_key_generator.dart';
 import 'package:pointycastle/pointycastle.dart';
 import 'package:pointycastle/random/fortuna_random.dart';
 
-class Generator {
-  static final Generator _self = Generator._internal();
+/// Class to generator RSAKeyPairs
+class RSAGenerator {
+  static final RSAGenerator _self = RSAGenerator._internal();
 
-  factory Generator() => _self;
+  factory RSAGenerator() => _self;
 
-  Generator._internal();
+  RSAGenerator._internal();
 
-  AsymmetricKeyPair<PublicKey, PrivateKey> generateKeyPair() {
-    print('Generating key pair. Be patient this can take a while.');
-    var keyPair = getRsaKeyPair(getSecureRandom());
-
-    print('Key pair generation complete');
-
+  AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> generateKeyPair() {
+    final keyPair = getRsaKeyPair(getSecureRandom());
     return keyPair;
   }
 
@@ -26,23 +23,29 @@ class Generator {
   ///
   /// Returns a [AsymmetricKeyPair] based on the [RSAKeyGenerator] with custom parameters,
   /// including a [SecureRandom]
-  AsymmetricKeyPair<PublicKey, PrivateKey> getRsaKeyPair(
-      SecureRandom secureRandom) {
+  AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> getRsaKeyPair(
+    SecureRandom secureRandom,
+  ) {
     /// Set BitStrength to [1024, 2048 or 4096]
-    var rsapars = RSAKeyGeneratorParameters(BigInt.from(65537), 4096, 5);
-    var params = ParametersWithRandom(rsapars, secureRandom);
-    var keyGenerator = RSAKeyGenerator();
+    final rsapars = RSAKeyGeneratorParameters(BigInt.from(65537), 4096, 5);
+    final params = ParametersWithRandom(rsapars, secureRandom);
+    final keyGenerator = RSAKeyGenerator();
     keyGenerator.init(params);
-    return keyGenerator.generateKeyPair();
+    final pair = keyGenerator.generateKeyPair();
+
+    return AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey>(
+      pair.publicKey as RSAPublicKey,
+      pair.privateKey as RSAPrivateKey,
+    );
   }
 
   // Generates a [SecureRandom] to use in computing RSA key pair
   ///
   /// Returns [FortunaRandom] to be used in the [AsymmetricKeyPair] generation
   SecureRandom getSecureRandom() {
-    var secureRandom = FortunaRandom();
-    var random = Random.secure();
-    var seeds = <int>[];
+    final secureRandom = FortunaRandom();
+    final random = Random.secure();
+    final seeds = <int>[];
     for (var i = 0; i < 32; i++) {
       seeds.add(random.nextInt(255));
     }
@@ -57,7 +60,7 @@ class Generator {
     print('  Public:');
     print('    e = ${rsaPublic.exponent}'); // public exponent
     print('    n = ${rsaPublic.modulus}');
-    print('  Private: n.bitlength = ${rsaPrivate.modulus.bitLength}');
+    print('  Private: n.bitlength = ${rsaPrivate.modulus!.bitLength}');
     print('    n = ${rsaPrivate.modulus}');
     print('    d = ${rsaPrivate.exponent}'); // private exponent
     print('    p = ${rsaPrivate.p}'); // the two prime numbers

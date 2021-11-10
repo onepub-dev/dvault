@@ -2,58 +2,82 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/util/generator.dart';
+import 'package:dvault/src/rsa/rsa_generator.dart';
+import 'package:dvault/src/util/messages.dart';
 
+import '../dot_vault_file.dart';
 import '../env.dart';
-import '../key_file.dart';
 import 'helper.dart';
 
 class InitCommand extends Command<void> {
   static int minPassPhraseLength = 12;
 
   @override
-  String get description =>
-      '''Initialise DVault creating an RSA key pair used to encrypt/decrypt files.
+  String get description => '''
+  Initialise DVault creating an RSA key pair used to encrypt/decrypt files.
   dvault init''';
 
   @override
   String get name => 'init';
 
   InitCommand() {
-    argParser.addFlag('env',
-        abbr: 'e',
-        negatable: false,
-        help:
-            'If set the passphrase will be read from the ${Constants.DVAULT_PASSPHRASE} environment variable.');
+    argParser.addFlag(
+      'env',
+      abbr: 'e',
+      negatable: false,
+      help:
+          'If set the passphrase will be read from the ${Constants.dvaultPassphrase} environment variable.',
+    );
   }
 
   @override
   void run() {
-    String passPhrase;
-    if (argResults['env']) {
-      passPhrase = env[Constants.DVAULT_PASSPHRASE];
+    if (exists(DotVaultFile.storagePath)) {
+      print(red('${'*' * 40}  WARNING  ${'*' * 40}'));
+      print(orange('Your .dvault file already exists.'));
+      print(
+        orange('If you continue you will lose access to all existing vaults.'),
+      );
+      print(blue("If you want to change your passphrase use 'dvault reset'."));
+      if (!confirm(
+        red('Are you sure you want to lose access to existing vaults?'),
+      )) {
+        print('Init stopped.');
+        exit(1);
+      } else {
+        backupFile(DotVaultFile.storagePath);
+        print('');
+        print(
+          blue('Your .dvault file has been backed up to a .bak subdirectory'),
+        );
+        print('');
+        delete(DotVaultFile.storagePath);
+      }
+    }
+    String? passPhrase;
+    if (argResults!['env'] as bool) {
+      passPhrase = env[Constants.dvaultPassphrase];
     } else {
-      print('To protect your keys we lock them with a passphrase.');
-      passPhrase = Helper.askForPassPhrase(passPhrase);
+      print(
+        'To protect your keys we lock them with a passphrase with a minimum length of ${InitCommand.minPassPhraseLength}).',
+      );
+      passPhrase = askForPassPhrase();
     }
 
-    if (passPhrase.length < minPassPhraseLength) {
-      printerr(red('The passphrase must be at least 16 characters long.'));
+    if (passPhrase!.length < minPassPhraseLength) {
+      printerr(
+        red('The passphrase must be at least ${InitCommand.minPassPhraseLength} characters long.'),
+      );
       print(argParser.usage);
       exit(1);
     }
 
-    var keyPair = Generator().generateKeyPair();
-    // printKeys(keyPair);
+    print('Generating and saving key pair. Be patient this can take a while.');
+    final keyPair = RSAGenerator().generateKeyPair();
 
-    KeyFile().save(keyPair.privateKey, keyPair.publicKey, passPhrase);
+    DotVaultFile.create(keyPair.privateKey, keyPair.publicKey, passPhrase);
+    print('Key pair generation complete');
 
-    print('');
-    print(orange('*' * 80));
-    print(orange('*'));
-    print(orange(
-        '* If you lose your passphrase you will irretrievably lose access to all files protected with DVault'));
-    print(orange('*'));
-    print(orange('*' * 80));
+    printBackupMessage(DotVaultFile.storagePath);
   }
 }

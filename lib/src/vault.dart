@@ -1,189 +1,297 @@
+import 'dart:cli';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
-import 'package:dcli/dcli.dart' hide fetch;
-import 'package:dcli/dcli.dart' as d;
-import 'package:meta/meta.dart';
+import 'package:dcli/dcli.dart';
+import 'package:dvault/src/file_encryptor.dart';
+import 'package:dvault/src/table_of_content.dart';
+import 'package:dvault/src/toc_entry.dart';
+import 'package:dvault/src/util/exceptions.dart';
+import 'package:dvault/src/util/raf_helper.dart';
+import 'package:dvault/src/util/strong_key.dart';
+import 'package:dvault/src/version/version.dart';
+import 'package:encrypt/encrypt.dart';
 
-/// Provide a simple tool which encrypts a text into  encrypted text using the system ssh keys.
-///
-/// This tool will download and install ssh-vault into the storagePath directory if its
-/// not already installed into that dir.
-///
-class SSHVault {
-  static const vaultExe = 'ssh-vault';
-  static const version = 'ssh-vault_0.12.6_linux_amd64';
+import 'dot_vault_file.dart';
 
-  String storagePath;
+/// Class for reading and writing vaults
+/// A vault consists of serveral areas
+///```
+///magic: 17e64d12-c347-4c67-9899-f52b015183ec
+///version: 1
+///created: by DVault Version x.x.x.
+///author: S. Brett Sutton
+///salt: <base64 encoded salt>
+///iv: <base 64 encoded iv>
+///test: <test phrase used to validate passphrase>
+///<clear text public key>
+///<encrypted private key>
+///Ctrl-Z
+///<64bit offset from SOF to the begining of the TOC>
+///<Encrypted file data>
+///<Table of Contents (TOC)>
+//```
+class VaultFile {
+  TableOfContents toc = TableOfContents();
 
-  String privateKeyPath;
-
-  String publicKeyPath;
-
-  /// [storagePath] is the path (directory)
-  /// where we are going to store the resulting vault.
-  /// [privateKeyPath] the path to the private key file. If null defaults to
-  /// ~/.ssh/id_rsa
-  /// [publicKeyPath] the path to the private key file. If null defaults to
-  /// ~/.ssh/id_rsa.pub
-  SSHVault({this.storagePath, this.privateKeyPath, this.publicKeyPath}) {
-    privateKeyPath ??= join(HOME, '.ssh', 'id_rsa');
-    publicKeyPath ??= join(HOME, '.ssh', 'id_rsa.pub');
+  /// Create a new vault object ready to add files to.
+  VaultFile(this.pathToVault) {
+    iv = IV.fromSecureRandom(16);
+    salt = StrongKey.generateSalt;
   }
 
-  String get _vaultExePath => join(storagePath, vaultExe);
+  /// Use this ctor when you are going to load the vault from disk
+  VaultFile._forLoading(this.pathToVault);
 
-  /// Stores the passed [text] into a vault located at [storagePath].
-  /// If [overwrite] is true and a vault with the name [vaultName]
-  /// already exist it will be overwritten.
-  ///
-  /// The [vaultName] must end in .vault.
-  ///
-  /// If [overwrite] is false and the [vaultName] file exists then
-  /// a [SSHVaultException] will be thrown.
-  void store(
-      {@required String text,
-      @required String vaultName,
-      bool overwrite = false}) {
-    if (!vaultName.endsWith('.vault')) {
-      throw SSHVaultException(
-          'Invalid vaultName. The [vaultName] must end in ".vault".');
+  String pathToVault;
+  late final Uint8List salt;
+  late final IV iv;
+
+  /// This value must never be changed even across versions
+  /// of DVault and
+  static const magicCode = '17e64d12-c347-4c67-9899-f52b015183ec';
+
+  /// Saves the added files and directories into the vault
+  /// at [pathToVault]
+  /// encrypting them (locking) as it goes.
+  void saveTo() {
+    final dotVaultFile = DotVaultFile.load();
+    withOpenFile(pathToVault, (vault) {
+      vault.append(_magicLine);
+      vault.append(_versionLine);
+      vault.append(_createdByLine);
+      vault.append(_authorLine);
+      vault.append(_saltLine(dotVaultFile.salt));
+      vault.append(_ivLine(dotVaultFile.iv));
+      vault.append(dotVaultFile.extractPrivateKeyLines().join(Platform().eol));
+      vault.append(dotVaultFile.extractPublicKeyLines().join(Platform().eol));
+      vault.append('');
+      final startOfFiles = vault.length;
+      _saveFiles(vault, startOfFiles);
+      final startOfTOC = vault.length;
+      toc.saveToc(vault);
+      vault.append(_startOfFilesLine(startOfFiles));
+      vault.append(_startOfTocLine(startOfTOC));
+    });
+  }
+
+  // ignore: prefer_constructors_over_static_methods
+  static VaultFile load(String pathToVault) {
+    // final vault = File(pathToVault);
+
+    final vault = VaultFile._forLoading(pathToVault);
+    final raf = waitFor(File(pathToVault).open());
+    try {
+      vault._readMagic(pathToVault, raf);
+      vault._readVersion(pathToVault, raf);
+      vault._readCreatedBy(pathToVault, raf);
+      vault._readAuthor(pathToVault, raf);
+      vault._readSalt(pathToVault, raf);
+      vault._readIV(pathToVault, raf);
+      vault._readPrivateKey(pathToVault, raf);
+      vault._readPublicKey(pathToVault, raf);
+
+      vault.toc = vault._loadToc(pathToVault, raf);
+    } finally {
+      waitFor(raf.close());
     }
+    return vault;
+  }
 
-    var vaultPath = join(storagePath, vaultName);
-
-    install();
-    print('creating your vault');
-    var lines = ('echo $text' |
-            '$_vaultExePath -u ${Shell.current.loggedInUser} create')
-        .toList();
-
-    if (exists(vaultPath)) {
-      if (!overwrite) {
-        throw SSHVaultException(
-            'The vault at ${truepath(vaultPath)} already exists.');
+  /// Extracts all files from the vault into [pathToExtractTo].
+  ///```dart
+  /// var vault = Vault.load(pathToVault);
+  /// vault.extractFiles();
+  /// ```
+  void extractFiles(String pathToExtractTo) {
+    final raf = waitFor(File(pathToVault).open());
+    try {
+      final fileEncryptor = FileEncryptor();
+      for (final entry in toc.entries) {
+        _extractFile(fileEncryptor, raf, entry, pathToExtractTo);
       }
-      delete(vaultPath);
-    }
-
-    touch(vaultPath, create: true);
-    for (var line in lines) {
-      vaultPath.append(line);
+    } finally {
+      waitFor(raf.close());
     }
   }
 
-  void storeFile(
-      {@required String path,
-      @required String vaultName,
-      bool overwrite = false}) {
-    if (!vaultName.endsWith('.vault')) {
-      throw SSHVaultException(
-          'Invalid vaultName. The [vaultName] must end in ".vault".');
-    }
+  int get version => 1;
+  static const magicKey = 'magic';
+  static const versionKey = 'version';
+  static const createdKey = 'created';
+  static const authorKey = 'author';
+  static const saltKey = 'salt';
+  static const ivKey = 'iv';
+  static const startOfTocKey = 'start of toc';
+  static const startOfFilesKey = 'start of files';
 
-    var vaultPath = join(storagePath, vaultName);
+  String get _magicLine => '$magicKey:$magicCode';
+  String get _versionLine => '$versionKey:$version';
+  String get _createdByLine => '$createdKey:by DVault Version $packageVersion';
+  String get _authorLine => '$authorKey:S. Brett Sutton';
 
-    if (exists(vaultPath)) {
-      if (!overwrite) {
-        throw SSHVaultException(
-            'The vault at ${truepath(vaultPath)} already exists.');
-      }
-      delete(vaultPath);
-    }
+  String _saltLine(Uint8List salt) => '$saltKey:${base64Encode(salt)}';
+  String _ivLine(IV iv) => '$ivKey:${iv.base64}';
 
-    install();
-    print('creating your vault');
-    ('cat $path' |
-            '$_vaultExePath -u ${Shell.current.loggedInUser} create $vaultPath')
-        .run;
+  /// The start of toc and start of files lines
+  /// a re fixed width as we need be able to seek directly
+  /// to them at the end of the file.
+  String _startOfFilesLine(int startOfFiles) =>
+      '$startOfFilesKey:$startOfFiles'.padRight(80);
+  String _startOfTocLine(int startOfToc) =>
+      '$startOfTocKey:$startOfToc'.padRight(80);
+
+  TableOfContents _loadToc(String pathToVault, RandomAccessFile raf) {
+    final length = raf.lengthSync();
+
+    raf.setPositionSync(length - (2 * (80 + Platform().eol.length)));
+    _loadStartOfFiles(pathToVault, raf);
+    final startOfToc = _loadStartOfToc(pathToVault, raf);
+
+    return TableOfContents()..load(startOfToc, raf);
+    // ..setStartOfFiles = startOfFiles;
   }
 
-  String fetch({
-    String vaultName,
+  void _readMagic(String pathToVault, RandomAccessFile file) {
+    final magic = readLine(file, 'Magic');
+    if (magic != _magicLine) {
+      throw VaultReadException(
+        'Unexpected Magic Code. Are you sure ${truepath(pathToVault)} is a vault?',
+      );
+    }
+  }
+
+  void _readVersion(String pathToVault, RandomAccessFile file) {
+    final version = readLine(file, versionKey);
+    if (version != _versionLine) {
+      throw VaultReadException(
+        'Unexpected Version. Expected $_versionLine, found $version',
+      );
+    }
+  }
+
+  void _readCreatedBy(String pathToVault, RandomAccessFile file) {
+    final createdBy = readLine(file, createdKey);
+    if (!createdBy.startsWith('created:')) {
+      throw VaultReadException(
+        'Unexpected Created. Expected $_createdByLine, found $createdBy',
+      );
+    }
+  }
+
+  void _readAuthor(String pathToVault, RandomAccessFile file) {
+    final author = readLine(file, authorKey);
+    if (author != _authorLine) {
+      throw VaultReadException(
+        'Unexpected Author. Expected $_ivLine, found $author',
+      );
+    }
+  }
+
+  void _readSalt(String pathToVault, RandomAccessFile file) {
+    final _salt = readLine(file, saltKey);
+    if (!_salt.startsWith('$saltKey:')) {
+      throw VaultReadException(
+        'Unexpected Salt. Expected $_saltLine, found $_salt',
+      );
+    }
+    salt = base64Decode(_salt.substring(saltKey.length + 1));
+  }
+
+  void _readIV(String pathToVault, RandomAccessFile file) {
+    final _iv = readLine(file, saltKey);
+    if (!_iv.startsWith('$ivKey:')) {
+      throw VaultReadException(
+        'Unexpected IV. Expected $_saltLine, found $_iv',
+      );
+    }
+    iv = IV.fromBase64(_iv.substring(ivKey.length + 1));
+  }
+
+  int _loadStartOfToc(String pathToVault, RandomAccessFile file) {
+    final startOfToc = readLine(file, startOfTocKey);
+    if (!startOfToc.startsWith(startOfTocKey)) {
+      throw VaultReadException(
+        'Unexpected Start of TOC Prefix. Expected $startOfTocKey, found $startOfToc',
+      );
+    }
+    return parseNo(startOfToc, startOfTocKey);
+  }
+
+  int _loadStartOfFiles(String pathToVault, RandomAccessFile file) {
+    final startOfFiles = readLine(file, startOfFilesKey);
+    if (!startOfFiles.startsWith(startOfFilesKey)) {
+      throw VaultReadException(
+        'Unexpected Start of TOC Prefix. Expected $startOfFilesKey, found $startOfFiles',
+      );
+    }
+    return parseNo(startOfFiles, startOfFilesKey);
+  }
+
+  /// Adds the file located at [pathTo] into the vault
+  /// The path of the file is converted to a path
+  /// which is relative to [relativeTo]. If [relativeTo] is
+  /// not passed then the current working directory is assumed.
+  void addFile(String pathTo, {String? relativeTo}) {
+    relativeTo ??= pwd;
+
+    toc.addFile(pathToFile: pathTo, relativeTo: relativeTo);
+  }
+
+  void _saveFiles(FileSync vault, int startOfFiles) {
+    toc.saveFiles(vault, startOfFiles);
+  }
+
+  void addDirectory({
+    required String pathToDirectory,
+    String? relativeTo,
+    required bool recursive,
   }) {
-    var vaultPath = join(storagePath, vaultName);
-    String text;
-
-    print('fetching $vaultPath');
-    if (_isPrivKeyProtected(privateKeyPath)) {
-      var passphrase = ask('Private Key Passphrase:', hidden: true);
-      text = ('echo $passphrase' |
-              '$_vaultExePath  -k $privateKeyPath view $vaultPath ')
-          .toList()
-          .join('\n');
-    } else {
-      text = ('$_vaultExePath  -k $privateKeyPath view $vaultPath')
-          .toList()
-          .join('\n');
-    }
-
-    return text;
+    relativeTo ??= pwd;
+    toc.addDirectory(
+      pathTo: pathToDirectory,
+      relativeTo: relativeTo,
+      recursive: recursive,
+    );
   }
 
-  void install() {
-    /// already installed - no action required.
-    if (exists(_vaultExePath)) return;
-
-    print('Installing vault');
-
-    var tar = 'vault.tar.gz';
-    if (exists(tar)) {
-      delete(tar);
-    }
-
-    print('Downloading vault.');
-    d.fetch(
-        url: 'https://dl.bintray.com/nbari/ssh-vault/$version.tar.gz',
-        saveToPath: tar);
-
-    final bytes = File(tar).readAsBytesSync();
-
-    print('expanding vault tar');
-    final expanded = TarDecoder().decodeBytes(GZipDecoder().decodeBytes(bytes));
-
-    var vaultArchive = expanded.findFile(join(version, vaultExe));
-    final data = vaultArchive.content as List<int>;
-    File(join(storagePath, vaultExe))
-      ..createSync(recursive: true)
-      ..writeAsBytesSync(data);
-
-    'chmod +x $_vaultExePath'.run;
+  List<String> _readPrivateKey(String pathToVault, RandomAccessFile file) {
+    final lines = <String>[];
+    lines.add(readLine(file, 'Private Key Line 1'));
+    lines.add(readLine(file, 'Private Key Line 2'));
+    lines.add(readLine(file, 'Private Key Line 3'));
+    return lines;
   }
-}
 
-/// Check if the ssh private key file located at [path]
-/// is password protected
-bool _isPrivKeyProtected(String path) {
-  // run
-  // ssh-keygen -y -P "" -f rsa_enc
-  //
-  // If we have a password
-  // Load key "path_to_key": incorrect passphrase supplied to decrypt private key`
-  //
-  // If there is no password
-  // ssh-rsa AAAAB3NzaC1y...
+  List<String> _readPublicKey(String pathToVault, RandomAccessFile file) {
+    final lines = <String>[];
+    lines.add(readLine(file, 'Public Key Line 1'));
+    lines.add(readLine(file, 'Public Key Line 2'));
+    lines.add(readLine(file, 'Public Key Line 3'));
+    lines.add(readLine(file, 'Public Key Line 4'));
 
-  var line = 'ssh-keygen -y -P "" -f $path'.toList(nothrow: true).first;
-  return line.startsWith('Load key');
-}
+    return lines;
+  }
 
-class SSHVaultException implements Exception {
-  String message;
-  SSHVaultException(this.message);
-  @override
-  String toString() => message;
-}
+  /// Extracts [entry] from the vault saving the file with its original
+  /// relative path into [extractToDirectory].
+  void _extractFile(
+    FileEncryptor fileEncryptor,
+    RandomAccessFile rafVault,
+    TOCEntry entry,
+    String extractToDirectory,
+  ) {
+    final pathToExtractedFile =
+        join(extractToDirectory, entry.relativePathToFile);
 
-void main() {
-  var vault = SSHVault(storagePath: join(HOME, 'vault'));
-  var text = 'How now brown cow';
-  vault.store(text: text, vaultName: 'cows', overwrite: true);
+    final writeTo = File(pathToExtractedFile).openWrite();
 
-  var decrypted = vault.fetch(vaultName: 'cows');
-
-  if (text != decrypted) {
-    print('bad $text');
-  } else {
-    print('good');
+    try {
+      rafVault.setPositionSync(entry.offset);
+      fileEncryptor.decryptEntry(entry, rafVault, writeTo);
+    } finally {
+      waitFor(writeTo.close());
+    }
   }
 }
