@@ -47,8 +47,6 @@ void main() {
             ),
           );
 
-          vault.iv;
-
           withTempDir((extractToDir) {
             vault.extractFiles(extractToDir);
 
