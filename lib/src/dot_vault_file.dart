@@ -275,5 +275,3 @@ class DotVaultFile {
     return parts[1].trim();
   }
 }
-
-
