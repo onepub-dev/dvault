@@ -7,23 +7,23 @@ packages:
       name: _fe_analyzer_shared
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "24.0.0"
+    version: "25.0.0"
   analyzer:
     dependency: transitive
     description:
       name: analyzer
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "2.1.0"
+    version: "2.2.0"
   archive:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: archive
       url: "https://pub.dartlang.org"
     source: hosted
     version: "3.1.2"
   args:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: args
       url: "https://pub.dartlang.org"
@@ -37,7 +37,7 @@ packages:
     source: hosted
     version: "1.0.2"
   async:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: async
       url: "https://pub.dartlang.org"
@@ -49,7 +49,7 @@ packages:
       name: basic_utils
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "3.4.0"
+    version: "3.6.0"
   boolean_selector:
     dependency: transitive
     description:
@@ -123,10 +123,10 @@ packages:
   dcli:
     dependency: "direct main"
     description:
-      name: dcli
-      url: "https://pub.dartlang.org"
-    source: hosted
-    version: "1.7.1"
+      path: "../dcli"
+      relative: true
+    source: path
+    version: "1.8.0"
   encrypt:
     dependency: "direct main"
     description:
@@ -218,6 +218,13 @@ packages:
       url: "https://pub.dartlang.org"
     source: hosted
     version: "4.1.0"
+  lint:
+    dependency: "direct dev"
+    description:
+      name: lint
+      url: "https://pub.dartlang.org"
+    source: hosted
+    version: "1.7.2"
   logging:
     dependency: transitive
     description:
@@ -233,7 +240,7 @@ packages:
     source: hosted
     version: "0.12.11"
   meta:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: meta
       url: "https://pub.dartlang.org"
@@ -268,19 +275,19 @@ packages:
     source: hosted
     version: "1.8.0"
   pedantic:
-    dependency: "direct dev"
+    dependency: transitive
     description:
       name: pedantic
       url: "https://pub.dartlang.org"
     source: hosted
     version: "1.11.1"
   pointycastle:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: pointycastle
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "3.3.1"
+    version: "3.3.4"
   pool:
     dependency: transitive
     description:
@@ -406,7 +413,7 @@ packages:
       name: test
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "1.17.11"
+    version: "1.17.12"
   test_api:
     dependency: transitive
     description:
@@ -420,7 +427,7 @@ packages:
       name: test_core
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "0.4.1"
+    version: "0.4.2"
   typed_data:
     dependency: transitive
     description:
@@ -462,7 +469,7 @@ packages:
       name: vm_service
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "7.2.0"
+    version: "7.3.0"
   watcher:
     dependency: transitive
     description:
@@ -490,7 +497,7 @@ packages:
       name: win32
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "2.2.6"
+    version: "2.2.9"
   yaml:
     dependency: transitive
     description:
@@ -499,4 +506,4 @@ packages:
     source: hosted
     version: "3.1.0"
 sdks:
-  dart: ">=2.13.0 <3.0.0"
+  dart: ">=2.14.0 <3.0.0"
