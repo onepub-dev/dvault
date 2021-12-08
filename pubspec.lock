@@ -71,6 +71,13 @@ packages:
       url: "https://pub.dartlang.org"
     source: hosted
     version: "1.4.1"
+  circular_buffer:
+    dependency: transitive
+    description:
+      name: circular_buffer
+      url: "https://pub.dartlang.org"
+    source: hosted
+    version: "0.10.0"
   cli_util:
     dependency: transitive
     description:
@@ -119,7 +126,7 @@ packages:
       name: csv
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "5.0.0"
+    version: "5.0.1"
   dart_console:
     dependency: transitive
     description:
@@ -130,10 +137,17 @@ packages:
   dcli:
     dependency: "direct main"
     description:
-      path: "../dcli"
+      path: "../dcli/dcli"
       relative: true
     source: path
-    version: "1.11.0"
+    version: "1.14.2"
+  dcli_core:
+    dependency: transitive
+    description:
+      name: dcli_core
+      url: "https://pub.dartlang.org"
+    source: hosted
+    version: "0.0.4"
   encrypt:
     dependency: "direct main"
     description:
@@ -259,7 +273,7 @@ packages:
       name: mime
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "1.0.0"
+    version: "1.0.1"
   node_preamble:
     dependency: transitive
     description:
@@ -308,7 +322,7 @@ packages:
       name: posix
       url: "https://pub.dartlang.org"
     source: hosted
-    version: "2.1.2"
+    version: "2.2.3"
   pub_semver:
     dependency: transitive
     description:
@@ -337,6 +351,13 @@ packages:
       url: "https://pub.dartlang.org"
     source: hosted
     version: "2.3.1"
+  settings_yaml:
+    dependency: transitive
+    description:
+      name: settings_yaml
+      url: "https://pub.dartlang.org"
+    source: hosted
+    version: "3.3.1"
   shelf:
     dependency: transitive
     description:
@@ -393,6 +414,13 @@ packages:
       url: "https://pub.dartlang.org"
     source: hosted
     version: "1.10.0"
+  stacktrace_impl:
+    dependency: transitive
+    description:
+      name: stacktrace_impl
+      url: "https://pub.dartlang.org"
+    source: hosted
+    version: "2.2.1"
   stream_channel:
     dependency: transitive
     description:
@@ -513,4 +541,4 @@ packages:
     source: hosted
     version: "3.1.0"
 sdks:
-  dart: ">=2.14.0 <3.0.0"
+  dart: ">=2.14.1 <3.0.0"
