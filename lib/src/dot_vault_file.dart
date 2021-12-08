@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dcli/dcli.dart';
+import 'package:dcli/posix.dart';
 import 'package:dvault/src/rsa/convertor.dart';
 import 'package:dvault/src/util/exceptions.dart';
 import 'package:encrypt/encrypt.dart';
@@ -61,7 +62,7 @@ class DotVaultFile {
 
     if (!Platform.isWindows) {
       /// read/write only access for user and no one else.
-      chmod(600, storagePath);
+      chmod(storagePath, permission: '600');
     }
   }
 
