@@ -1,4 +1,5 @@
 name: dvault
+version: 3.0.0
 description: A sample command-line application.
 environment: 
   sdk: '>=2.14.0 <3.0.0'
