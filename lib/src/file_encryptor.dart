@@ -1,4 +1,9 @@
-import 'dart:cli';
+/* Copyright (C) S. Brett Sutton - All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited
+ * Proprietary and confidential
+ * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
+ */
+
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -260,11 +265,11 @@ class ChunkedReader implements ByteReader {
 
   @override
   List<int> readChunk(int bytes) {
-    return waitFor(stream.readChunk(bytes));
+    return waitForEx(stream.readChunk(bytes));
   }
 
   @override
   void cancel() {
-    return waitFor(stream.cancel());
+    return waitForEx(stream.cancel());
   }
 }

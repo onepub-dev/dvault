@@ -1,5 +1,6 @@
 name: dvault
 version: 3.0.0
+publish_to: https://beta.onepub.dev/api/apsdavuhno/
 description: A sample command-line application.
 environment: 
   sdk: '>=2.14.0 <3.0.0'
@@ -7,6 +8,11 @@ dependencies:
   archive: ^3.0.0
   args: ^2.0.0
   async: 2.8.2
+  cli_menu: 
+    version: 0.3.0
+    hosted: 
+      name: cli_menu
+      url: https://beta.onepub.dev/api/apsdavuhno
   dcli: 1.14.3
   encrypt: ^5.0.1
   meta: ^1.0.0

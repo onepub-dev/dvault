@@ -1,8 +1,13 @@
+/* Copyright (C) S. Brett Sutton - All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited
+ * Proprietary and confidential
+ * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
+ */
+
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:encrypt/encrypt.dart';
-import 'package:pointycastle/key_derivators/api.dart';
 import 'package:pointycastle/key_derivators/pbkdf2.dart';
 import 'package:pointycastle/pointycastle.dart';
 
@@ -15,7 +20,11 @@ class StrongKey extends Key {
   }
 
   @override
-  Key stretch(int desiredKeyLength, {int iterationCount = 100, Uint8List? salt}) {
+  Key stretch(
+    int desiredKeyLength, {
+    int iterationCount = 100,
+    Uint8List? salt,
+  }) {
     final params = Pbkdf2Parameters(salt!, iterationCount, desiredKeyLength);
     final pbkdf2 = PBKDF2KeyDerivator(Mac('SHA-512/HMAC'))..init(params);
 
@@ -29,7 +38,10 @@ class SecureRandom {
   static final Random _generator = Random.secure();
   final Uint8List _bytes;
 
-  SecureRandom(int length) : _bytes = Uint8List.fromList(List.generate(length, (i) => _generator.nextInt(256)));
+  SecureRandom(int length)
+      : _bytes = Uint8List.fromList(
+          List.generate(length, (i) => _generator.nextInt(256)),
+        );
 
   Uint8List get bytes => _bytes;
 
