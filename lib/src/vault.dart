@@ -1,4 +1,9 @@
-import 'dart:cli';
+/* Copyright (C) S. Brett Sutton - All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited
+ * Proprietary and confidential
+ * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
+ */
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -81,7 +86,7 @@ class VaultFile {
     // final vault = File(pathToVault);
 
     final vault = VaultFile._forLoading(pathToVault);
-    final raf = waitFor(File(pathToVault).open());
+    final raf = waitForEx(File(pathToVault).open());
     try {
       vault._readMagic(pathToVault, raf);
       vault._readVersion(pathToVault, raf);
@@ -94,7 +99,7 @@ class VaultFile {
 
       vault.toc = vault._loadToc(pathToVault, raf);
     } finally {
-      waitFor(raf.close());
+      waitForEx(raf.close());
     }
     return vault;
   }
@@ -105,14 +110,14 @@ class VaultFile {
   /// vault.extractFiles();
   /// ```
   void extractFiles(String pathToExtractTo) {
-    final raf = waitFor(File(pathToVault).open());
+    final raf = waitForEx(File(pathToVault).open());
     try {
       final fileEncryptor = FileEncryptor();
       for (final entry in toc.entries) {
         _extractFile(fileEncryptor, raf, entry, pathToExtractTo);
       }
     } finally {
-      waitFor(raf.close());
+      waitForEx(raf.close());
     }
   }
 
@@ -291,7 +296,7 @@ class VaultFile {
       rafVault.setPositionSync(entry.offset);
       fileEncryptor.decryptEntry(entry, rafVault, writeTo);
     } finally {
-      waitFor(writeTo.close());
+      waitForEx(writeTo.close());
     }
   }
 }
