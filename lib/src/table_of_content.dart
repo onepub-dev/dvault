@@ -4,14 +4,13 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'dart:io';
 
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/util/raf_helper.dart';
 
 import 'file_encryptor.dart';
 import 'toc_entry.dart';
+import 'util/raf_helper.dart';
 
 class TableOfContents {
   TableOfContents();
@@ -46,8 +45,9 @@ class TableOfContents {
 
     var offset = startOfFiles;
     for (final entry in entries) {
-      entry.length = addFileToVault(vault, entry, encryptor);
-      entry.offset = offset;
+      entry
+        ..length = addFileToVault(vault, entry, encryptor)
+        ..offset = offset;
       offset += entry.length;
     }
 
@@ -58,12 +58,11 @@ class TableOfContents {
     FileSync vault,
     TOCEntry entry,
     FileEncryptor encryptor,
-  ) {
-    return encryptor.encrypt(
-      join(entry.relativeTo!, entry.relativePathToFile),
-      vault,
-    );
-  }
+  ) =>
+      encryptor.encrypt(
+        join(entry.relativeTo!, entry.relativePathToFile),
+        vault,
+      );
 
   String get _tocEntryCountLine => 'entries:${entries.length}';
 

@@ -4,7 +4,6 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'package:dcli/dcli.dart';
 
 import 'util/exceptions.dart';
@@ -19,6 +18,21 @@ class TOCEntry {
   TOCEntry({required String pathToFile, required this.relativeTo})
       : originalLength = stat(pathToFile).size,
         relativePathToFile = relative(pathToFile, from: relativeTo);
+
+  TOCEntry.fromLine(String line) : relativeTo = null {
+    final parts = line.split(',');
+    if (parts.length != 4) {
+      throw VaultReadException(
+        'Expected 4 key/value pairs in TOC entry. Found $line',
+      );
+    }
+
+    /// offset
+    offset = parseNo(parts[0], offsetKey);
+    length = parseNo(parts[1], lengthKey);
+    originalLength = parseNo(parts[2], originalLengthKey);
+    relativePathToFile = parseValue(parts[3], relativePathKey);
+  }
 
   TOCEntry.fromParts({
     required this.offset,
@@ -57,23 +71,9 @@ class TOCEntry {
   static const lengthKey = 'length';
   static const originalLengthKey = 'originalLength';
 
-  String get asLine =>
-      '$offsetKey:$offset, $lengthKey:$length, $originalLengthKey:$originalLength, $relativePathKey:$relativePathToFile';
-
-  TOCEntry.fromLine(String line) : relativeTo = null {
-    final parts = line.split(',');
-    if (parts.length != 4) {
-      throw VaultReadException(
-        'Expected 4 key/value pairs in TOC entry. Found $line',
-      );
-    }
-
-    /// offset
-    offset = parseNo(parts[0], offsetKey);
-    length = parseNo(parts[1], lengthKey);
-    originalLength = parseNo(parts[2], originalLengthKey);
-    relativePathToFile = parseValue(parts[3], relativePathKey);
-  }
+  String get asLine => '$offsetKey:$offset, $lengthKey:$length, '
+      '$originalLengthKey:$originalLength, '
+      '$relativePathKey:$relativePathToFile';
 
   /// This method is only valid when creating the vault.
   /// If you are loading an existing vault call this file will

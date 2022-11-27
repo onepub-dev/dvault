@@ -4,7 +4,6 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'package:dcli/dcli.dart';
 
 void printBackupMessage(String pathToDotVault) {
@@ -13,7 +12,8 @@ void printBackupMessage(String pathToDotVault) {
   print(orange('*'));
   print(
     orange(
-      '* If you lose your passphrase you will irretrievably lose access to all files protected with DVault',
+      '* If you lose your passphrase you will irretrievably lose access '
+      'to all files protected with DVault',
     ),
   );
   print(orange('*'));

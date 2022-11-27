@@ -4,28 +4,20 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'dart:io';
 
 import 'package:archive/archive.dart';
 import 'package:dcli/dcli.dart' hide fetch;
 import 'package:dcli/dcli.dart' as d;
 
-/// Provide a simple tool which encrypts a text into  encrypted text using the system ssh keys.
+/// Provide a simple tool which encrypts a text into  encrypted text
+/// using the system ssh keys.
 ///
-/// This tool will download and install ssh-vault into the storagePath directory if its
+/// This tool will download and install ssh-vault into the [storagePath]
+/// directory if its
 /// not already installed into that dir.
 ///
 class SSHVault {
-  static const vaultExe = 'ssh-vault';
-  static const version = 'ssh-vault_0.12.6_linux_amd64';
-
-  String? storagePath;
-
-  String? privateKeyPath;
-
-  String? publicKeyPath;
-
   /// [storagePath] is the path (directory)
   /// where we are going to store the resulting vault.
   /// [privateKeyPath] the path to the private key file. If null defaults to
@@ -36,6 +28,14 @@ class SSHVault {
     privateKeyPath ??= join(HOME, '.ssh', 'id_rsa');
     publicKeyPath ??= join(HOME, '.ssh', 'id_rsa.pub');
   }
+  static const vaultExe = 'ssh-vault';
+  static const version = 'ssh-vault_0.12.6_linux_amd64';
+
+  String? storagePath;
+
+  String? privateKeyPath;
+
+  String? publicKeyPath;
 
   String get _vaultExePath => join(storagePath!, vaultExe);
 
@@ -134,7 +134,9 @@ class SSHVault {
 
   void install() {
     /// already installed - no action required.
-    if (exists(_vaultExePath)) return;
+    if (exists(_vaultExePath)) {
+      return;
+    }
 
     print('Installing vault');
 
@@ -171,7 +173,8 @@ bool _isPrivKeyProtected(String? path) {
   // ssh-keygen -y -P "" -f rsa_enc
   //
   // If we have a password
-  // Load key "path_to_key": incorrect passphrase supplied to decrypt private key`
+  // Load key "path_to_key": incorrect passphrase supplied to decrypt
+  // private key`
   //
   // If there is no password
   // ssh-rsa AAAAB3NzaC1y...
@@ -181,8 +184,8 @@ bool _isPrivKeyProtected(String? path) {
 }
 
 class SSHVaultException implements Exception {
-  String message;
   SSHVaultException(this.message);
+  String message;
   @override
   String toString() => message;
 }

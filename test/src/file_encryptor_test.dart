@@ -17,8 +17,10 @@ void main() {
     final encryptor = FileEncryptor.noEncryption();
 
     const testFile = 'testfile.txt';
-    testFile.write('1Hello World');
-    testFile.append('2Hello World');
+    // ignore: cascade_invocations
+    testFile
+      ..write('1Hello World')
+      ..append('2Hello World');
 
     const pathToVvault = 'testfile.vault';
     withOpenFile(pathToVvault, (vault) {
@@ -28,14 +30,17 @@ void main() {
 
     // decrypt the file
     const resultFile = 'result.txt';
-    if (exists(resultFile)) delete(resultFile);
+    if (exists(resultFile)) {
+      delete(resultFile);
+    }
     final resultSink = File(resultFile).openWrite();
     final reader =
         ChunkedReader(ChunkedStreamReader(File(pathToVvault).openRead()));
     try {
       encryptor.decryptReader(reader, resultSink);
     } finally {
-      waitForEx(resultSink.close());
+      // ignore: discarded_futures
+      waitForEx<void>(resultSink.close());
       reader.cancel();
     }
 
@@ -55,8 +60,7 @@ void main() {
     const testFile = 'testfile.txt';
     for (var size = 2; size <= 32; size++) {
       final toStore = text.substring(0, size);
-      final file = File(testFile);
-      file.writeAsStringSync(toStore);
+      File(testFile).writeAsStringSync(toStore);
       final encryptedFile = _lock(testFile, encryptor);
       // block size is 16 bits so should always be multiple of two
       // the mini vault has an 8 byte header to store
@@ -88,9 +92,11 @@ String _unlock(
 
   final writeTo = File(resultFile).openWrite();
   try {
-    encryptor.decrypt(pathToEncryptedFile, writeTo);
+    // ignore: discarded_futures
+    waitForEx(encryptor.decrypt(pathToEncryptedFile, writeTo));
   } finally {
-    writeTo.close();
+    // ignore: discarded_futures
+    waitForEx<void>(writeTo.close());
   }
 
   return resultFile;

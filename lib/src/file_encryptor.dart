@@ -9,10 +9,11 @@ import 'dart:typed_data';
 
 import 'package:async/async.dart';
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/toc_entry.dart';
 import 'package:encrypt/encrypt.dart';
 import 'package:meta/meta.dart';
 import 'package:pointycastle/export.dart';
+
+import 'toc_entry.dart';
 
 /// An AES CBC block encryptor suitable
 /// for encrypting files with a symetric key.
@@ -37,7 +38,7 @@ class FileEncryptor {
 
   late final Key key;
   late final IV iv;
-  late final engine = AESFastEngine();
+  late final engine = AESEngine();
 
   // AESFastEngine use a 16 byte block size.
   int get blockSize => engine.blockSize;
@@ -101,14 +102,14 @@ class FileEncryptor {
     return bytesWritten;
   }
 
-  void decrypt(String pathToEncryptedFile, IOSink writeTo) {
+  Future<void> decrypt(String pathToEncryptedFile, IOSink writeTo) async {
     final reader = ChunkedStreamReader(File(pathToEncryptedFile).openRead());
 
     try {
       decryptReader(ChunkedReader(reader), writeTo);
     } finally {
-      reader.cancel();
-      writeTo.close();
+      await reader.cancel();
+      await writeTo.close();
     }
   }
 
@@ -126,7 +127,7 @@ class FileEncryptor {
     }
   }
 
-  /// Decrypts [stream] writing the plain text results
+  /// Decrypts [reader] writing the plain text results
   /// to [writeTo]
   void decryptReader(ByteReader reader, IOSink writeTo) {
     // Create a CBC block cipher with AES, and initialize with key and IV
@@ -186,7 +187,7 @@ class FileEncryptor {
         final dataSize = blockSize - paddingSize;
 
         plainTextBuffer = trim(plainTextBuffer, dataSize);
-        assert(plainTextBuffer.length == dataSize);
+        assert(plainTextBuffer.length == dataSize, 'plan text is wrong length');
 
         /// calculate the final size of the file we read.
         readSoFar = readSoFar - paddingSize;
@@ -196,7 +197,8 @@ class FileEncryptor {
 
       writeTo.add(plainTextBuffer);
     }
-    assert(readSoFar == originalFileLength);
+    assert(
+        readSoFar == originalFileLength, 'Mis-match with original file length');
   }
 
   /// AES requires a fixed block size so we have to
@@ -210,23 +212,19 @@ class FileEncryptor {
   /// AES requires a fixed block size so we have to
   /// trim the final block after decryption to
   /// match the original file size.
-  Uint8List trim(Uint8List plainTextBuffer, int dataSize) {
-    return Uint8List.view(plainTextBuffer.buffer, 0, dataSize);
-  }
+  Uint8List trim(Uint8List plainTextBuffer, int dataSize) =>
+      Uint8List.view(plainTextBuffer.buffer, 0, dataSize);
 
   /// Converts an into to byte list using big endian.
   /// We do this to ensure that a vault is cross platform.
   /// See [_byteListAsInt]
-  Uint8List _intAsByteList(int value) {
-    return Uint8List(8)..buffer.asByteData().setInt64(0, value);
-  }
+  Uint8List _intAsByteList(int value) =>
+      Uint8List(8)..buffer.asByteData().setInt64(0, value);
 
   /// Converts a byte list to an int.
   /// The [list] data must be in big endian format.
   /// See [_intAsByteList]
-  int _byteListAsInt(Uint8List list) {
-    return list.buffer.asByteData().getInt64(0);
-  }
+  int _byteListAsInt(Uint8List list) => list.buffer.asByteData().getInt64(0);
 }
 
 abstract class ByteReader {
@@ -247,7 +245,9 @@ class RafReader implements ByteReader {
     for (var i = 0; i < bytes; i++) {
       final byte = raf.readByteSync();
 
-      if (byte == -1) break;
+      if (byte == -1) {
+        break;
+      }
       read.add(byte);
     }
     return read;
@@ -264,12 +264,10 @@ class ChunkedReader implements ByteReader {
   ChunkedStreamReader<int> stream;
 
   @override
-  List<int> readChunk(int bytes) {
-    return waitForEx(stream.readChunk(bytes));
-  }
+  // ignore: discarded_futures
+  List<int> readChunk(int bytes) => waitForEx(stream.readChunk(bytes));
 
   @override
-  void cancel() {
-    return waitForEx(stream.cancel());
-  }
+  // ignore: discarded_futures
+  void cancel() => waitForEx(stream.cancel());
 }

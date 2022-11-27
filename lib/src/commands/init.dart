@@ -4,19 +4,27 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/rsa/rsa_generator.dart';
-import 'package:dvault/src/util/messages.dart';
 
 import '../dot_vault_file.dart';
 import '../env.dart';
+import '../rsa/rsa_generator.dart';
+import '../util/messages.dart';
 import 'helper.dart';
 
 class InitCommand extends Command<void> {
+  InitCommand() {
+    argParser.addFlag(
+      'env',
+      abbr: 'e',
+      negatable: false,
+      help: 'If set the passphrase will be read from the '
+          '${Constants.dvaultPassphrase} environment variable.',
+    );
+  }
   static int minPassPhraseLength = 12;
 
   @override
@@ -26,16 +34,6 @@ class InitCommand extends Command<void> {
 
   @override
   String get name => 'init';
-
-  InitCommand() {
-    argParser.addFlag(
-      'env',
-      abbr: 'e',
-      negatable: false,
-      help:
-          'If set the passphrase will be read from the ${Constants.dvaultPassphrase} environment variable.',
-    );
-  }
 
   @override
   void run() {
@@ -66,14 +64,16 @@ class InitCommand extends Command<void> {
       passPhrase = env[Constants.dvaultPassphrase];
     } else {
       print(
-        'To protect your keys we lock them with a passphrase with a minimum length of ${InitCommand.minPassPhraseLength}).',
+        'To protect your keys we lock them with a passphrase with a '
+        'minimum length of ${InitCommand.minPassPhraseLength}).',
       );
       passPhrase = askForPassPhrase();
     }
 
     if (passPhrase!.length < minPassPhraseLength) {
       printerr(
-        red('The passphrase must be at least ${InitCommand.minPassPhraseLength} characters long.'),
+        red('The passphrase must be at least '
+            '${InitCommand.minPassPhraseLength} characters long.'),
       );
       print(argParser.usage);
       exit(1);

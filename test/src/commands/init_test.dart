@@ -4,7 +4,6 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'package:dcli/dcli.dart';
 import 'package:dvault/src/dot_vault_file.dart';
 import 'package:dvault/src/dvault.dart';
@@ -13,10 +12,10 @@ import 'package:dvault/src/util/exceptions.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('create keys ...', () {
+  test('create keys ...', () async {
     const passPhrase = 'one and a two and a three';
     env['DVAULT_PASSPHRASE'] = passPhrase;
-    runCommand(['init', '--env']);
+    await runCommand(['init', '--env']);
 
     print('Generating key pair. be patient');
     final pair = RSAGenerator().generateKeyPair();

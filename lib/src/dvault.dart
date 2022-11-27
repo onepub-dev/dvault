@@ -4,7 +4,6 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'package:args/command_runner.dart';
 
 import 'commands/init.dart';
@@ -12,15 +11,14 @@ import 'commands/lock.dart';
 import 'commands/reset.dart';
 import 'commands/unlock.dart';
 
-void runCommand(List<String> args) {
+Future<void> runCommand(List<String> args) async {
   final runner = CommandRunner<void>(
     'vault',
     'Locks/Unlocks a file by encrypting it into a transportable "vault".',
-  );
-  runner.addCommand(InitCommand());
-  runner.addCommand(LockCommand());
-  runner.addCommand(UnlockCommand());
-
-  runner.addCommand(ResetCommand());
-  runner.run(args);
+  )
+    ..addCommand(InitCommand())
+    ..addCommand(LockCommand())
+    ..addCommand(UnlockCommand())
+    ..addCommand(ResetCommand());
+  await runner.run(args);
 }
