@@ -13,11 +13,9 @@ import 'package:pointycastle/random/fortuna_random.dart';
 
 /// Class to generator RSAKeyPairs
 class RSAGenerator {
-  static final RSAGenerator _self = RSAGenerator._internal();
-
   factory RSAGenerator() => _self;
-
   RSAGenerator._internal();
+  static final RSAGenerator _self = RSAGenerator._internal();
 
   AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> generateKeyPair() {
     final keyPair = getRsaKeyPair(getSecureRandom());
@@ -26,7 +24,8 @@ class RSAGenerator {
 
   /// Generate a [PublicKey] and [PrivateKey] pair
   ///
-  /// Returns a [AsymmetricKeyPair] based on the [RSAKeyGenerator] with custom parameters,
+  /// Returns a [AsymmetricKeyPair] based on the [RSAKeyGenerator]
+  ///  with custom parameters,
   /// including a [SecureRandom]
   AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> getRsaKeyPair(
     SecureRandom secureRandom,
@@ -34,8 +33,7 @@ class RSAGenerator {
     /// Set BitStrength to [1024, 2048 or 4096]
     final rsapars = RSAKeyGeneratorParameters(BigInt.from(65537), 4096, 5);
     final params = ParametersWithRandom(rsapars, secureRandom);
-    final keyGenerator = RSAKeyGenerator();
-    keyGenerator.init(params);
+    final keyGenerator = RSAKeyGenerator()..init(params);
     final pair = keyGenerator.generateKeyPair();
 
     return AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey>(

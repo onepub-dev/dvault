@@ -13,11 +13,11 @@ import 'package:pointycastle/pointycastle.dart';
 
 /// Represents an Encryption Key.
 class StrongKey extends Key {
+  // ignore: use_super_parameters
   StrongKey.fromPassPhrase(String passPhrase) : super.fromUtf8(passPhrase);
 
-  Key secureStretch(Uint8List salt) {
-    return stretch(256, iterationCount: 100000, salt: salt);
-  }
+  Key secureStretch(Uint8List salt) =>
+      stretch(256, iterationCount: 100000, salt: salt);
 
   @override
   Key stretch(
@@ -35,13 +35,12 @@ class StrongKey extends Key {
 }
 
 class SecureRandom {
-  static final Random _generator = Random.secure();
-  final Uint8List _bytes;
-
   SecureRandom(int length)
       : _bytes = Uint8List.fromList(
           List.generate(length, (i) => _generator.nextInt(256)),
         );
+  static final Random _generator = Random.secure();
+  final Uint8List _bytes;
 
   Uint8List get bytes => _bytes;
 

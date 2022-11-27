@@ -4,7 +4,6 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
@@ -16,6 +15,36 @@ import '../env.dart';
 import 'helper.dart';
 
 class UnlockCommand extends Command<void> {
+  UnlockCommand() {
+    argParser
+      ..addOption(
+        'vault',
+        abbr: 'v',
+        help: 'The path and filename of the vault to decrypt.',
+      )
+      ..addOption(
+        'file',
+        abbr: 'f',
+        help: '''
+    The path to store the decrypted data in.
+    If not specified than the basename of the vault will be used.''',
+      )
+      ..addFlag(
+        'overwrite',
+        abbr: 'o',
+        negatable: false,
+        help: 'Overwrites the output if it already exists',
+      )
+      ..addFlag(
+        'env',
+        abbr: 'e',
+        negatable: false,
+        help: 'If set the passphrase will be read from the '
+            '${Constants.dvaultPassphrase} environment variable.',
+      )
+      ..addFlag('debug', abbr: 'd', help: 'Output debug information');
+  }
+
   @override
   String get description => '''
 Decrypts the passed in vault.
@@ -24,35 +53,6 @@ Decrypts the passed in vault.
 
   @override
   String get name => 'decrypt';
-
-  UnlockCommand() {
-    argParser.addOption(
-      'vault',
-      abbr: 'v',
-      help: 'The path and filename of the vault to decrypt.',
-    );
-    argParser.addOption(
-      'file',
-      abbr: 'f',
-      help: '''
-    The path to store the decrypted data in.
-    If not specified than the basename of the vault will be used.''',
-    );
-    argParser.addFlag(
-      'overwrite',
-      abbr: 'o',
-      negatable: false,
-      help: 'Overwrites the output if it already exists',
-    );
-    argParser.addFlag(
-      'env',
-      abbr: 'e',
-      negatable: false,
-      help:
-          'If set the passphrase will be read from the ${Constants.dvaultPassphrase} environment variable.',
-    );
-    argParser.addFlag('debug', abbr: 'd', help: 'Output debug information');
-  }
 
   @override
   void run() {
@@ -109,7 +109,6 @@ Decrypts the passed in vault.
     final encrypted = file.readAsBytesSync();
     final contents = encrypter.decryptBytes(Encrypted(encrypted));
 
-    final outputFile = File(outputPath);
-    outputFile.writeAsBytesSync(contents);
+    File(outputPath).writeAsBytesSync(contents);
   }
 }

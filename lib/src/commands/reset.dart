@@ -4,15 +4,15 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/util/messages.dart';
 
 import '../dot_vault_file.dart';
+import '../util/messages.dart';
 import 'helper.dart';
 
 class ResetCommand extends Command<void> {
+  ResetCommand();
   static int minPassPhraseLength = 12;
 
   @override
@@ -23,13 +23,12 @@ class ResetCommand extends Command<void> {
   @override
   String get name => 'reset';
 
-  ResetCommand();
-
   @override
   void run() {
     print(blue('Preparing to reset your passphrase.'));
     print(
-      'To protect your keys we lock them with a passphrase with a minimum length of ${ResetCommand.minPassPhraseLength}).',
+      'To protect your keys we lock them with a passphrase with a '
+      'minimum length of ${ResetCommand.minPassPhraseLength}).',
     );
 
     String? current;
@@ -42,8 +41,8 @@ class ResetCommand extends Command<void> {
 
     final newPassphrase = askForPassPhrase(prompt: 'New passphrase');
 
-    final keyfile = DotVaultFile.load();
-    keyfile.resetPassphrase(current: current, newPassphrase: newPassphrase);
+    DotVaultFile.load()
+        .resetPassphrase(current: current, newPassphrase: newPassphrase);
 
     print('');
     print(green('Your passphrase has been reset.'));

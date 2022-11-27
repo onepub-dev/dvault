@@ -4,18 +4,17 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dcli/dcli.dart';
 import 'package:dcli/posix.dart';
-import 'package:dvault/src/rsa/convertor.dart';
-import 'package:dvault/src/util/exceptions.dart';
 import 'package:encrypt/encrypt.dart';
 import 'package:pointycastle/pointycastle.dart';
 
+import 'rsa/convertor.dart';
+import 'util/exceptions.dart';
 import 'util/strong_key.dart';
 
 /// DVault stores its configuration in a text file
@@ -28,10 +27,22 @@ import 'util/strong_key.dart';
 /// You can safely copy the .dvault file from
 /// system to system.
 class DotVaultFile {
+  /// Loads the key pair from key file decrypting the private key.
+  DotVaultFile.load() {
+    Settings().verbose('Loading Keyfile from: $storagePath');
+
+    _lines = read(storagePath).toList();
+
+    final version = _parseVersion(_lines[0]);
+    iv = _parseIV(_lines[1]);
+    salt = _parseSalt(_lines[2]);
+    _test = _parseTest(_lines[3]);
+    Settings().verbose('Storage Version: $version');
+  }
   static const String version = '1';
 
   /// Path to the .dvault file which we used to store the public/private key pair.
-  static late final String storagePath = truepath(join(HOME, '.dvault'));
+  static final String storagePath = truepath(join(HOME, '.dvault'));
 
   var _lines = <String>[];
 
@@ -60,9 +71,9 @@ class DotVaultFile {
     // store a test message so we can easily check the passphrase
     // is correct.
     final test = encrypter.encrypt('test', iv: _iv).base64;
-    storagePath.append('test:$test');
-
-    storagePath.append('');
+    storagePath
+      ..append('test:$test')
+      ..append('');
     _appendPrivateKey(privateKey, encrypter, _iv);
     storagePath.append('');
     _appendPublicKey(publicKey);
@@ -71,19 +82,6 @@ class DotVaultFile {
       /// read/write only access for user and no one else.
       chmod(storagePath, permission: '600');
     }
-  }
-
-  /// Loads the key pair from key file decrypting the private key.
-  DotVaultFile.load() {
-    Settings().verbose('Loading Keyfile from: $storagePath');
-
-    _lines = read(storagePath).toList();
-
-    final version = _parseVersion(_lines[0]);
-    iv = _parseIV(_lines[1]);
-    salt = _parseSalt(_lines[2]);
-    _test = _parseTest(_lines[3]);
-    Settings().verbose('Storage Version: $version');
   }
 
   RSAPrivateKey privateKey({required String passphrase}) {
@@ -101,20 +99,16 @@ class DotVaultFile {
 
   /// Returns an ecrypted version of the private key
   /// stored in the .dvault file.
-  String privateKeyAsText(String passphrase) {
-    return RSAConvertor.privateKeyAsText(
-      privateKey(passphrase: passphrase),
-      encryptor(passphrase),
-      iv,
-    );
-  }
+  String privateKeyAsText(String passphrase) => RSAConvertor.privateKeyAsText(
+        privateKey(passphrase: passphrase),
+        encryptor(passphrase),
+        iv,
+      );
 
   /// Returns the public key stored in the .dvault file
   /// in a text representation suitable for storage
   /// and later retrival.
-  String publicKeyAsText() {
-    return RSAConvertor.publicKeyAsText(publicKey);
-  }
+  String publicKeyAsText() => RSAConvertor.publicKeyAsText(publicKey);
 
   /// Loads just the public key from this key file.
   /// Used when we are encrypting and don't need the private key.
@@ -142,7 +136,8 @@ class DotVaultFile {
   //   return encrypter.encrypt(text, iv: _iv);
   // }
 
-  // String decrypt({required Encrypted encrypted, required String passphrase}) {
+  // String decrypt({required Encrypted encrypted,
+  //  required String passphrase}) {
   //   var encrypter = _encrypterFromPassphrase(passphrase, _salt);
   // }
 
@@ -187,11 +182,10 @@ class DotVaultFile {
         .append(RSAConvertor.privateKeyAsText(privateKey, encrypter, _iv));
   }
 
-  /// Creates an AES [Encryptor] from the given [passphrase]
+  /// Creates an AES [Encrypter] from the given [passphrase]
   /// and the salt held in the .vault file.
-  Encrypter encryptor(String passphrase) {
-    return _encrypterFromPassphrase(passphrase, salt);
-  }
+  Encrypter encryptor(String passphrase) =>
+      _encrypterFromPassphrase(passphrase, salt);
 
   /// Creates an AES encryptor from [passphrase]
   /// We use this encryptor for encrypting/decrypting the text
@@ -219,16 +213,14 @@ class DotVaultFile {
   /// Extract the Private Key from the .vault file
   /// The key is extracted verbatium and as such is
   /// still encrypted.
-  List<String> extractPrivateKeyLines() {
-    return RSAConvertor.extractPrivateKeyLines(_lines);
-  }
+  List<String> extractPrivateKeyLines() =>
+      RSAConvertor.extractPrivateKeyLines(_lines);
 
   /// Extract the Private Key from the .vault file
   /// The key is extracted verbatium and as such is
   /// still encrypted.
-  List<String> extractPublicKeyLines() {
-    return RSAConvertor.extractPublicKeyLines(_lines);
-  }
+  List<String> extractPublicKeyLines() =>
+      RSAConvertor.extractPublicKeyLines(_lines);
 
   String _parseVersion(String line) {
     final parts = line.split(':');

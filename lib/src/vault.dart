@@ -9,16 +9,16 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/file_encryptor.dart';
-import 'package:dvault/src/table_of_content.dart';
-import 'package:dvault/src/toc_entry.dart';
-import 'package:dvault/src/util/exceptions.dart';
-import 'package:dvault/src/util/raf_helper.dart';
-import 'package:dvault/src/util/strong_key.dart';
-import 'package:dvault/src/version/version.dart';
 import 'package:encrypt/encrypt.dart';
 
 import 'dot_vault_file.dart';
+import 'file_encryptor.dart';
+import 'table_of_content.dart';
+import 'toc_entry.dart';
+import 'util/exceptions.dart';
+import 'util/raf_helper.dart';
+import 'util/strong_key.dart';
+import 'version/version.dart';
 
 /// Class for reading and writing vaults
 /// A vault consists of serveral areas
@@ -38,8 +38,6 @@ import 'dot_vault_file.dart';
 ///<Table of Contents (TOC)>
 //```
 class VaultFile {
-  TableOfContents toc = TableOfContents();
-
   /// Create a new vault object ready to add files to.
   VaultFile(this.pathToVault) {
     iv = IV.fromSecureRandom(16);
@@ -48,6 +46,7 @@ class VaultFile {
 
   /// Use this ctor when you are going to load the vault from disk
   VaultFile._forLoading(this.pathToVault);
+  TableOfContents toc = TableOfContents();
 
   String pathToVault;
   late final Uint8List salt;
@@ -63,21 +62,23 @@ class VaultFile {
   void saveTo() {
     final dotVaultFile = DotVaultFile.load();
     withOpenFile(pathToVault, (vault) {
-      vault.append(_magicLine);
-      vault.append(_versionLine);
-      vault.append(_createdByLine);
-      vault.append(_authorLine);
-      vault.append(_saltLine(dotVaultFile.salt));
-      vault.append(_ivLine(dotVaultFile.iv));
-      vault.append(dotVaultFile.extractPrivateKeyLines().join(Platform().eol));
-      vault.append(dotVaultFile.extractPublicKeyLines().join(Platform().eol));
-      vault.append('');
+      vault
+        ..append(_versionLine)
+        ..append(_magicLine)
+        ..append(_createdByLine)
+        ..append(_authorLine)
+        ..append(_saltLine(dotVaultFile.salt))
+        ..append(_ivLine(dotVaultFile.iv))
+        ..append(dotVaultFile.extractPrivateKeyLines().join(Platform().eol))
+        ..append(dotVaultFile.extractPublicKeyLines().join(Platform().eol))
+        ..append('');
       final startOfFiles = vault.length;
       _saveFiles(vault, startOfFiles);
       final startOfTOC = vault.length;
       toc.saveToc(vault);
-      vault.append(_startOfFilesLine(startOfFiles));
-      vault.append(_startOfTocLine(startOfTOC));
+      vault
+        ..append(_startOfFilesLine(startOfFiles))
+        ..append(_startOfTocLine(startOfTOC));
     });
   }
 
@@ -86,19 +87,21 @@ class VaultFile {
     // final vault = File(pathToVault);
 
     final vault = VaultFile._forLoading(pathToVault);
+    // ignore: discarded_futures
     final raf = waitForEx(File(pathToVault).open());
     try {
-      vault._readMagic(pathToVault, raf);
-      vault._readVersion(pathToVault, raf);
-      vault._readCreatedBy(pathToVault, raf);
-      vault._readAuthor(pathToVault, raf);
-      vault._readSalt(pathToVault, raf);
-      vault._readIV(pathToVault, raf);
-      vault._readPrivateKey(pathToVault, raf);
-      vault._readPublicKey(pathToVault, raf);
-
-      vault.toc = vault._loadToc(pathToVault, raf);
+      vault
+        .._readMagic(pathToVault, raf)
+        .._readVersion(pathToVault, raf)
+        .._readCreatedBy(pathToVault, raf)
+        .._readAuthor(pathToVault, raf)
+        .._readSalt(pathToVault, raf)
+        .._readIV(pathToVault, raf)
+        .._readPrivateKey(pathToVault, raf)
+        .._readPublicKey(pathToVault, raf)
+        ..toc = vault._loadToc(pathToVault, raf);
     } finally {
+      // ignore: discarded_futures
       waitForEx(raf.close());
     }
     return vault;
@@ -110,6 +113,7 @@ class VaultFile {
   /// vault.extractFiles();
   /// ```
   void extractFiles(String pathToExtractTo) {
+    // ignore: discarded_futures
     final raf = waitForEx(File(pathToVault).open());
     try {
       final fileEncryptor = FileEncryptor();
@@ -117,6 +121,7 @@ class VaultFile {
         _extractFile(fileEncryptor, raf, entry, pathToExtractTo);
       }
     } finally {
+      // ignore: discarded_futures
       waitForEx(raf.close());
     }
   }
@@ -162,7 +167,8 @@ class VaultFile {
     final magic = readLine(file, 'Magic');
     if (magic != _magicLine) {
       throw VaultReadException(
-        'Unexpected Magic Code. Are you sure ${truepath(pathToVault)} is a vault?',
+        'Unexpected Magic Code. Are you sure '
+        '${truepath(pathToVault)} is a vault?',
       );
     }
   }
@@ -218,7 +224,8 @@ class VaultFile {
     final startOfToc = readLine(file, startOfTocKey);
     if (!startOfToc.startsWith(startOfTocKey)) {
       throw VaultReadException(
-        'Unexpected Start of TOC Prefix. Expected $startOfTocKey, found $startOfToc',
+        'Unexpected Start of TOC Prefix. '
+        'Expected $startOfTocKey, found $startOfToc',
       );
     }
     return parseNo(startOfToc, startOfTocKey);
@@ -228,7 +235,8 @@ class VaultFile {
     final startOfFiles = readLine(file, startOfFilesKey);
     if (!startOfFiles.startsWith(startOfFilesKey)) {
       throw VaultReadException(
-        'Unexpected Start of TOC Prefix. Expected $startOfFilesKey, found $startOfFiles',
+        'Unexpected Start of TOC Prefix. '
+        'Expected $startOfFilesKey, found $startOfFiles',
       );
     }
     return parseNo(startOfFiles, startOfFilesKey);
@@ -250,8 +258,8 @@ class VaultFile {
 
   void addDirectory({
     required String pathToDirectory,
-    String? relativeTo,
     required bool recursive,
+    String? relativeTo,
   }) {
     relativeTo ??= pwd;
     toc.addDirectory(
@@ -262,19 +270,21 @@ class VaultFile {
   }
 
   List<String> _readPrivateKey(String pathToVault, RandomAccessFile file) {
-    final lines = <String>[];
-    lines.add(readLine(file, 'Private Key Line 1'));
-    lines.add(readLine(file, 'Private Key Line 2'));
-    lines.add(readLine(file, 'Private Key Line 3'));
+    final lines = <String>[
+      readLine(file, 'Private Key Line 1'),
+      readLine(file, 'Private Key Line 2'),
+      readLine(file, 'Private Key Line 3')
+    ];
     return lines;
   }
 
   List<String> _readPublicKey(String pathToVault, RandomAccessFile file) {
-    final lines = <String>[];
-    lines.add(readLine(file, 'Public Key Line 1'));
-    lines.add(readLine(file, 'Public Key Line 2'));
-    lines.add(readLine(file, 'Public Key Line 3'));
-    lines.add(readLine(file, 'Public Key Line 4'));
+    final lines = <String>[
+      readLine(file, 'Public Key Line 1'),
+      readLine(file, 'Public Key Line 2'),
+      readLine(file, 'Public Key Line 3'),
+      readLine(file, 'Public Key Line 4')
+    ];
 
     return lines;
   }
@@ -296,7 +306,8 @@ class VaultFile {
       rafVault.setPositionSync(entry.offset);
       fileEncryptor.decryptEntry(entry, rafVault, writeTo);
     } finally {
-      waitForEx(writeTo.close());
+      // ignore: discarded_futures
+      waitForEx<void>(writeTo.close());
     }
   }
 }

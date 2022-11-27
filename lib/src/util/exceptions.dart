@@ -4,14 +4,13 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 // ignore: unused_import
 import 'package:encrypt/encrypt.dart';
 
 class DVaultException implements Exception {
-  String message;
-
   DVaultException(this.message);
+
+  String message;
 
   @override
   String toString() => message;
@@ -22,14 +21,13 @@ class InvalidPassphraseException extends DVaultException {
 }
 
 class VaultWriteException extends DVaultException {
-  Exception e;
-
   VaultWriteException(this.e)
       : super('An error occured adding a file to a vault: ${e.toString()}');
+  Exception e;
 }
 
 class VaultReadException extends DVaultException {
-  VaultReadException(String message) : super(message);
+  VaultReadException(super.message);
 }
 
 class UnexpectedEndOfFileException extends DVaultException {
@@ -37,11 +35,11 @@ class UnexpectedEndOfFileException extends DVaultException {
 }
 
 class KeyException extends DVaultException {
-  KeyException(String message) : super(message);
+  KeyException(super.message);
 }
 
 /// Thrown when an error is found in the ~/.dvault
 /// settings file.
 class DotVaultException extends DVaultException {
-  DotVaultException(String message) : super(message);
+  DotVaultException(super.message);
 }

@@ -5,9 +5,6 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
-
-
 import 'package:dvault/src/dvault.dart';
 
 ///
@@ -15,6 +12,6 @@ import 'package:dvault/src/dvault.dart';
 /// into an encrypted zip file.
 ///
 ///
-void main(List<String> args) {
-  runCommand(args);
+void main(List<String> args) async {
+  await runCommand(args);
 }

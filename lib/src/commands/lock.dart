@@ -4,7 +4,6 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
@@ -13,6 +12,30 @@ import 'package:dcli/dcli.dart';
 import '../vault.dart';
 
 class LockCommand extends Command<void> {
+  LockCommand() {
+    argParser
+      ..addOption(
+        'vault',
+        abbr: 'v',
+        help: '''
+  The path and filename of the vault to store the file into.
+    If you don't pass a vault then the [file] name will be used with a .vault extension''',
+      )
+      ..addFlag(
+        'overwrite',
+        abbr: 'o',
+        negatable: false,
+        help: 'Overwrites the vault if it already exists',
+      )
+      ..addFlag(
+        'children',
+        abbr: 'c',
+        negatable: false,
+        help: 'Include child directories and their files in vault',
+      )
+      ..addFlag('debug', abbr: 'd', help: 'Output debug information');
+  }
+
   @override
   String get description => '''
 Locks the passed in file by adding it to a vault.
@@ -37,29 +60,6 @@ Locks the passed in file by adding it to a vault.
   @override
   String get name => 'lock';
 
-  LockCommand() {
-    argParser.addOption(
-      'vault',
-      abbr: 'v',
-      help: '''
-  The path and filename of the vault to store the file into.
-    If you don't pass a vault then the [file] name will be used with a .vault extension''',
-    );
-    argParser.addFlag(
-      'overwrite',
-      abbr: 'o',
-      negatable: false,
-      help: 'Overwrites the vault if it already exists',
-    );
-    argParser.addFlag(
-      'children',
-      abbr: 'c',
-      negatable: false,
-      help: 'Include child directories and their files in vault',
-    );
-    argParser.addFlag('debug', abbr: 'd', help: 'Output debug information');
-  }
-
   @override
   void run() {
     Settings().setVerbose(enabled: true);
@@ -79,7 +79,8 @@ Locks the passed in file by adding it to a vault.
     if (vaultPath == null) {
       if (filePaths.length > 1) {
         printerr(
-          red('As you have passed multiple paths you must pass a vault name via the -v option'),
+          red('As you have passed multiple paths you must pass a vault '
+              'name via the -v option'),
         );
         print(argParser.usage);
         exit(1);

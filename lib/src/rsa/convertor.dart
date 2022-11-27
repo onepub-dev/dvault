@@ -4,11 +4,11 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/util/exceptions.dart';
 import 'package:encrypt/encrypt.dart';
 import 'package:pointycastle/pointycastle.dart';
+
+import '../util/exceptions.dart';
 
 /// Converts RSA Keys between Dart Objects and Strings
 /// suitable for storage.
@@ -49,7 +49,7 @@ $endPublic''';
   /// Returns a text representation of the [privateKey]
   /// suitable for storing the key and later reloading it.
   ///
-  /// The [privateKey] is encrypted using the [encrpter]
+  /// The [privateKey] is encrypted using the [Encrypter]
   /// to key it from prying eyes.
   ///
   static String privateKeyAsText(
@@ -100,7 +100,8 @@ q:$q''';
 
     if (keyLines.length != privateKeyLines) {
       throw KeyException(
-        'The Private Key should consist of 3 lines, found ${keyLines.length}. Found $keyLines\n',
+        'The Private Key should consist of 3 lines, found ${keyLines.length}. '
+        'Found $keyLines\n',
       );
     }
 
@@ -110,7 +111,8 @@ q:$q''';
 
     if (decrypted.length != 4) {
       throw KeyException(
-        'The decrypted Private Key should consist of 4 lines, found ${keyLines.length}.',
+        'The decrypted Private Key should consist of 4 lines, '
+        'found ${keyLines.length}.',
       );
     }
 
@@ -127,7 +129,8 @@ q:$q''';
 
     if (keyLines.length != privateKeyLines) {
       throw KeyException(
-        'The Private Key should consist of 3 lines, found ${keyLines.length}. Found $keyLines\n',
+        'The Private Key should consist of 3 lines, found ${keyLines.length}. '
+        'Found $keyLines\n',
       );
     }
     return keyLines;
@@ -159,7 +162,8 @@ q:$q''';
 
     if (keyLines.length != publicKeyLines) {
       throw KeyException(
-        'The Public Key should consist of 4 lines, found ${keyLines.length + 1}.',
+        'The Public Key should consist of 4 lines, '
+        'found ${keyLines.length + 1}.',
       );
     }
 
@@ -191,7 +195,9 @@ q:$q''';
     var inKey = false;
     for (var line in lines) {
       line = line.trim();
-      if (line.isEmpty) continue;
+      if (line.isEmpty) {
+        continue;
+      }
       if (line.startsWith(end)) {
         keyLines.add(line);
         break;

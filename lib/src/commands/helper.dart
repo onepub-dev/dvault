@@ -4,9 +4,9 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/commands/init.dart';
+
+import 'init.dart';
 
 String askForPassPhrase({String prompt = 'Passphrase'}) {
   const comfirmed = false;

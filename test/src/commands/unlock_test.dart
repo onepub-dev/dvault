@@ -10,14 +10,14 @@ import 'package:dvault/src/dvault.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('decrypt ...', () {
+  test('decrypt ...', () async {
     const passPhrase = 'one and a two and a three';
     env['DVAULT_PASSPHRASE'] = passPhrase;
 
     /// create a test vault
     ///
 
-    runCommand(
+    await runCommand(
       [
         'decrypt',
         '--env',
