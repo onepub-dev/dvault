@@ -20,14 +20,15 @@ class InvalidPassphraseException extends DVaultException {
   InvalidPassphraseException() : super('Invalid passphrase');
 }
 
-class VaultWriteException extends DVaultException {
-  VaultWriteException(this.e)
-      : super('An error occured adding a file to a vault: ${e.toString()}');
+class SecurityBoxWriteException extends DVaultException {
+  SecurityBoxWriteException(this.e)
+      : super('An error occured adding a file to a security box: '
+            '${e.toString()}');
   Exception e;
 }
 
-class VaultReadException extends DVaultException {
-  VaultReadException(super.message);
+class SecurityBoxReadException extends DVaultException {
+  SecurityBoxReadException(super.message);
 }
 
 class UnexpectedEndOfFileException extends DVaultException {

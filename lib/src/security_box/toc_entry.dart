@@ -6,14 +6,15 @@
 
 import 'package:dcli/dcli.dart';
 
-import 'util/exceptions.dart';
-import 'util/raf_helper.dart';
+import '../util/exceptions.dart';
+import '../util/raf_helper.dart';
 
-/// A TOCEntry represents a file stored in the vault
+/// A TOCEntry represents a file stored in the security box
 /// The contents of the file are encrypted using the
-/// Public Key of user that create the vault.
-/// The file an only be decrypted using the Private Key
-/// which is contained in the vault.
+/// Public Key of the user that created the security box.
+/// The file can only be decrypted using the Private Key
+/// which is contained in the security box encrypted using the user's
+/// passphrase
 class TOCEntry {
   TOCEntry({required String pathToFile, required this.relativeTo})
       : originalLength = stat(pathToFile).size,
@@ -22,7 +23,7 @@ class TOCEntry {
   TOCEntry.fromLine(String line) : relativeTo = null {
     final parts = line.split(',');
     if (parts.length != 4) {
-      throw VaultReadException(
+      throw SecurityBoxReadException(
         'Expected 4 key/value pairs in TOC entry. Found $line',
       );
     }
@@ -42,16 +43,16 @@ class TOCEntry {
   }) : relativeTo = null;
 
   /// The path on the source system that [relativePathToFile] is
-  /// relative to. This value is not stored in the vault
+  /// relative to. This value is not stored in the security box
   /// as its not required when extracting files and
   /// as such will be null when the [TOCEntry] is
-  /// loaded from a vault.
-  /// It should also NEVER be stored in the vault
+  /// loaded from a security box.
+  /// It should also NEVER be stored in the security box
   /// as it would constitute a leakage of the creator
-  /// of the vault's personal information.
+  /// of the security box's personal information.
   final String? relativeTo;
 
-  // The relative path of the file in the Vault
+  // The relative path of the file in the ssecurity box
   late final String relativePathToFile;
 
   /// The offset (in bytes) from the start of the vault
@@ -75,12 +76,13 @@ class TOCEntry {
       '$originalLengthKey:$originalLength, '
       '$relativePathKey:$relativePathToFile';
 
-  /// This method is only valid when creating the vault.
-  /// If you are loading an existing vault call this file will
-  ///
+  /// This method is only valid when creating the Security Box.
+  /// If you are loading an existing security box call this method will
+  /// throw a [StateError].
   String get originalPathToFile {
     if (relativeTo == null) {
-      throw StateError('This method is only available when creating a vault');
+      throw StateError(
+          'This method is only available when creating a security box');
     }
     return join(relativeTo!, relativePathToFile);
   }

@@ -6,7 +6,7 @@
 
 import 'package:dcli/dcli.dart';
 
-void printBackupMessage(String pathToDotVault) {
+void printBackupMessage(String pathToDotVaultFile) {
   print('');
   print(orange('*' * 80));
   print(orange('*'));
@@ -21,7 +21,7 @@ void printBackupMessage(String pathToDotVault) {
     orange('* You should now backup your .dvault file for the same reason.'),
   );
   print(
-    orange('* Your .dvault file is located at ${truepath(pathToDotVault)}'),
+    orange('* Your .dvault file is located at ${truepath(pathToDotVaultFile)}'),
   );
   print(orange('*'));
   print(orange('*' * 80));

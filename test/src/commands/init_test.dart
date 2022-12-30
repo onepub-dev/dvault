@@ -11,17 +11,18 @@ import 'package:dvault/src/rsa/rsa_generator.dart';
 import 'package:dvault/src/util/exceptions.dart';
 import 'package:test/test.dart';
 
+import '../test_settings.dart';
+
 void main() {
   test('create keys ...', () async {
-    const passPhrase = 'one and a two and a three';
-    env['DVAULT_PASSPHRASE'] = passPhrase;
+    env['DVAULT_PASSPHRASE'] = testPassPhrase;
     await runCommand(['init', '--env']);
 
-    print('Generating key pair. be patient');
+    print('Generating key pair, be patient...');
     final pair = RSAGenerator().generateKeyPair();
 
     print('saving file');
-    DotVaultFile.create(pair.privateKey, pair.publicKey, passPhrase);
+    DotVaultFile.create(pair.privateKey, pair.publicKey, testPassPhrase);
 
     print('loading file');
     //  ask('passphrase');

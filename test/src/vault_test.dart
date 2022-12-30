@@ -7,61 +7,62 @@
 
 import 'package:dcli_core/dcli_core.dart';
 import 'package:dvault/src/file_encryptor.dart';
-import 'package:dvault/src/vault.dart';
+import 'package:dvault/src/security_box/security_box.dart';
 import 'package:path/path.dart' hide equals;
 import 'package:test/test.dart';
 
 void main() {
-  test('vault ...', () async {
+  test('security box ...', () async {
     await withTempDir((dir) async {
-      final vaultPath = join(dir, 'test.vault');
-      var vault = VaultFile(vaultPath);
+      final pathToSecurityBox = join(dir, 'test.sbox');
+      var securityBox = SecurityBox(pathToSecurityBox);
 
       await withTempFile(
         (pathToFileToEncrypt) async {
           await _createFile(pathToFileToEncrypt, 2);
-          vault
-            ..addFile(
+          securityBox
+            .addFileToIndex(
               pathToFileToEncrypt,
               relativeTo: dir,
             )
-            ..saveTo();
-          expect(vault.toc.entries.length, equals(1));
+           // await .create();
+          expect(securityBox.toc.entries.length, equals(1));
           expect(
-            vault.toc.entries.first.originalPathToFile,
+            securityBox.toc.entries.first.originalPathToFile,
             equals(pathToFileToEncrypt),
           );
           expect(
-            vault.toc.entries.first.length,
+            securityBox.toc.entries.first.length,
             equals(
-              _encryptedFileSize(vault.toc.entries.first.originalPathToFile),
+              _encryptedFileSize(
+                  securityBox.toc.entries.first.originalPathToFile),
             ),
           );
 
-          vault = VaultFile.load(vaultPath);
+          securityBox = SecurityBox.load(pathToSecurityBox);
           // check the TOCEntry
-          expect(vault.toc.entries.length, equals(1));
+          expect(securityBox.toc.entries.length, equals(1));
           expect(
-            vault.toc.entries.first.relativePathToFile,
+            securityBox.toc.entries.first.relativePathToFile,
             equals(relative(pathToFileToEncrypt, from: dir)),
           );
           expect(
-            vault.toc.entries.first.length,
+            securityBox.toc.entries.first.length,
             equals(
               _encryptedFileSize(
-                join(dir, vault.toc.entries.first.relativePathToFile),
+                join(dir, securityBox.toc.entries.first.relativePathToFile),
               ),
             ),
           );
 
           await withTempDir((extractToDir) async {
-            vault.extractFiles(extractToDir);
+            securityBox.loadFromDisk(extractToDir);
 
-            final pathToExtractedFile =
-                join(extractToDir, vault.toc.entries.first.relativePathToFile);
+            final pathToExtractedFile = join(
+                extractToDir, securityBox.toc.entries.first.relativePathToFile);
 
             expect(
-              vault.toc.entries.first.originalLength,
+              securityBox.toc.entries.first.originalLength,
               equals((await stat(pathToExtractedFile)).size),
             );
             final originalDigest = calculateHash(pathToFileToEncrypt);

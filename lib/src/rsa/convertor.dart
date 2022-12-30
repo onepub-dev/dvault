@@ -77,9 +77,9 @@ q:$q''';
     final encrypted = encrypter.encrypt(parts, iv: iv);
 
     return '''
-    $beginPrivate);
-    ${encrypted.base64};
-    $endPrivate''';
+$beginPrivate
+${encrypted.base64}
+$endPrivate''';
   }
 
   ///

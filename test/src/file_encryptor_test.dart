@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:async/async.dart';
 import 'package:dcli/dcli.dart' hide equals;
 import 'package:dvault/src/file_encryptor.dart';
+import 'package:dvault/src/util/raf_helper.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -22,10 +23,12 @@ void main() {
       ..write('1Hello World')
       ..append('2Hello World');
 
-    const pathToVvault = 'testfile.vault';
-    withOpenFile(pathToVvault, (vault) {
+    const pathToSecurityBox = 'testfile.sbox';
+
+    
+    await withRandomAccessFile(pathToSecurityBox, (rafSecurityBox) {
       /// encrypt the file
-      encryptor.encrypt(testFile, vault);
+      encryptor.encrypt(testFile, rafSecurityBox);
     });
 
     // decrypt the file
@@ -35,9 +38,9 @@ void main() {
     }
     final resultSink = File(resultFile).openWrite();
     final reader =
-        ChunkedReader(ChunkedStreamReader(File(pathToVvault).openRead()));
+        ChunkedReader(ChunkedStreamReader(File(pathToSecurityBox).openRead()));
     try {
-      encryptor.decryptReader(reader, resultSink);
+      encryptor.decryptFiieReader(reader, resultSink);
     } finally {
       // ignore: discarded_futures
       waitForEx<void>(resultSink.close());
@@ -63,7 +66,7 @@ void main() {
       File(testFile).writeAsStringSync(toStore);
       final encryptedFile = _lock(testFile, encryptor);
       // block size is 16 bits so should always be multiple of two
-      // the mini vault has an 8 byte header to store
+      // the mini security box has an 8 byte header to store
       /// the actual size of the file.
       final expectedContent = stat(encryptedFile).size - 8;
       expect((expectedContent % 2) == 0, isTrue);
@@ -76,12 +79,12 @@ void main() {
 }
 
 String _lock(String pathToPlainText, FileEncryptor encryptor) {
-  const pathToVault = 'testfile.vault';
-  withOpenFile(pathToVault, (vault) {
-    encryptor.encrypt(pathToPlainText, vault);
+  const pathToSecurityBox = 'testfile.sbox';
+  withOpenFile(pathToSecurityBox, (securityBox) {
+    encryptor.encrypt(pathToPlainText, securityBox);
   });
 
-  return pathToVault;
+  return pathToSecurityBox;
 }
 
 String _unlock(

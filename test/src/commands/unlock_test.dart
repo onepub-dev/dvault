@@ -14,7 +14,7 @@ void main() {
     const passPhrase = 'one and a two and a three';
     env['DVAULT_PASSPHRASE'] = passPhrase;
 
-    /// create a test vault
+    /// create a test security box
     ///
 
     await runCommand(
@@ -22,7 +22,7 @@ void main() {
         'decrypt',
         '--env',
         '-v',
-        'test/data/test_one.txt.vault',
+        'test/data/test_one.txt.sbox',
         '-f',
         'test/data/test_one.txt.result'
       ],

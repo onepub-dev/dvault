@@ -8,26 +8,25 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
-import 'package:encrypt/encrypt.dart';
 
-import '../dot_vault_file.dart';
 import '../env.dart';
+import '../security_box/security_box.dart';
 import 'helper.dart';
 
 class UnlockCommand extends Command<void> {
   UnlockCommand() {
     argParser
       ..addOption(
-        'vault',
-        abbr: 'v',
-        help: 'The path and filename of the vault to decrypt.',
+        'box',
+        abbr: 'b',
+        help: 'The path and filename of the security box to decrypt.',
       )
       ..addOption(
-        'file',
-        abbr: 'f',
+        'to',
+        abbr: 't',
         help: '''
     The path to store the decrypted data in.
-    If not specified than the basename of the vault will be used.''',
+    If not specified than the basename of the security box will be used.''',
       )
       ..addFlag(
         'overwrite',
@@ -39,43 +38,47 @@ class UnlockCommand extends Command<void> {
         'env',
         abbr: 'e',
         negatable: false,
-        help: 'If set the passphrase will be read from the '
-            '${Constants.dvaultPassphrase} environment variable.',
+        help: '''
+If set the passphrase will be read from the 
+${Constants.dvaultPassphraseEnvKey} environment variable.
+otherwise the user will be prompted to enter the passphrase''',
       )
       ..addFlag('debug', abbr: 'd', help: 'Output debug information');
   }
 
   @override
   String get description => '''
-Decrypts the passed in vault.
-  dvault decrypt <vaultname.vault>
+Decrypts the passed in security box.
+  dvault decrypt <box_name.sbox>
   ''';
 
   @override
-  String get name => 'decrypt';
+  String get name => 'unlock';
 
   @override
   void run() {
     Settings().setVerbose(enabled: argResults!['debug'] as bool);
-    final vaultPath = argResults!['vault'] as String?;
+    final pathToSecurityBox = argResults!['box'] as String?;
 
-    if (vaultPath == null) {
-      printerr("You must pass a 'vault'.");
+    if (pathToSecurityBox == null) {
+      printerr("You must pass a 'security box' via the --box option.");
       print(argParser.usage);
       exit(1);
     }
 
-    if (!exists(vaultPath)) {
-      printerr("The passed vault path ${truepath(vaultPath)} doesn't exists.");
+    if (!exists(pathToSecurityBox)) {
+      printerr('The passed security box path ${truepath(pathToSecurityBox)} '
+          "doesn't exists.");
       print(argParser.usage);
       exit(1);
     }
 
-    var outputPath = argResults!['file'] as String?;
+    var outputPath = argResults!['to'] as String?;
 
-    // no output so use the vaultPath after stripping the .vault extension.
-    outputPath ??=
-        join(dirname(vaultPath), basenameWithoutExtension(vaultPath));
+    // no output so use the [pathToSecurityBox] after stripping the .sbox
+    // extension.
+    outputPath ??= join(dirname(pathToSecurityBox),
+        basenameWithoutExtension(pathToSecurityBox));
 
     final overwrite = argResults!['overwrite'] as bool?;
 
@@ -90,7 +93,7 @@ Decrypts the passed in vault.
 
     String? passphrase;
     if (argResults!['env'] as bool) {
-      passphrase = env[Constants.dvaultPassphrase];
+      passphrase = env[Constants.dvaultPassphraseEnvKey];
     } else {
       passphrase = askForPassPhrase();
     }
@@ -100,15 +103,6 @@ Decrypts the passed in vault.
       exit(1);
     }
 
-    final keyPair = DotVaultFile.load();
-
-    final encrypter =
-        Encrypter(RSA(privateKey: keyPair.privateKey(passphrase: passphrase)));
-
-    final file = File(vaultPath);
-    final encrypted = file.readAsBytesSync();
-    final contents = encrypter.decryptBytes(Encrypted(encrypted));
-
-    File(outputPath).writeAsBytesSync(contents);
+    SecurityBox.load(pathToSecurityBox).loadFromDisk(outputPath);
   }
 }
