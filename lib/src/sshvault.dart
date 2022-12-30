@@ -110,6 +110,8 @@ class SSHVault {
         .run;
   }
 
+  /// Prompts the user for their ssh passphrase.
+  /// Reads the content of the vault and returns the decrypted text.
   String fetch({
     String? vaultName,
   }) {

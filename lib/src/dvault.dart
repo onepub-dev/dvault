@@ -14,7 +14,7 @@ import 'commands/unlock.dart';
 Future<void> runCommand(List<String> args) async {
   final runner = CommandRunner<void>(
     'vault',
-    'Locks/Unlocks a file by encrypting it into a transportable "vault".',
+    'Locks/Unlocks a file by encrypting it into a transportable "security box".',
   )
     ..addCommand(InitCommand())
     ..addCommand(LockCommand())

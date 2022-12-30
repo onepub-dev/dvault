@@ -31,8 +31,8 @@ class RSAGenerator {
     SecureRandom secureRandom,
   ) {
     /// Set BitStrength to [1024, 2048 or 4096]
-    final rsapars = RSAKeyGeneratorParameters(BigInt.from(65537), 4096, 5);
-    final params = ParametersWithRandom(rsapars, secureRandom);
+    final rsaparams = RSAKeyGeneratorParameters(BigInt.from(65537), 4096, 5);
+    final params = ParametersWithRandom(rsaparams, secureRandom);
     final keyGenerator = RSAKeyGenerator()..init(params);
     final pair = keyGenerator.generateKeyPair();
 

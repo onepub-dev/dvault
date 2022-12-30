@@ -22,7 +22,7 @@ class InitCommand extends Command<void> {
       abbr: 'e',
       negatable: false,
       help: 'If set the passphrase will be read from the '
-          '${Constants.dvaultPassphrase} environment variable.',
+          '${Constants.dvaultPassphraseEnvKey} environment variable.',
     );
   }
   static int minPassPhraseLength = 12;
@@ -41,11 +41,12 @@ class InitCommand extends Command<void> {
       print(red('${'*' * 40}  WARNING  ${'*' * 40}'));
       print(orange('Your .dvault file already exists.'));
       print(
-        orange('If you continue you will lose access to all existing vaults.'),
+        orange('If you continue you will lose access to all '
+            'existing security boxes.'),
       );
       print(blue("If you want to change your passphrase use 'dvault reset'."));
       if (!confirm(
-        red('Are you sure you want to lose access to existing vaults?'),
+        red('Are you sure you want to lose access to existing security boxes?'),
       )) {
         print('Init stopped.');
         exit(1);
@@ -61,7 +62,7 @@ class InitCommand extends Command<void> {
     }
     String? passPhrase;
     if (argResults!['env'] as bool) {
-      passPhrase = env[Constants.dvaultPassphrase];
+      passPhrase = env[Constants.dvaultPassphraseEnvKey];
     } else {
       print(
         'To protect your keys we lock them with a passphrase with a '

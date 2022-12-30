@@ -7,38 +7,37 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:async/async.dart';
-import 'package:dcli/dcli.dart';
 import 'package:encrypt/encrypt.dart';
 import 'package:meta/meta.dart';
 import 'package:pointycastle/export.dart';
 
+import 'blob_reader.dart';
+import 'blob_writer.dart';
+import 'byte_reader.dart';
+import 'raf_reader.dart';
+
 /// An AES CBC block encryptor suitable
-/// for encrypting files with a symmetric key.
+/// for encrypting blobs with a symmetric key.
 ///
-/// Instantiating a
-///
-/// The [FileEncryptor] encodes the length of
-/// the file being encrypted as the first cipher
-/// block so the original file length can be restored.
-class FileEncryptor {
-  FileEncryptor() {
+/// The [BlobEncryptor] encodes the length of
+/// the blob being encrypted as the first cypher
+/// block. The contents of the blob are then
+/// written as additional cypher blocks.
+/// When decrypting a blob the length is obtain from
+/// the first cipher block and then the remain blobs read/decrypted.
+class BlobEncryptor {
+  BlobEncryptor() : _skipEncryption = false {
     _init();
   }
 
   /// Used for testing when we want to suppress
   /// the actually encryption step.
   @visibleForTesting
-  FileEncryptor.noEncryption() : _skipEncryption = true {
+  BlobEncryptor.noEncryption() : _skipEncryption = true {
     _init();
   }
 
-  void _init() {
-    iv = IV.fromSecureRandom(blockSize);
-    key = Key.fromSecureRandom(blockSize);
-  }
-
-  bool _skipEncryption = false;
+  final bool _skipEncryption;
 
   late final Key key;
   late final IV iv;
@@ -47,12 +46,20 @@ class FileEncryptor {
   // AESFastEngine use a 16 byte block size.
   int get blockSize => engine.blockSize;
 
-  /// Encrypts the content of [pathToFileToEncrypt]
-  /// writing the encrypted contents to [writeTo].
-  /// We start off by writing the original
-  /// length of the file as the first cypher block.
-  /// returns the no. of bytes it wrote to [writeTo]
-  int encrypt(String pathToFileToEncrypt, RandomAccessFile writeTo) {
+  void _init() {
+    iv = IV.fromSecureRandom(blockSize);
+    key = Key.fromSecureRandom(blockSize);
+  }
+
+  /// Encrypts the content of [blob]
+  /// writing the encrypted contents to [raf] at the current
+  /// seek offset.
+  /// We start off by writing the
+  /// length of the blob as the first cipher block.
+  /// Returns the no. of bytes it wrote to [raf] and
+  /// the seek position is updated to point to the next byte
+  /// after the last byte that we write.
+  Future<int> encrypt(BlobReader blob, RandomAccessFile raf) async {
     // Create a CBC block cipher with AES, and initialize with key and IV
     final cbc = CBCBlockCipher(engine)
       ..init(
@@ -65,22 +72,19 @@ class FileEncryptor {
     final encryptionBuffer = Uint8List(blockSize); // allocate space
 
     var bytesWritten = 0;
-    final stream = File(pathToFileToEncrypt).openRead();
     try {
-      final reader = ChunkedReader(ChunkedStreamReader(stream));
+      final length = await blob.length;
 
       /// write the length of the original file so
       /// that when decrypting we can strip the padding added
       /// due to the block cipher requiring a fixed block size.
-      final sizeData = _intAsByteList(stat(pathToFileToEncrypt).size);
-      writeTo.writeFromSync(sizeData);
+      raf.writeFromSync(_intAsByteList(length));
 
       /// Now encrypt and write the contents of the file
       /// in chunks.
       try {
-        // final chunkSize = blockSize ~/ 8;
         while (true) {
-          final data = reader.readChunk(blockSize);
+          final data = await blob.read(blockSize);
 
           if (data.isEmpty) {
             break;
@@ -92,15 +96,15 @@ class FileEncryptor {
 
           final dataAsList = Uint8List.fromList(data);
           if (_skipEncryption) {
-            writeTo.writeFromSync(dataAsList);
+            raf.writeFromSync(dataAsList);
           } else {
             cbc.processBlock(dataAsList, 0, encryptionBuffer, 0);
-            writeTo.writeFromSync(encryptionBuffer);
+            raf.writeFromSync(encryptionBuffer);
           }
           bytesWritten += dataAsList.length;
         }
       } finally {
-        reader.cancel();
+        await blob.close();
       }
     } finally {
       /// ensure the stream is drained otherwise the
@@ -112,43 +116,31 @@ class FileEncryptor {
     return bytesWritten;
   }
 
-  /// Decrypt the contents of [pathToEncryptedFile] saving the
-  /// plain text content to [writeTo].
-  Future<void> decrypt(String pathToEncryptedFile, IOSink writeTo) async {
-    final reader = ChunkedStreamReader(File(pathToEncryptedFile).openRead());
+  /// Extracts a Blob  from the encrypted byte stream [encryptedSourceRaf]
+  /// reading from the current seek position of [encryptedSourceRaf].
+  /// [dest] is the [BlobReader] to write the plain text data to.
+  /// We return [dest] from this call as a convenience.
+  Future<BlobWriter> decrypt(
+    BlobWriter dest,
+    RandomAccessFile encryptedSourceRaf,
+  ) async {
+    final reader = RafReader(encryptedSourceRaf);
 
     try {
-      decryptFiieReader(ChunkedReader(reader), writeTo);
-    } finally {
-      await reader.cancel();
-      await writeTo.close();
-    }
-  }
+      await decryptBlobFromReader(reader, dest);
 
-  /// Extracts a file entry from the encrypted byte stream [raf]
-  /// starting from
-  void decryptFileEntry(
-    int offset,
-    RandomAccessFile raf,
-    IOSink writeTo,
-  ) {
-    raf.setPositionSync(offset);
-
-    final reader = RafReader(raf);
-
-    try {
-      decryptFiieReader(reader, writeTo);
+      return dest;
     } finally {
       reader.cancel();
     }
   }
 
   /// Decrypts an encrypted file from [reader] where the first
-  /// cipher block contains the lenght of the file.
+  /// cipher block contains the length of the blob.
   /// The plain-text content is written
-  /// to [writeTo]
+  /// to [dest]
   @visibleForTesting
-  void decryptFiieReader(ByteReader reader, IOSink writeTo) {
+  Future<void> decryptBlobFromReader(ByteReader reader, BlobWriter dest) async {
     // Create a CBC block cipher with AES, and initialize with key and IV
 
     final cbc = CBCBlockCipher(engine)
@@ -160,7 +152,7 @@ class FileEncryptor {
     /// read the size of the original file so we
     /// can ignore the padding added due to the block cipher
     /// requirement that all blocks are the same size.
-    final sizeList = reader.readChunk(8);
+    final sizeList = await reader.readChunk(8);
     if (sizeList.length != 8) {
       throw ArgumentError(
         'Unexpected file size. The stored file length was incomplete.',
@@ -175,7 +167,7 @@ class FileEncryptor {
       // final chunkSize = blockSize ~/ 8;
       var plainTextBuffer = Uint8List(blockSize); // allocate space
 
-      final encryptedData = reader.readChunk(blockSize);
+      final encryptedData = await reader.readChunk(blockSize);
 
       if (encryptedData.isEmpty) {
         break;
@@ -208,13 +200,13 @@ class FileEncryptor {
         plainTextBuffer = trim(plainTextBuffer, dataSize);
         assert(plainTextBuffer.length == dataSize, 'plan text is wrong length');
 
-        /// calculate the final size of the file we read.
+        /// calculate the final size of the blob we read.
         readSoFar = readSoFar - paddingSize;
-        // we have read the entire file.
+        // we have read the entire blob.
         more = false;
       }
 
-      writeTo.add(plainTextBuffer);
+      await dest.write(plainTextBuffer);
     }
     assert(
         readSoFar == originalFileLength, 'Mis-match with original file length');
@@ -244,49 +236,4 @@ class FileEncryptor {
   /// The [list] data must be in big endian format.
   /// See [_intAsByteList]
   int _byteListAsInt(Uint8List list) => list.buffer.asByteData().getInt64(0);
-}
-
-abstract class ByteReader {
-  List<int> readChunk(int bytes);
-
-  void cancel();
-}
-
-class RafReader implements ByteReader {
-  RafReader(this.raf);
-
-  RandomAccessFile raf;
-
-  @override
-  List<int> readChunk(int bytes) {
-    final read = <int>[];
-
-    for (var i = 0; i < bytes; i++) {
-      final byte = raf.readByteSync();
-
-      if (byte == -1) {
-        break;
-      }
-      read.add(byte);
-    }
-    return read;
-  }
-
-  @override
-  void cancel() {
-    /// NO-OP
-  }
-}
-
-class ChunkedReader implements ByteReader {
-  ChunkedReader(this.stream);
-  ChunkedStreamReader<int> stream;
-
-  @override
-  // ignore: discarded_futures
-  List<int> readChunk(int bytes) => waitForEx(stream.readChunk(bytes));
-
-  @override
-  // ignore: discarded_futures
-  void cancel() => waitForEx(stream.cancel());
 }

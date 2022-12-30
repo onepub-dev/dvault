@@ -4,7 +4,6 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 import 'dart:io';
 
 import 'exceptions.dart';
@@ -37,7 +36,7 @@ String readLine(RandomAccessFile raf, String description) {
       throw UnexpectedEndOfFileException();
     }
   } on UnexpectedEndOfFileException catch (_) {
-    throw VaultReadException('Unexpected EOF reading $description');
+    throw SecurityBoxReadException('Unexpected EOF reading $description');
   }
 
   /// we have to assume we are reading a file created on another platform
@@ -49,7 +48,7 @@ int parseNo(String line, String key) {
   final value = parseValue(line, key);
   final no = int.tryParse(value);
   if (no == null) {
-    throw VaultReadException(
+    throw SecurityBoxReadException(
       'Expected integer for value in key:value pair for $key. Found $line',
     );
   }
@@ -63,7 +62,7 @@ String parseValue(String keyValuePair, String key) {
   final _keyValuePair = keyValuePair.trim();
 
   if (!_keyValuePair.startsWith(keyPrefix)) {
-    throw VaultReadException(
+    throw SecurityBoxReadException(
       "Expected Key: '$key:' in key: value pair. Found $_keyValuePair",
     );
   }
@@ -71,4 +70,15 @@ String parseValue(String keyValuePair, String key) {
   final value = _keyValuePair.substring(keyPrefix.length).trim();
 
   return value;
+}
+
+Future<void> withRandomAccessFile({
+  required String pathTo,
+  required void Function(RandomAccessFile raf) action,
+  FileMode mode = FileMode.read,
+}) async {
+  final raf = await File(pathTo).open(mode: mode);
+
+  action(raf);
+  await raf.close();
 }

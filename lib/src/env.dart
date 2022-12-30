@@ -4,7 +4,6 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-
 class Constants {
-  static const dvaultPassphrase = 'DVAULT_PASSPHRASE';
+  static const dvaultPassphraseEnvKey = 'DVAULT_PASSPHRASE';
 }
