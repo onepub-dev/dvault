@@ -14,7 +14,7 @@ import 'package:dvault/src/util/raf_helper.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('file encryptor ...', () {
+  test('file encryptor ...', () async {
     final encryptor = FileEncryptor.noEncryption();
 
     const testFile = 'testfile.txt';
@@ -25,11 +25,12 @@ void main() {
 
     const pathToSecurityBox = 'testfile.sbox';
 
-    
-    await withRandomAccessFile(pathToSecurityBox, (rafSecurityBox) {
-      /// encrypt the file
-      encryptor.encrypt(testFile, rafSecurityBox);
-    });
+    await withRandomAccessFile(
+        pathTo: pathToSecurityBox,
+        action: (rafSecurityBox) {
+          /// encrypt the file
+          encryptor.encrypt(testFile, rafSecurityBox);
+        });
 
     // decrypt the file
     const resultFile = 'result.txt';
