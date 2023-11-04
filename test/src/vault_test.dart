@@ -20,12 +20,11 @@ void main() {
       await withTempFile(
         (pathToFileToEncrypt) async {
           await _createFile(pathToFileToEncrypt, 2);
-          securityBox
-            .addFileToIndex(
-              pathToFileToEncrypt,
-              relativeTo: dir,
-            )
-           // await .create();
+          securityBox.addFileToIndex(
+            pathToFileToEncrypt,
+            relativeTo: dir,
+          );
+          // await .create();
           expect(securityBox.toc.entries.length, equals(1));
           expect(
             securityBox.toc.entries.first.originalPathToFile,
