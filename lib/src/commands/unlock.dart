@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
+import 'package:path/path.dart';
 
 import '../env.dart';
 import '../security_box/security_box.dart';
@@ -56,7 +57,7 @@ Decrypts the passed in security box.
   String get name => 'unlock';
 
   @override
-  void run() {
+  Future<void> run() async {
     Settings().setVerbose(enabled: argResults!['debug'] as bool);
     final pathToSecurityBox = argResults!['box'] as String?;
 
@@ -103,6 +104,6 @@ Decrypts the passed in security box.
       exit(1);
     }
 
-    SecurityBox.load(pathToSecurityBox).loadFromDisk(outputPath);
+    await SecurityBox.load(pathToSecurityBox).loadFromDisk(outputPath);
   }
 }

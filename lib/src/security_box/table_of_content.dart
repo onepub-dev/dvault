@@ -7,6 +7,7 @@
 import 'dart:io';
 
 import 'package:dcli/dcli.dart';
+import 'package:path/path.dart';
 
 import '../file_encryptor.dart';
 import '../util/raf_helper.dart';
@@ -99,7 +100,7 @@ class TableOfContent {
 
   // String get _tocEntryCountLine => 'entries:${entries.length}';
 
-  /// encrypt and save the toc to the [securityBox]
+  /// encrypt and save the toc to the [rafSecurityBox]
   /// returning the length of the encrypted data
   // int append(FileSync securityBox, FileEncryptor encryptor) =>
   //     withTempFile((pathToTempToc) {
