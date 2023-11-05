@@ -11,6 +11,7 @@ import 'dart:typed_data';
 import 'package:dcli/dcli.dart';
 import 'package:dcli_core/dcli_core.dart' as core;
 import 'package:encrypt/encrypt.dart';
+import 'package:path/path.dart';
 
 import '../blob/blob_encryptor.dart';
 import '../blob/file_blob_writer.dart';
@@ -143,7 +144,7 @@ class SecurityBox {
 
     final encryptor = FileEncryptor();
     // final encryptor = FileEncryptor.noEncryption();
-    await core.withOpenFile(pathToSecurityBox, (securityBox) async {
+    await await core.withOpenFile(pathToSecurityBox, (securityBox) async {
       writeLine(securityBox, _magicLine);
       writeLine(securityBox, _versionLine);
       writeLine(securityBox, _createdByLine);

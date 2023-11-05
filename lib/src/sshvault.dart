@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:dcli/dcli.dart' hide fetch;
 import 'package:dcli/dcli.dart' as d;
+import 'package:path/path.dart';
 
 /// Provide a simple tool which encrypts a text into  encrypted text
 /// using the system ssh keys.

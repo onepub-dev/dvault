@@ -20,49 +20,49 @@ void main() {
       await withTempFile(
         (pathToFileToEncrypt) async {
           await _createFile(pathToFileToEncrypt, 2);
-          securityBox
-            .addFileToIndex(
-              pathToFileToEncrypt,
-              relativeTo: dir,
-            )
-           // await .create();
-          expect(securityBox.toc.entries.length, equals(1));
+          securityBox.addFileToIndex(
+            pathToFileToEncrypt,
+            relativeTo: dir,
+          );
+          // await .create();
+          expect(securityBox.toc.content.length, equals(1));
           expect(
-            securityBox.toc.entries.first.originalPathToFile,
+            (await securityBox.toc.content.first).originalPathToFile,
             equals(pathToFileToEncrypt),
           );
           expect(
-            securityBox.toc.entries.first.length,
+            (await securityBox.toc.content.first).length,
             equals(
               _encryptedFileSize(
-                  securityBox.toc.entries.first.originalPathToFile),
+                  (await securityBox.toc.content.first).originalPathToFile),
             ),
           );
 
           securityBox = SecurityBox.load(pathToSecurityBox);
           // check the TOCEntry
-          expect(securityBox.toc.entries.length, equals(1));
+          expect(securityBox.toc.content.length, equals(1));
           expect(
-            securityBox.toc.entries.first.relativePathToFile,
+            (await securityBox.toc.content.first).relativePathToFile,
             equals(relative(pathToFileToEncrypt, from: dir)),
           );
           expect(
-            securityBox.toc.entries.first.length,
+            (await securityBox.toc.content.first).length,
             equals(
               _encryptedFileSize(
-                join(dir, securityBox.toc.entries.first.relativePathToFile),
+                join(dir,
+                    (await securityBox.toc.content.first).relativePathToFile),
               ),
             ),
           );
 
           await withTempDir((extractToDir) async {
-            securityBox.loadFromDisk(extractToDir);
+            await securityBox.loadFromDisk(extractToDir);
 
-            final pathToExtractedFile = join(
-                extractToDir, securityBox.toc.entries.first.relativePathToFile);
+            final pathToExtractedFile = join(extractToDir,
+                (await securityBox.toc.content.first).relativePathToFile);
 
             expect(
-              securityBox.toc.entries.first.originalLength,
+              (await securityBox.toc.content.first).originalLength,
               equals((await stat(pathToExtractedFile)).size),
             );
             final originalDigest = calculateHash(pathToFileToEncrypt);
