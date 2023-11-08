@@ -4,11 +4,11 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-import 'package:dcli/dcli.dart';
 import 'package:path/path.dart';
 
 import '../util/exceptions.dart';
 import '../util/raf_helper.dart';
+import 'line.dart';
 
 /// A TOCEntry represents a file stored in the security box
 /// The contents of the file are encrypted using the
@@ -16,11 +16,7 @@ import '../util/raf_helper.dart';
 /// The file can only be decrypted using the Private Key
 /// which is contained in the security box encrypted using the user's
 /// passphrase
-class TOCEntry {
-  TOCEntry({required String pathToFile, required this.relativeTo})
-      : originalLength = stat(pathToFile).size,
-        relativePathToFile = relative(pathToFile, from: relativeTo);
-
+class TOCEntry implements Line {
   TOCEntry.fromLine(String line) : relativeTo = null {
     final parts = line.split(',');
     if (parts.length != 4) {
@@ -49,8 +45,8 @@ class TOCEntry {
   /// as such will be null when the [TOCEntry] is
   /// loaded from a security box.
   /// It should also NEVER be stored in the security box
-  /// as it would constitute a leakage of the creator
-  /// of the security box's personal information.
+  /// as it would constitute a leakage of the
+  /// security box's creator's personal information.
   final String? relativeTo;
 
   // The relative path of the file in the ssecurity box
@@ -73,7 +69,7 @@ class TOCEntry {
   static const lengthKey = 'length';
   static const originalLengthKey = 'originalLength';
 
-  String get asLine => '$offsetKey:$offset, $lengthKey:$length, '
+  String get asString => '$offsetKey:${offset}, $lengthKey:$length, '
       '$originalLengthKey:$originalLength, '
       '$relativePathKey:$relativePathToFile';
 

@@ -144,7 +144,7 @@ class FileEncryptor {
   }
 
   /// Decrypts an encrypted file from [reader] where the first
-  /// cipher block contains the lenght of the file.
+  /// cipher block contains the length of the file.
   /// The plain-text content is written
   /// to [writeTo]
   @visibleForTesting
