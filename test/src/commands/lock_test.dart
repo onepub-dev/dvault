@@ -12,10 +12,10 @@ import 'package:test/test.dart';
 void main() {
   test('encrypt ...', () async {
     const content = 'abc123';
-    await core.withTempFile((pathToTestFile) async {
+    await core.withTempFileAsync((pathToTestFile) async {
       pathToTestFile.append(content);
-      await core.withTempFile((pathToSecuritBox) async {
-        await core.withTempFile((pathToResult) async {
+      await core.withTempFileAsync((pathToSecuritBox) async {
+        await core.withTempFileAsync((pathToResult) async {
           await runCommand(['lock', '--box', pathToSecuritBox, pathToTestFile]);
 
           // await withEnvironment(() async {

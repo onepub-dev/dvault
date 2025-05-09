@@ -68,10 +68,10 @@ class SecurityBox {
   }
 
   // load the security box meta data.
-  factory SecurityBox.load(String pathToSecurityBox) {
+  static Future<SecurityBox> load(String pathToSecurityBox) async {
     final securityBox = SecurityBox._forLoading(pathToSecurityBox);
     // ignore: discarded_futures
-    final raf = waitForEx(File(pathToSecurityBox).open());
+    final raf = await File(pathToSecurityBox).open();
 
     try {
       securityBox
@@ -86,8 +86,7 @@ class SecurityBox {
         .._readCtrlZ(raf)
         ..toc = securityBox._loadToc(raf);
     } finally {
-      // ignore: discarded_futures
-      waitForEx(raf.close());
+      await raf.close();
     }
     return securityBox;
   }
@@ -127,10 +126,10 @@ class SecurityBox {
   /// The path of the file is converted to a path
   /// which is relative to [relativeTo]. If [relativeTo] is
   /// not passed then the current working directory is assumed.
-  void addFileToIndex(String pathTo, {String? relativeTo}) {
+  void addFileToIndex(String pathTo, {String? relativeTo}) async {
     relativeTo ??= pwd;
 
-    toc.indexFile(pathToFile: pathTo, relativeTo: relativeTo);
+    await toc.indexFile(pathToFile: pathTo, relativeTo: relativeTo);
   }
 
   /// Adds the files in [pathToDirectory] to the security box's
@@ -182,8 +181,12 @@ class SecurityBox {
       await toc.content.forEach((tocEntry) {
         final originalPathToFile = tocEntry.originalPathToFile;
         if (!exists(originalPathToFile)) {
-          print(orange('warning: skipped $originalPathToFile '
-              'as it no longer exists'));
+          print(
+            orange(
+              'warning: skipped $originalPathToFile '
+              'as it no longer exists',
+            ),
+          );
           return;
         }
         encryptor.encrypt(originalPathToFile, securityBox);
@@ -220,15 +223,14 @@ class SecurityBox {
   /// ```
   Future<void> loadFromDisk(String pathToExtractTo) async {
     // ignore: discarded_futures
-    final raf = waitForEx(File(pathToSecurityBox).open());
+    final raf = await File(pathToSecurityBox).open();
     try {
       final fileEncryptor = BlobEncryptor();
       await toc.content.forEach((entry) async {
         await _extractFile(fileEncryptor, raf, entry, pathToExtractTo);
       });
     } finally {
-      // ignore: discarded_futures
-      waitForEx(raf.close());
+      await raf.close();
     }
   }
 
@@ -356,7 +358,7 @@ class SecurityBox {
     final lines = <String>[
       readLine(file, 'Private Key Line 1'),
       readLine(file, 'Private Key Line 2'),
-      readLine(file, 'Private Key Line 3')
+      readLine(file, 'Private Key Line 3'),
     ];
     return lines;
   }
@@ -366,7 +368,7 @@ class SecurityBox {
       readLine(file, 'Public Key Line 1'),
       readLine(file, 'Public Key Line 2'),
       readLine(file, 'Public Key Line 3'),
-      readLine(file, 'Public Key Line 4')
+      readLine(file, 'Public Key Line 4'),
     ];
 
     return lines;
@@ -380,8 +382,10 @@ class SecurityBox {
     TOCEntry entry,
     String extractToDirectory,
   ) async {
-    final pathToExtractedFile =
-        join(extractToDirectory, entry.relativePathToFile);
+    final pathToExtractedFile = join(
+      extractToDirectory,
+      entry.relativePathToFile,
+    );
 
     final writeTo = FileBlobWriter(pathToExtractedFile);
 
@@ -400,15 +404,14 @@ class SecurityBox {
     RandomAccessFile rafSecurityBox,
     int startOffset,
     String extractToPath,
-  ) {
+  ) async {
     final writeTo = File(extractToPath).openWrite();
 
     try {
       rafSecurityBox.setPositionSync(startOffset);
       fileEncryptor.decryptFileEntry(startOffset, rafSecurityBox, writeTo);
     } finally {
-      // ignore: discarded_futures
-      waitForEx<void>(writeTo.close());
+      await writeTo.close();
     }
   }
 }

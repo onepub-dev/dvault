@@ -52,7 +52,10 @@ class FileEncryptor {
   /// We start off by writing the original
   /// length of the file as the first cypher block.
   /// returns the no. of bytes it wrote to [writeTo]
-  int encrypt(String pathToFileToEncrypt, RandomAccessFile writeTo) {
+  Future<int> encrypt(
+    String pathToFileToEncrypt,
+    RandomAccessFile writeTo,
+  ) async {
     // Create a CBC block cipher with AES, and initialize with key and IV
     final cbc = CBCBlockCipher(engine)
       ..init(
@@ -80,7 +83,7 @@ class FileEncryptor {
       try {
         // final chunkSize = blockSize ~/ 8;
         while (true) {
-          final data = reader.readChunk(blockSize);
+          final data = await reader.readChunk(blockSize);
 
           if (data.isEmpty) {
             break;
@@ -127,11 +130,7 @@ class FileEncryptor {
 
   /// Extracts a file entry from the encrypted byte stream [raf]
   /// starting from
-  void decryptFileEntry(
-    int offset,
-    RandomAccessFile raf,
-    IOSink writeTo,
-  ) {
+  void decryptFileEntry(int offset, RandomAccessFile raf, IOSink writeTo) {
     raf.setPositionSync(offset);
 
     final reader = RafReader(raf);
@@ -148,7 +147,7 @@ class FileEncryptor {
   /// The plain-text content is written
   /// to [writeTo]
   @visibleForTesting
-  void decryptFiieReader(ByteReader reader, IOSink writeTo) {
+  void decryptFiieReader(ByteReader reader, IOSink writeTo) async {
     // Create a CBC block cipher with AES, and initialize with key and IV
 
     final cbc = CBCBlockCipher(engine)
@@ -160,7 +159,7 @@ class FileEncryptor {
     /// read the size of the original file so we
     /// can ignore the padding added due to the block cipher
     /// requirement that all blocks are the same size.
-    final sizeList = reader.readChunk(8);
+    final sizeList = await reader.readChunk(8);
     if (sizeList.length != 8) {
       throw ArgumentError(
         'Unexpected file size. The stored file length was incomplete.',
@@ -175,7 +174,7 @@ class FileEncryptor {
       // final chunkSize = blockSize ~/ 8;
       var plainTextBuffer = Uint8List(blockSize); // allocate space
 
-      final encryptedData = reader.readChunk(blockSize);
+      final encryptedData = await reader.readChunk(blockSize);
 
       if (encryptedData.isEmpty) {
         break;
@@ -217,7 +216,9 @@ class FileEncryptor {
       writeTo.add(plainTextBuffer);
     }
     assert(
-        readSoFar == originalFileLength, 'Mis-match with original file length');
+      readSoFar == originalFileLength,
+      'Mis-match with original file length',
+    );
   }
 
   /// AES requires a fixed block size so we have to
@@ -247,9 +248,9 @@ class FileEncryptor {
 }
 
 abstract class ByteReader {
-  List<int> readChunk(int bytes);
+  Future<List<int>> readChunk(int bytes);
 
-  void cancel();
+  Future<void> cancel();
 }
 
 class RafReader implements ByteReader {
@@ -258,7 +259,7 @@ class RafReader implements ByteReader {
   RandomAccessFile raf;
 
   @override
-  List<int> readChunk(int bytes) {
+  Future<List<int>> readChunk(int bytes) async {
     final read = <int>[];
 
     for (var i = 0; i < bytes; i++) {
@@ -273,7 +274,7 @@ class RafReader implements ByteReader {
   }
 
   @override
-  void cancel() {
+  Future<void> cancel() async {
     /// NO-OP
   }
 }
@@ -283,10 +284,8 @@ class ChunkedReader implements ByteReader {
   ChunkedStreamReader<int> stream;
 
   @override
-  // ignore: discarded_futures
-  List<int> readChunk(int bytes) => waitForEx(stream.readChunk(bytes));
+  Future<List<int>> readChunk(int bytes) async => stream.readChunk(bytes);
 
   @override
-  // ignore: discarded_futures
-  void cancel() => waitForEx(stream.cancel());
+  Future<void> cancel() => stream.cancel();
 }

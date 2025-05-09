@@ -35,23 +35,21 @@ class TableOfContent {
   //   }
   // }
 
-  int addFileToSecurityBox(
+  Future<int> addFileToSecurityBox(
     RandomAccessFile securitBox,
     TOCEntry entry,
     FileEncryptor encryptor,
-  ) =>
-      encryptor.encrypt(
-        join(entry.relativeTo!, entry.relativePathToFile),
-        securitBox,
-      );
+  ) async => encryptor.encrypt(
+    join(entry.relativeTo!, entry.relativePathToFile),
+    securitBox,
+  );
 
   /// encrypts and writes the TOC index (list of TOCEntrys )  to [securityBox]
   Future<void> append(
-      RandomAccessFile securityBox, FileEncryptor encryptor) async {
-    encryptor.encrypt(
-      pathToTemporaryToc,
-      securityBox,
-    );
+    RandomAccessFile securityBox,
+    FileEncryptor encryptor,
+  ) async {
+    encryptor.encrypt(pathToTemporaryToc, securityBox);
   }
 
   // String get _tocEntryCountLine => 'entries:${entries.length}';
@@ -72,13 +70,13 @@ class TableOfContent {
   /// Load the table of contents from [rafSecurityBox] starting
   /// at position [startOfToc]
   void load(int startOfToc, RandomAccessFile rafSecurityBox) {
-    withTempFile((pathToToc) {
+    withTempFileAsync((pathToToc) async{
       final writeTo = File(pathToToc).openWrite();
       try {
         FileEncryptor().decryptFileEntry(startOfToc, rafSecurityBox, writeTo);
 
         // ignore: discarded_futures
-        final raf = waitForEx(File(pathToToc).open());
+        final raf = await File(pathToToc).open();
 
         try {
           final entryCount = parseNo(readLine(raf, 'entries'), 'entries');
@@ -88,12 +86,10 @@ class TableOfContent {
             _writeTempTocEntry(entry);
           }
         } finally {
-          // ignore: discarded_futures
-          waitForEx(raf.close());
+          await raf.close();
         }
       } finally {
-        // ignore: discarded_futures
-        waitForEx<void>(writeTo.close());
+        await writeTo.close();
       }
     });
   }
