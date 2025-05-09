@@ -4,7 +4,6 @@
  * Proprietary and confidential
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
-
 import 'dart:io';
 
 import 'package:async/async.dart';
@@ -26,11 +25,12 @@ void main() {
     const pathToSecurityBox = 'testfile.sbox';
 
     await withRandomAccessFile(
-        pathTo: pathToSecurityBox,
-        action: (rafSecurityBox) {
-          /// encrypt the file
-          encryptor.encrypt(testFile, rafSecurityBox);
-        });
+      pathTo: pathToSecurityBox,
+      action: (rafSecurityBox) {
+        /// encrypt the file
+        encryptor.encrypt(testFile, rafSecurityBox);
+      },
+    );
 
     // decrypt the file
     const resultFile = 'result.txt';
@@ -38,13 +38,13 @@ void main() {
       delete(resultFile);
     }
     final resultSink = File(resultFile).openWrite();
-    final reader =
-        ChunkedReader(ChunkedStreamReader(File(pathToSecurityBox).openRead()));
+    final reader = ChunkedReader(
+      ChunkedStreamReader(File(pathToSecurityBox).openRead()),
+    );
     try {
       encryptor.decryptFiieReader(reader, resultSink);
     } finally {
-      // ignore: discarded_futures
-      waitForEx<void>(resultSink.close());
+      await resultSink.close();
       reader.cancel();
     }
 
@@ -55,7 +55,7 @@ void main() {
     );
   });
 
-  test('Test Padding', () {
+  test('Test Padding', () async {
     final encryptor = FileEncryptor.noEncryption();
 
     // 32 chars
@@ -72,7 +72,7 @@ void main() {
       final expectedContent = stat(encryptedFile).size - 8;
       expect((expectedContent % 2) == 0, isTrue);
 
-      final resultsFile = _unlock(encryptedFile, encryptor);
+      final resultsFile = await _unlock(encryptedFile, encryptor);
       expect(stat(resultsFile).size == size, isTrue);
       expect(read(resultsFile).toParagraph(), equals(toStore));
     }
@@ -82,27 +82,26 @@ void main() {
 String _lock(String pathToPlainText, FileEncryptor encryptor) {
   const pathToSecurityBox = 'testfile.sbox';
   withRandomAccessFile(
-      pathTo: pathToSecurityBox,
-      action: (securityBox) {
-        encryptor.encrypt(pathToPlainText, securityBox);
-      });
+    pathTo: pathToSecurityBox,
+    action: (securityBox) {
+      encryptor.encrypt(pathToPlainText, securityBox);
+    },
+  );
 
   return pathToSecurityBox;
 }
 
-String _unlock(
+Future<String> _unlock(
   String pathToEncryptedFile,
   FileEncryptor encryptor,
-) {
+) async {
   const resultFile = 'result.txt';
 
   final writeTo = File(resultFile).openWrite();
   try {
-    // ignore: discarded_futures
-    waitForEx(encryptor.decrypt(pathToEncryptedFile, writeTo));
+    encryptor.decrypt(pathToEncryptedFile, writeTo);
   } finally {
-    // ignore: discarded_futures
-    waitForEx<void>(writeTo.close());
+    await writeTo.close();
   }
 
   return resultFile;

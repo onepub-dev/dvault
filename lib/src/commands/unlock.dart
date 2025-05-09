@@ -104,6 +104,6 @@ Decrypts the passed in security box.
       exit(1);
     }
 
-    await SecurityBox.load(pathToSecurityBox).loadFromDisk(outputPath);
+    await (await SecurityBox.load(pathToSecurityBox)).loadFromDisk(outputPath);
   }
 }
