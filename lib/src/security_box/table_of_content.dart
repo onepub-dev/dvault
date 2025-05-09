@@ -7,65 +7,22 @@
 import 'dart:io';
 
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/security_box/toc_store.dart';
+import 'package:path/path.dart';
 
 import '../file_encryptor.dart';
 import '../util/raf_helper.dart';
 import 'toc_entry.dart';
 
 class TableOfContent {
-  TableOfContent() : pathToTemporaryToc = createTempFilename();
+  TableOfContent();
 
-  /// path to the toc entries.
-  /// Each entr is stored as a single line.
-  String pathToTemporaryToc;
-  bool _open = false;
+  TOCStore tocStore = TOCStore();
 
   // List<TOCEntry> entries = <TOCEntry>[];
 
-  // Adds a file to the TOC index.
-  // The file is not processed in any way
-  void indexFile({required String pathToFile, required String relativeTo}) {
-    _openFile();
-    final tocEntry = TOCEntry(pathToFile: pathToFile, relativeTo: relativeTo);
-    _writeTempTocEntry(tocEntry);
-  }
-
-  void _writeTempTocEntry(TOCEntry tocEntry) {
-    pathToTemporaryToc.append(tocEntry.asLine);
-  }
-
-  void _openFile() {
-    if (!_open) {
-      _open = true;
-    }
-  }
-
-  /// Adds all file contained in the directory [pathTo] to the TOC index.
-  /// The files are not processed in any way.
-  /// If [recursive] is true then all files in any subdirectories are
-  /// also added.
-  /// Hidden files will be ignored.
-  void indexDirectory({
-    required String pathTo,
-    required String relativeTo,
-    bool recursive = false,
-  }) {
-    final types = [Find.file];
-    if (recursive) {
-      types.add(Find.directory);
-    }
-    find('*', workingDirectory: pathTo, recursive: recursive, types: types)
-        .forEach((path) {
-      if (isFile(path)) {
-        pathToTemporaryToc
-            .append(TOCEntry(pathToFile: path, relativeTo: relativeTo).asLine);
-      }
-    });
-  }
-
   // return a stream of the current [TOCEntry]s.
-  Stream<TOCEntry> get content =>
-      read(pathToTemporaryToc).stream.map(TOCEntry.fromLine);
+  Stream<TOCEntry> get content => tocStore.content;
 
   // void saveFiles(
   //     FileSync securityBox, int startOfFiles, FileEncryptor encryptor) {
@@ -99,7 +56,7 @@ class TableOfContent {
 
   // String get _tocEntryCountLine => 'entries:${entries.length}';
 
-  /// encrypt and save the toc to the [securityBox]
+  /// encrypt and save the toc to the [rafSecurityBox]
   /// returning the length of the encrypted data
   // int append(FileSync securityBox, FileEncryptor encryptor) =>
   //     withTempFile((pathToTempToc) {

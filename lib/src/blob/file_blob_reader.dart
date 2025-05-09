@@ -32,7 +32,7 @@ class FileBlobReader implements BlobReader {
   }
 
   @override
-  Future<int> get length async => (await stat(pathToFile)).size;
+  Future<int> get length async => stat(pathToFile).size;
 
   @override
   Future<Uint8List> read(int size) => _reader.stream.readBytes(size);

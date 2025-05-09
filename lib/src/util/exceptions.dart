@@ -23,7 +23,7 @@ class InvalidPassphraseException extends DVaultException {
 class SecurityBoxWriteException extends DVaultException {
   SecurityBoxWriteException(this.e)
       : super('An error occured adding a file to a security box: '
-            '${e.toString()}');
+            '$e');
   Exception e;
 }
 

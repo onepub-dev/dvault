@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
+import 'package:path/path.dart';
 
 import '../security_box/security_box.dart';
 
@@ -61,7 +62,7 @@ Locks the passed in file by adding it to a security box.
   String get name => 'lock';
 
   @override
-  void run() {
+  Future<void> run() async {
     final overwrite = argResults!['overwrite'] as bool;
 
     final incudeChildren = argResults!['recurse'] as bool;
@@ -104,15 +105,15 @@ Locks the passed in file by adding it to a security box.
       }
     }
 
-    addSecurityBox(filePaths, pathToSecurityBox,
+    await addSecurityBox(filePaths, pathToSecurityBox,
         incudeChildren: incudeChildren);
   }
 
-  void addSecurityBox(
+  Future<void> addSecurityBox(
     List<String> filePaths,
     String pathToSecurityBox, {
     required bool incudeChildren,
-  }) {
+  }) async {
     final securityBox = SecurityBox(pathToSecurityBox);
 
     for (final filePath in filePaths) {
@@ -132,6 +133,6 @@ Locks the passed in file by adding it to a security box.
         print('Skipping $filePath');
       }
     }
-    securityBox.create();
+    await securityBox.create();
   }
 }
