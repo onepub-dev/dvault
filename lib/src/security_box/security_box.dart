@@ -11,6 +11,7 @@ import 'dart:typed_data';
 import 'package:dcli/dcli.dart';
 import 'package:dcli_core/dcli_core.dart' as core;
 import 'package:encrypt/encrypt.dart';
+import 'package:path/path.dart';
 
 import '../blob/blob_encryptor.dart';
 import '../blob/file_blob_writer.dart';
@@ -36,13 +37,30 @@ import 'toc_entry.dart';
 ///<clear text public key>\n
 ///<encrypted private key>\n
 ///Ctrl-Z\n
-///<64bit offset from SOF to the begining of the TOC>\n
+///<64bit offset from the start of file to the begining of the TOC>\n
 ///<Encrypted file data>
 ///<Encrypted Table of Contents (TOC)>
 ///start of file:xxxx
 ///start of toc:xxx
-//```
+///```
+/// The last two lines are both padded to 80 chars so we can
+/// find their location by seeking back from the end of the file.
+
 class SecurityBox {
+  /// The width of each of the two last lines that begin
+  /// with 'start of'....
+  static const startOfLineLength = 80;
+
+  /// the byte offset of the second last line that starts with
+  /// 'start of file:'
+  int startOfFileLineOffset(int fileLength) =>
+      fileLength - (2 * (80 + '\n'.length)) + 1;
+
+  /// the byte offset of the second last line that starts with
+  /// 'start of toc:'
+  int startOfTocLineOffset(int fileLength) =>
+      fileLength - ((80 + '\n'.length)) + 1;
+
   /// Create a new security box ready to add files to.
   SecurityBox(this.pathToSecurityBox) {
     iv = IV.fromSecureRandom(16);
@@ -115,7 +133,7 @@ class SecurityBox {
     toc.indexFile(pathToFile: pathTo, relativeTo: relativeTo);
   }
 
-  /// Adds the files in [pathToDirectory] to the security boxes
+  /// Adds the files in [pathToDirectory] to the security box's
   /// TOC index.
   /// If [recursive] is true then all files in subdirectories
   /// are also added.
@@ -143,7 +161,7 @@ class SecurityBox {
 
     final encryptor = FileEncryptor();
     // final encryptor = FileEncryptor.noEncryption();
-    await core.withOpenFile(pathToSecurityBox, (securityBox) async {
+    await await core.withOpenFile(pathToSecurityBox, (securityBox) async {
       writeLine(securityBox, _magicLine);
       writeLine(securityBox, _versionLine);
       writeLine(securityBox, _createdByLine);
@@ -158,7 +176,7 @@ class SecurityBox {
       writeLine(securityBox, dotVaultFile.extractPublicKeyLines().join('\n'));
       writeLine(securityBox, _ctrlZ);
 
-      final startOfFiles = await securityBox.length();
+      final startOfFiles = securityBox.lengthSync();
       final directories = <String>{};
       // encrypt and write each file indexed in the TOC to the security box.
       await toc.content.forEach((tocEntry) {
@@ -226,18 +244,15 @@ class SecurityBox {
   /// are fixed width as we need be able to seek directly
   /// to them at the end of the file.
   String _startOfFilesLine(int startOfFiles) =>
-      '\n$startOfFilesKey:$startOfFiles'.padRight(80);
+      '\n$startOfFilesKey:$startOfFiles'.padRight(startOfLineLength);
   String _startOfTocLine(int startOfToc) =>
-      '$startOfTocKey:$startOfToc'.padRight(80);
+      '$startOfTocKey:$startOfToc'.padRight(startOfLineLength);
 
   /// decrypt the TOC from the security box
   /// and save it into a temp file.
   /// We use a temp file in case the TOC is
   /// very large.
   TableOfContent _loadToc(RandomAccessFile raf) {
-    final length = raf.lengthSync();
-
-    raf.setPositionSync(length - (2 * (80 + '\n'.length)) + 1);
     _loadStartOfFiles(raf);
     final startOfToc = _loadStartOfToc(raf);
 
@@ -310,8 +325,11 @@ class SecurityBox {
     }
   }
 
-  int _loadStartOfToc(RandomAccessFile file) {
-    final startOfToc = readLine(file, startOfTocKey);
+  int _loadStartOfToc(RandomAccessFile raf) {
+    final length = raf.lengthSync();
+    raf.setPositionSync(startOfTocLineOffset(length));
+
+    final startOfToc = readLine(raf, startOfTocKey);
     if (!startOfToc.startsWith(startOfTocKey)) {
       throw SecurityBoxReadException(
         'Unexpected Start of TOC Prefix. '
@@ -321,8 +339,10 @@ class SecurityBox {
     return parseNo(startOfToc, startOfTocKey);
   }
 
-  int _loadStartOfFiles(RandomAccessFile file) {
-    final startOfFiles = readLine(file, startOfFilesKey);
+  int _loadStartOfFiles(RandomAccessFile raf) {
+    final length = raf.lengthSync();
+    raf.setPositionSync(startOfFileLineOffset(length));
+    final startOfFiles = readLine(raf, startOfFilesKey);
     if (!startOfFiles.startsWith(startOfFilesKey)) {
       throw SecurityBoxReadException(
         'Unexpected Start of Files Prefix. '

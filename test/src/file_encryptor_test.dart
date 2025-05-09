@@ -8,7 +8,7 @@
 import 'dart:io';
 
 import 'package:async/async.dart';
-import 'package:dcli/dcli.dart' hide equals;
+import 'package:dcli/dcli.dart';
 import 'package:dvault/src/file_encryptor.dart';
 import 'package:dvault/src/util/raf_helper.dart';
 import 'package:test/test.dart';
@@ -81,9 +81,11 @@ void main() {
 
 String _lock(String pathToPlainText, FileEncryptor encryptor) {
   const pathToSecurityBox = 'testfile.sbox';
-  withOpenFile(pathToSecurityBox, (securityBox) {
-    encryptor.encrypt(pathToPlainText, securityBox);
-  });
+  withRandomAccessFile(
+      pathTo: pathToSecurityBox,
+      action: (securityBox) {
+        encryptor.encrypt(pathToPlainText, securityBox);
+      });
 
   return pathToSecurityBox;
 }

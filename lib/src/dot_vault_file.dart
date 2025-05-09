@@ -11,6 +11,7 @@ import 'dart:typed_data';
 import 'package:dcli/dcli.dart';
 import 'package:dcli/posix.dart';
 import 'package:encrypt/encrypt.dart';
+import 'package:path/path.dart';
 import 'package:pointycastle/pointycastle.dart';
 
 import 'rsa/convertor.dart';
@@ -193,7 +194,7 @@ class DotVaultFile {
   static Encrypter _encrypterFromPassphrase(String passphrase, Uint8List salt) {
     final strongKey = StrongKey.fromPassPhrase(passphrase);
 
-    // TODO: change interation count to 100,000 and change ui to
+    // TODO(bsutton): change interation count to 100,000 and change ui to
     // indicate the user should wait.
     // Need advice on this as using 100,000 interations takes a
     // long time. This means unlocking a file is going to take a long time.
