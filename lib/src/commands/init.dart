@@ -16,6 +16,8 @@ import '../util/messages.dart';
 import 'helper.dart';
 
 class InitCommand extends Command<void> {
+  static int minPassPhraseLength = 12;
+
   InitCommand() {
     argParser.addFlag(
       'env',
@@ -25,7 +27,6 @@ class InitCommand extends Command<void> {
           '${Constants.dvaultPassphraseEnvKey} environment variable.',
     );
   }
-  static int minPassPhraseLength = 12;
 
   @override
   String get description => '''

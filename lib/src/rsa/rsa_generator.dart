@@ -13,9 +13,11 @@ import 'package:pointycastle/random/fortuna_random.dart';
 
 /// Class to generator RSAKeyPairs
 class RSAGenerator {
-  factory RSAGenerator() => _self;
-  RSAGenerator._internal();
   static final RSAGenerator _self = RSAGenerator._internal();
+
+  factory RSAGenerator() => _self;
+
+  RSAGenerator._internal();
 
   AsymmetricKeyPair<RSAPublicKey, RSAPrivateKey> generateKeyPair() {
     final keyPair = getRsaKeyPair(getSecureRandom());

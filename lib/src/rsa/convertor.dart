@@ -14,15 +14,22 @@ import '../util/exceptions.dart';
 /// suitable for storage.
 
 class RSAConvertor {
-  factory RSAConvertor() => _self;
-  RSAConvertor._internal();
   static final RSAConvertor _self = RSAConvertor._internal();
+
   static const beginPrivate = '---- BEGIN DVAULT PRIVATE KEY ----';
+
   static const endPrivate = '---- END DVAULT PRIVATE KEY ----';
+
   static const beginPublic = '---- BEGIN DVAULT PUBLIC KEY ----';
+
   static const endPublic = '---- END DVAULT PUBLIC KEY ----';
 
+  factory RSAConvertor() => _self;
+
+  RSAConvertor._internal();
+
   static int get privateKeyLines => 3;
+
   static int get publicKeyLines => 4;
 
   ///

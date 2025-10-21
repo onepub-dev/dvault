@@ -1,3 +1,3 @@
 interface class Line {
-  String get asString => null;
+  String? get asString => null;
 }

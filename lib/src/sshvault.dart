@@ -19,6 +19,16 @@ import 'package:path/path.dart';
 /// not already installed into that dir.
 ///
 class SSHVault {
+  static const vaultExe = 'ssh-vault';
+
+  static const version = 'ssh-vault_0.12.6_linux_amd64';
+
+  String? storagePath;
+
+  String? privateKeyPath;
+
+  String? publicKeyPath;
+
   /// [storagePath] is the path (directory)
   /// where we are going to store the resulting vault.
   /// [privateKeyPath] the path to the private key file. If null defaults to
@@ -29,14 +39,6 @@ class SSHVault {
     privateKeyPath ??= join(HOME, '.ssh', 'id_rsa');
     publicKeyPath ??= join(HOME, '.ssh', 'id_rsa.pub');
   }
-  static const vaultExe = 'ssh-vault';
-  static const version = 'ssh-vault_0.12.6_linux_amd64';
-
-  String? storagePath;
-
-  String? privateKeyPath;
-
-  String? publicKeyPath;
 
   String get _vaultExePath => join(storagePath!, vaultExe);
 
@@ -187,8 +189,10 @@ bool _isPrivKeyProtected(String? path) {
 }
 
 class SSHVaultException implements Exception {
-  SSHVaultException(this.message);
   String message;
+
+  SSHVaultException(this.message);
+
   @override
   String toString() => message;
 }

@@ -12,8 +12,9 @@ import '../util/messages.dart';
 import 'helper.dart';
 
 class ResetCommand extends Command<void> {
-  ResetCommand();
   static int minPassPhraseLength = 12;
+
+  ResetCommand();
 
   @override
   String get description => '''

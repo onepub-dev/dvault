@@ -12,15 +12,15 @@ import 'chunked_reader.dart';
 /// The reader is buffered  by using a [ChunkedReader] to
 /// optimise read performance.
 class FileBlobReader implements BlobReader {
-  FileBlobReader(this.pathToFile) {
-    _open();
-  }
-
   final String pathToFile;
 
   bool open = false;
 
   late final ChunkedReader _reader;
+
+  FileBlobReader(this.pathToFile) {
+    _open();
+  }
 
   void _open() {
     if (!open) {

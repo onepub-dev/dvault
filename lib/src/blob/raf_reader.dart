@@ -3,9 +3,9 @@ import 'dart:io';
 import 'byte_reader.dart';
 
 class RafReader implements ByteReader {
-  RafReader(this.raf);
-
   RandomAccessFile raf;
+
+  RafReader(this.raf);
 
   @override
   Future<List<int>> readChunk(int bytes) async {

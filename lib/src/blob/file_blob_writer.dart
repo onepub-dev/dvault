@@ -4,10 +4,11 @@ import 'dart:typed_data';
 import 'blob_writer.dart';
 
 class FileBlobWriter implements BlobWriter {
-  FileBlobWriter(this.pathToBlob);
-
   String pathToBlob;
+
   RandomAccessFile? raf;
+
+  FileBlobWriter(this.pathToBlob);
 
   Future<void> _open() async {
     raf = await File(pathToBlob).open(mode: FileMode.append);

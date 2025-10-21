@@ -13,13 +13,12 @@ import '../util/raf_helper.dart';
 
 class TOCEntryBuilder implements Line {
   static const relativePathKey = 'relativePath';
-  static const offsetKey = 'offset';
-  static const lengthKey = 'length';
-  static const originalLengthKey = 'originalLength';
 
-  TOCEntryBuilder({required String pathToFile, required this.relativeTo})
-      : originalLength = stat(pathToFile).size,
-        relativePathToFile = relative(pathToFile, from: relativeTo);
+  static const offsetKey = 'offset';
+
+  static const lengthKey = 'length';
+
+  static const originalLengthKey = 'originalLength';
 
   final String? relativeTo;
 
@@ -39,6 +38,10 @@ class TOCEntryBuilder implements Line {
   /// The length (in bytes) of the file before it
   /// was encrypted.
   late final int originalLength;
+
+  TOCEntryBuilder({required String pathToFile, required this.relativeTo})
+      : originalLength = stat(pathToFile).size,
+        relativePathToFile = relative(pathToFile, from: relativeTo);
 
   TOCEntryBuilder.fromLine(String line) : relativeTo = null {
     final parts = line.split(',');

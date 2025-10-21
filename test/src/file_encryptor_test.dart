@@ -44,7 +44,7 @@ void main() {
       encryptor.decryptFiieReader(reader, resultSink);
     } finally {
       // ignore: discarded_futures
-      waitForEx<void>(resultSink.close());
+      await resultSink.close();
       reader.cancel();
     }
 
@@ -55,7 +55,7 @@ void main() {
     );
   });
 
-  test('Test Padding', () {
+  test('Test Padding', () async {
     final encryptor = FileEncryptor.noEncryption();
 
     // 32 chars
@@ -72,7 +72,7 @@ void main() {
       final expectedContent = stat(encryptedFile).size - 8;
       expect((expectedContent % 2) == 0, isTrue);
 
-      final resultsFile = _unlock(encryptedFile, encryptor);
+      final resultsFile = await _unlock(encryptedFile, encryptor);
       expect(stat(resultsFile).size == size, isTrue);
       expect(read(resultsFile).toParagraph(), equals(toStore));
     }
@@ -90,19 +90,17 @@ String _lock(String pathToPlainText, FileEncryptor encryptor) {
   return pathToSecurityBox;
 }
 
-String _unlock(
+Future<String> _unlock(
   String pathToEncryptedFile,
   FileEncryptor encryptor,
-) {
+) async {
   const resultFile = 'result.txt';
 
   final writeTo = File(resultFile).openWrite();
   try {
-    // ignore: discarded_futures
-    waitForEx(encryptor.decrypt(pathToEncryptedFile, writeTo));
+    await encryptor.decrypt(pathToEncryptedFile, writeTo);
   } finally {
-    // ignore: discarded_futures
-    waitForEx<void>(writeTo.close());
+    await writeTo.close();
   }
 
   return resultFile;

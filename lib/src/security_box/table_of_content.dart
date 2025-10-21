@@ -15,31 +15,18 @@ import '../util/raf_helper.dart';
 import 'toc_entry.dart';
 
 class TableOfContent {
-  TableOfContent();
-
   TOCStore tocStore = TOCStore();
 
-  // List<TOCEntry> entries = <TOCEntry>[];
+  TableOfContent();
 
   // return a stream of the current [TOCEntry]s.
   Stream<TOCEntry> get content => tocStore.content;
 
-  // void saveFiles(
-  //     FileSync securityBox, int startOfFiles, FileEncryptor encryptor) {
-  //   var offset = startOfFiles;
-  //   for (final entry in entries) {
-  //     entry
-  //       ..length = addFileToSecurityBox(securityBox, entry, encryptor)
-  //       ..offset = offset;
-  //     offset += entry.length;
-  //   }
-  // }
-
-  int addFileToSecurityBox(
+  Future<int> addFileToSecurityBox(
     RandomAccessFile securitBox,
     TOCEntry entry,
     FileEncryptor encryptor,
-  ) =>
+  ) async =>
       encryptor.encrypt(
         join(entry.relativeTo!, entry.relativePathToFile),
         securitBox,
@@ -49,12 +36,10 @@ class TableOfContent {
   Future<void> append(
       RandomAccessFile securityBox, FileEncryptor encryptor) async {
     encryptor.encrypt(
-      pathToTemporaryToc,
+      tocStore.path,
       securityBox,
     );
   }
-
-  // String get _tocEntryCountLine => 'entries:${entries.length}';
 
   /// encrypt and save the toc to the [rafSecurityBox]
   /// returning the length of the encrypted data
@@ -71,14 +56,14 @@ class TableOfContent {
 
   /// Load the table of contents from [rafSecurityBox] starting
   /// at position [startOfToc]
-  void load(int startOfToc, RandomAccessFile rafSecurityBox) {
-    withTempFile((pathToToc) {
+  void load(int startOfToc, RandomAccessFile rafSecurityBox) async {
+    await withTempFileAsync((pathToToc) async {
       final writeTo = File(pathToToc).openWrite();
       try {
         FileEncryptor().decryptFileEntry(startOfToc, rafSecurityBox, writeTo);
 
         // ignore: discarded_futures
-        final raf = waitForEx(File(pathToToc).open());
+        final raf = await File(pathToToc).open();
 
         try {
           final entryCount = parseNo(readLine(raf, 'entries'), 'entries');
@@ -88,12 +73,10 @@ class TableOfContent {
             _writeTempTocEntry(entry);
           }
         } finally {
-          // ignore: discarded_futures
-          waitForEx(raf.close());
+          await raf.close();
         }
       } finally {
-        // ignore: discarded_futures
-        waitForEx<void>(writeTo.close());
+        await writeTo.close();
       }
     });
   }

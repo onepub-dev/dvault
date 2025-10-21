@@ -17,28 +17,6 @@ import 'line.dart';
 /// which is contained in the security box encrypted using the user's
 /// passphrase
 class TOCEntry implements Line {
-  TOCEntry.fromLine(String line) : relativeTo = null {
-    final parts = line.split(',');
-    if (parts.length != 4) {
-      throw SecurityBoxReadException(
-        'Expected 4 key/value pairs in TOC entry. Found $line',
-      );
-    }
-
-    /// offset
-    offset = parseNo(parts[0], offsetKey);
-    length = parseNo(parts[1], lengthKey);
-    originalLength = parseNo(parts[2], originalLengthKey);
-    relativePathToFile = parseValue(parts[3], relativePathKey);
-  }
-
-  TOCEntry.fromParts({
-    required this.offset,
-    required this.length,
-    required this.originalLength,
-    required this.relativePathToFile,
-  }) : relativeTo = null;
-
   /// The path on the source system that [relativePathToFile] is
   /// relative to. This value is not stored in the security box
   /// as its not required when extracting files and
@@ -65,9 +43,34 @@ class TOCEntry implements Line {
   late final int originalLength;
 
   static const relativePathKey = 'relativePath';
+
   static const offsetKey = 'offset';
+
   static const lengthKey = 'length';
+
   static const originalLengthKey = 'originalLength';
+
+  TOCEntry.fromLine(String line) : relativeTo = null {
+    final parts = line.split(',');
+    if (parts.length != 4) {
+      throw SecurityBoxReadException(
+        'Expected 4 key/value pairs in TOC entry. Found $line',
+      );
+    }
+
+    /// offset
+    offset = parseNo(parts[0], offsetKey);
+    length = parseNo(parts[1], lengthKey);
+    originalLength = parseNo(parts[2], originalLengthKey);
+    relativePathToFile = parseValue(parts[3], relativePathKey);
+  }
+
+  TOCEntry.fromParts({
+    required this.offset,
+    required this.length,
+    required this.originalLength,
+    required this.relativePathToFile,
+  }) : relativeTo = null;
 
   String get asString => '$offsetKey:${offset}, $lengthKey:$length, '
       '$originalLengthKey:$originalLength, '

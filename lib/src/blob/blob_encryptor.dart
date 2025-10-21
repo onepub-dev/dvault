@@ -26,6 +26,14 @@ import 'raf_reader.dart';
 /// When decrypting a blob the length is obtain from
 /// the first cipher block and then the remain blobs read/decrypted.
 class BlobEncryptor {
+  final bool _skipEncryption;
+
+  late final Key key;
+
+  late final IV iv;
+
+  late final engine = AESEngine();
+
   BlobEncryptor() : _skipEncryption = false {
     _init();
   }
@@ -36,12 +44,6 @@ class BlobEncryptor {
   BlobEncryptor.noEncryption() : _skipEncryption = true {
     _init();
   }
-
-  final bool _skipEncryption;
-
-  late final Key key;
-  late final IV iv;
-  late final engine = AESEngine();
 
   // AESFastEngine use a 16 byte block size.
   int get blockSize => engine.blockSize;

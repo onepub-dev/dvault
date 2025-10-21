@@ -13,11 +13,11 @@ import 'package:test/test.dart';
 
 void main() {
   test('security box ...', () async {
-    await withTempDir((dir) async {
+    await withTempDirAsync((dir) async {
       final pathToSecurityBox = join(dir, 'test.sbox');
       var securityBox = SecurityBox(pathToSecurityBox);
 
-      await withTempFile(
+      await withTempFileAsync(
         (pathToFileToEncrypt) async {
           await _createFile(pathToFileToEncrypt, 2);
           securityBox.addFileToIndex(
@@ -39,7 +39,7 @@ void main() {
             ),
           );
 
-          securityBox = SecurityBox.load(pathToSecurityBox);
+          securityBox = await SecurityBox.load(pathToSecurityBox);
           // check the TOCEntry
           expect(securityBox.toc.content.length, equals(1));
           expect(
@@ -56,7 +56,7 @@ void main() {
             ),
           );
 
-          await withTempDir((extractToDir) async {
+          await withTempDirAsync((extractToDir) async {
             await securityBox.loadFromDisk(extractToDir);
 
             final pathToExtractedFile = join(extractToDir,

@@ -28,6 +28,23 @@ import 'util/strong_key.dart';
 /// You can safely copy the .dvault file from
 /// system to system.
 class DotVaultFile {
+  static const String version = '1';
+
+  /// Path to the .dvault file which we used to store the public/private key pair.
+  static final String storagePath = truepath(join(HOME, '.dvault'));
+
+  var _lines = <String>[];
+
+  RSAPrivateKey? _privateKey;
+
+  RSAPublicKey? _publicKey;
+
+  late final IV iv;
+
+  late final Uint8List salt;
+
+  late final String _test;
+
   /// Loads the key pair from key file decrypting the private key.
   DotVaultFile.load() {
     Settings().verbose('Loading Keyfile from: $storagePath');
@@ -40,19 +57,6 @@ class DotVaultFile {
     _test = _parseTest(_lines[3]);
     Settings().verbose('Storage Version: $version');
   }
-  static const String version = '1';
-
-  /// Path to the .dvault file which we used to store the public/private key pair.
-  static final String storagePath = truepath(join(HOME, '.dvault'));
-
-  var _lines = <String>[];
-
-  RSAPrivateKey? _privateKey;
-  RSAPublicKey? _publicKey;
-
-  late final IV iv;
-  late final Uint8List salt;
-  late final String _test;
 
   /// Saves the key pair to disk encrypting the private key.
   static void create(
@@ -130,17 +134,6 @@ class DotVaultFile {
       newPassphrase,
     );
   }
-
-  // /// Encryptes the passed text using
-  // Encrypted encrypt({required String text, required String passphrase}) {
-  //   var encrypter = _encrypterFromPassphrase(passphrase, _salt);
-  //   return encrypter.encrypt(text, iv: _iv);
-  // }
-
-  // String decrypt({required Encrypted encrypted,
-  //  required String passphrase}) {
-  //   var encrypter = _encrypterFromPassphrase(passphrase, _salt);
-  // }
 
   bool _validatePassphrase(String passphrase, Encrypter encrypter) {
     final encrypted = Encrypted.fromBase64(_test);

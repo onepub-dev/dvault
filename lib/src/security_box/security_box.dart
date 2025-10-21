@@ -51,6 +51,44 @@ class SecurityBox {
   /// with 'start of'....
   static const startOfLineLength = 80;
 
+  /// This value must never be changed even across versions
+  /// of DVault.
+  static const magicCode = '17e64d12-c347-4c67-9899-f52b015183ec';
+
+  static const magicKey = 'magic';
+
+  static const versionKey = 'version';
+
+  static const createdKey = 'created';
+
+  static const authorKey = 'author';
+
+  static const saltKey = 'salt';
+
+  static const ivKey = 'iv';
+
+  static const startOfTocKey = 'start of toc';
+
+  static const startOfFilesKey = 'start of files';
+
+  TableOfContent toc = TableOfContent();
+
+  String pathToSecurityBox;
+
+  late final Uint8List salt;
+
+  late final IV iv;
+
+  /// Create a new security box ready to add files to.
+  SecurityBox(this.pathToSecurityBox) {
+    iv = IV.fromSecureRandom(16);
+    salt = StrongKey.generateSalt;
+  }
+
+  /// Use this ctor when you are going to load an existing security box
+  /// from disk
+  SecurityBox._forLoading(this.pathToSecurityBox);
+
   /// the byte offset of the second last line that starts with
   /// 'start of file:'
   int startOfFileLineOffset(int fileLength) =>
@@ -61,17 +99,11 @@ class SecurityBox {
   int startOfTocLineOffset(int fileLength) =>
       fileLength - ((80 + '\n'.length)) + 1;
 
-  /// Create a new security box ready to add files to.
-  SecurityBox(this.pathToSecurityBox) {
-    iv = IV.fromSecureRandom(16);
-    salt = StrongKey.generateSalt;
-  }
-
   // load the security box meta data.
-  factory SecurityBox.load(String pathToSecurityBox) {
+  static Future<SecurityBox> load(String pathToSecurityBox) async {
     final securityBox = SecurityBox._forLoading(pathToSecurityBox);
     // ignore: discarded_futures
-    final raf = waitForEx(File(pathToSecurityBox).open());
+    final raf = await File(pathToSecurityBox).open();
 
     try {
       securityBox
@@ -87,37 +119,19 @@ class SecurityBox {
         ..toc = securityBox._loadToc(raf);
     } finally {
       // ignore: discarded_futures
-      waitForEx(raf.close());
+      await raf.close();
     }
     return securityBox;
   }
 
-  /// Use this ctor when you are going to load an existing security box
-  /// from disk
-  SecurityBox._forLoading(this.pathToSecurityBox);
-
-  /// This value must never be changed even across versions
-  /// of DVault.
-  static const magicCode = '17e64d12-c347-4c67-9899-f52b015183ec';
   int get version => 1;
-  static const magicKey = 'magic';
-  static const versionKey = 'version';
-  static const createdKey = 'created';
-  static const authorKey = 'author';
-  static const saltKey = 'salt';
-  static const ivKey = 'iv';
-  static const startOfTocKey = 'start of toc';
-  static const startOfFilesKey = 'start of files';
-
-  TableOfContent toc = TableOfContent();
-
-  String pathToSecurityBox;
-  late final Uint8List salt;
-  late final IV iv;
 
   String get _magicLine => '$magicKey:$magicCode';
+
   String get _versionLine => '$versionKey:$version';
+
   String get _createdByLine => '$createdKey:by DVault Version $packageVersion';
+
   String get _authorLine => '$authorKey:S. Brett Sutton';
 
   String get _ctrlZ => String.fromCharCode(26);
@@ -220,7 +234,7 @@ class SecurityBox {
   /// ```
   Future<void> loadFromDisk(String pathToExtractTo) async {
     // ignore: discarded_futures
-    final raf = waitForEx(File(pathToSecurityBox).open());
+    final raf = await File(pathToSecurityBox).open();
     try {
       final fileEncryptor = BlobEncryptor();
       await toc.content.forEach((entry) async {
@@ -228,16 +242,12 @@ class SecurityBox {
       });
     } finally {
       // ignore: discarded_futures
-      waitForEx(raf.close());
+      raf.close();
     }
   }
 
-  // void _saveFiles(
-  //     FileSync securityBox, int startOfFiles, FileEncryptor encryptor) {
-  //   toc.saveFiles(securityBox, startOfFiles, encryptor);
-  // }
-
   String _saltLine(Uint8List salt) => '$saltKey:${base64Encode(salt)}';
+
   String _ivLine(IV iv) => '$ivKey:${iv.base64}';
 
   /// The start of toc and start of files lines
@@ -245,6 +255,7 @@ class SecurityBox {
   /// to them at the end of the file.
   String _startOfFilesLine(int startOfFiles) =>
       '\n$startOfFilesKey:$startOfFiles'.padRight(startOfLineLength);
+
   String _startOfTocLine(int startOfToc) =>
       '$startOfTocKey:$startOfToc'.padRight(startOfLineLength);
 
@@ -407,8 +418,7 @@ class SecurityBox {
       rafSecurityBox.setPositionSync(startOffset);
       fileEncryptor.decryptFileEntry(startOffset, rafSecurityBox, writeTo);
     } finally {
-      // ignore: discarded_futures
-      waitForEx<void>(writeTo.close());
+      writeTo.close();
     }
   }
 }

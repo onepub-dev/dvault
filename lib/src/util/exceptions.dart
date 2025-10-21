@@ -8,9 +8,9 @@
 import 'package:encrypt/encrypt.dart';
 
 class DVaultException implements Exception {
-  DVaultException(this.message);
-
   String message;
+
+  DVaultException(this.message);
 
   @override
   String toString() => message;
@@ -21,10 +21,11 @@ class InvalidPassphraseException extends DVaultException {
 }
 
 class SecurityBoxWriteException extends DVaultException {
+  Exception e;
+
   SecurityBoxWriteException(this.e)
       : super('An error occured adding a file to a security box: '
             '$e');
-  Exception e;
 }
 
 class SecurityBoxReadException extends DVaultException {

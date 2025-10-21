@@ -12,6 +12,16 @@ import 'package:encrypt/encrypt.dart';
 import 'util/strong_key.dart';
 
 class DVaultAESEncryptor {
+  static const blockSize = 16;
+
+  final IV iv;
+
+  final Uint8List salt;
+
+  late final Key key;
+
+  late final Encrypter encryptor;
+
   /// Creates an AES encryptor from [passphrase]
   /// We use this encryptor for encrypting/decrypting the text
   /// representation of the PrivateKey.
@@ -28,11 +38,4 @@ class DVaultAESEncryptor {
     // padding was null but I think we resolved the issue.
     encryptor = Encrypter(AES(key));
   }
-
-  static const blockSize = 16;
-
-  final IV iv;
-  final Uint8List salt;
-  late final Key key;
-  late final Encrypter encryptor;
 }
