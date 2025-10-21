@@ -4,7 +4,6 @@
  * Proprietary and confidential
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
-
 import 'dart:io';
 
 import 'package:async/async.dart';
@@ -26,11 +25,12 @@ void main() {
     const pathToSecurityBox = 'testfile.sbox';
 
     await withRandomAccessFile(
-        pathTo: pathToSecurityBox,
-        action: (rafSecurityBox) {
-          /// encrypt the file
-          encryptor.encrypt(testFile, rafSecurityBox);
-        });
+      pathTo: pathToSecurityBox,
+      action: (rafSecurityBox) {
+        /// encrypt the file
+        encryptor.encrypt(testFile, rafSecurityBox);
+      },
+    );
 
     // decrypt the file
     const resultFile = 'result.txt';
@@ -38,12 +38,12 @@ void main() {
       delete(resultFile);
     }
     final resultSink = File(resultFile).openWrite();
-    final reader =
-        ChunkedReader(ChunkedStreamReader(File(pathToSecurityBox).openRead()));
+    final reader = ChunkedReader(
+      ChunkedStreamReader(File(pathToSecurityBox).openRead()),
+    );
     try {
       encryptor.decryptFiieReader(reader, resultSink);
     } finally {
-      // ignore: discarded_futures
       await resultSink.close();
       reader.cancel();
     }
@@ -82,10 +82,11 @@ void main() {
 String _lock(String pathToPlainText, FileEncryptor encryptor) {
   const pathToSecurityBox = 'testfile.sbox';
   withRandomAccessFile(
-      pathTo: pathToSecurityBox,
-      action: (securityBox) {
-        encryptor.encrypt(pathToPlainText, securityBox);
-      });
+    pathTo: pathToSecurityBox,
+    action: (securityBox) {
+      encryptor.encrypt(pathToPlainText, securityBox);
+    },
+  );
 
   return pathToSecurityBox;
 }

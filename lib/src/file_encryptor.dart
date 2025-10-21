@@ -55,7 +55,9 @@ class FileEncryptor {
   /// length of the file as the first cypher block.
   /// returns the no. of bytes it wrote to [writeTo]
   Future<int> encrypt(
-      String pathToFileToEncrypt, RandomAccessFile writeTo) async {
+    String pathToFileToEncrypt,
+    RandomAccessFile writeTo,
+  ) async {
     // Create a CBC block cipher with AES, and initialize with key and IV
     final cbc = CBCBlockCipher(engine)
       ..init(
@@ -130,11 +132,7 @@ class FileEncryptor {
 
   /// Extracts a file entry from the encrypted byte stream [raf]
   /// starting from
-  void decryptFileEntry(
-    int offset,
-    RandomAccessFile raf,
-    IOSink writeTo,
-  ) {
+  void decryptFileEntry(int offset, RandomAccessFile raf, IOSink writeTo) {
     raf.setPositionSync(offset);
 
     final reader = RafReader(raf);
@@ -220,7 +218,9 @@ class FileEncryptor {
       writeTo.add(plainTextBuffer);
     }
     assert(
-        readSoFar == originalFileLength, 'Mis-match with original file length');
+      readSoFar == originalFileLength,
+      'Mis-match with original file length',
+    );
   }
 
   /// AES requires a fixed block size so we have to
@@ -284,13 +284,9 @@ class RafReader implements ByteReader {
 class ChunkedReader implements ByteReader {
   ChunkedStreamReader<int> stream;
 
-  ChunkedReader(this.stream);
+  @override
+  Future<List<int>> readChunk(int bytes) async => stream.readChunk(bytes);
 
   @override
-  // ignore: discarded_futures
-  Future<List<int>> readChunk(int bytes) => stream.readChunk(bytes);
-
-  @override
-  // ignore: discarded_futures
   Future<void> cancel() => stream.cancel();
 }

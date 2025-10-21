@@ -118,7 +118,6 @@ class SecurityBox {
         .._readCtrlZ(raf)
         ..toc = securityBox._loadToc(raf);
     } finally {
-      // ignore: discarded_futures
       await raf.close();
     }
     return securityBox;
@@ -141,10 +140,10 @@ class SecurityBox {
   /// The path of the file is converted to a path
   /// which is relative to [relativeTo]. If [relativeTo] is
   /// not passed then the current working directory is assumed.
-  void addFileToIndex(String pathTo, {String? relativeTo}) {
+  void addFileToIndex(String pathTo, {String? relativeTo}) async {
     relativeTo ??= pwd;
 
-    toc.indexFile(pathToFile: pathTo, relativeTo: relativeTo);
+    await toc.indexFile(pathToFile: pathTo, relativeTo: relativeTo);
   }
 
   /// Adds the files in [pathToDirectory] to the security box's
@@ -196,8 +195,12 @@ class SecurityBox {
       await toc.content.forEach((tocEntry) {
         final originalPathToFile = tocEntry.originalPathToFile;
         if (!exists(originalPathToFile)) {
-          print(orange('warning: skipped $originalPathToFile '
-              'as it no longer exists'));
+          print(
+            orange(
+              'warning: skipped $originalPathToFile '
+              'as it no longer exists',
+            ),
+          );
           return;
         }
         encryptor.encrypt(originalPathToFile, securityBox);
@@ -241,8 +244,7 @@ class SecurityBox {
         await _extractFile(fileEncryptor, raf, entry, pathToExtractTo);
       });
     } finally {
-      // ignore: discarded_futures
-      raf.close();
+      await raf.close();
     }
   }
 
@@ -367,7 +369,7 @@ class SecurityBox {
     final lines = <String>[
       readLine(file, 'Private Key Line 1'),
       readLine(file, 'Private Key Line 2'),
-      readLine(file, 'Private Key Line 3')
+      readLine(file, 'Private Key Line 3'),
     ];
     return lines;
   }
@@ -377,7 +379,7 @@ class SecurityBox {
       readLine(file, 'Public Key Line 1'),
       readLine(file, 'Public Key Line 2'),
       readLine(file, 'Public Key Line 3'),
-      readLine(file, 'Public Key Line 4')
+      readLine(file, 'Public Key Line 4'),
     ];
 
     return lines;
@@ -391,8 +393,10 @@ class SecurityBox {
     TOCEntry entry,
     String extractToDirectory,
   ) async {
-    final pathToExtractedFile =
-        join(extractToDirectory, entry.relativePathToFile);
+    final pathToExtractedFile = join(
+      extractToDirectory,
+      entry.relativePathToFile,
+    );
 
     final writeTo = FileBlobWriter(pathToExtractedFile);
 
@@ -411,14 +415,14 @@ class SecurityBox {
     RandomAccessFile rafSecurityBox,
     int startOffset,
     String extractToPath,
-  ) {
+  ) async {
     final writeTo = File(extractToPath).openWrite();
 
     try {
       rafSecurityBox.setPositionSync(startOffset);
       fileEncryptor.decryptFileEntry(startOffset, rafSecurityBox, writeTo);
     } finally {
-      writeTo.close();
+      await writeTo.close();
     }
   }
 }

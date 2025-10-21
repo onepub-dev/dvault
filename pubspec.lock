@@ -221,34 +221,34 @@ packages:
     dependency: "direct main"
     description:
       name: dcli
-      sha256: "583459aac5db4bd4a858fe84dc982cd6ca612ea27b562747cb6a899e9040251b"
+      sha256: fced0e419d0657f513c3e701dc838cef19f8e60048c144f4f8e31340864b0994
       url: "https://pub.dev"
     source: hosted
-    version: "8.1.1"
+    version: "7.1.1"
   dcli_common:
     dependency: transitive
     description:
       name: dcli_common
-      sha256: "6e36a9e2137c5de64c5cfc2f18d824554459e65c6092daf036643574cc9902cf"
+      sha256: be0e31188b15752be862ca40d29b5f68c7bad0806cf52b5de4ca9c0b6e87f98f
       url: "https://pub.dev"
     source: hosted
-    version: "8.0.0"
+    version: "7.2.0"
   dcli_core:
     dependency: "direct main"
     description:
       name: dcli_core
-      sha256: "69d030fdca204cd8636ccc7b8e09468d327051298f2ed24cdfe088588f38b5e7"
+      sha256: b209513926c8c7eb6f409cf2131326649299d29a8725761c27fa5253e3f9e355
       url: "https://pub.dev"
     source: hosted
-    version: "8.0.0"
+    version: "7.2.0"
   dcli_terminal:
     dependency: transitive
     description:
       name: dcli_terminal
-      sha256: "4837ba720a540c395feb48307b4fa8e5932d8c202fe5768cdb0bc46110b7761b"
+      sha256: fa6e504035553b5bf87305d1d15bb6d1467ee63efd44240529dccca0ffccefe8
       url: "https://pub.dev"
     source: hosted
-    version: "8.0.0"
+    version: "7.2.0"
   encrypt:
     dependency: "direct main"
     description:
@@ -517,10 +517,10 @@ packages:
     dependency: transitive
     description:
       name: pubspec_manager
-      sha256: "48f425bb06cb38bb8bda84e70794cb373416033519668bcf481efbda1c10d9a1"
+      sha256: a31ab6eb222c70ff4a8bcbfdfe4d11675487baed0e25ac2597dc2e6f67e50b84
       url: "https://pub.dev"
     source: hosted
-    version: "3.0.1"
+    version: "2.0.1"
   pubspec_parse:
     dependency: transitive
     description:
@@ -713,14 +713,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.6.12"
-  token_store:
-    dependency: "direct main"
-    description:
-      name: token_store
-      sha256: "03d3862e78abf9bb3098d12f862f6229b25ee0b3c63ea6ff584f002ff1f9add4"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.3.0"
   typed_data:
     dependency: transitive
     description:

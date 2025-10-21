@@ -26,19 +26,17 @@ class TableOfContent {
     RandomAccessFile securitBox,
     TOCEntry entry,
     FileEncryptor encryptor,
-  ) async =>
-      encryptor.encrypt(
-        join(entry.relativeTo!, entry.relativePathToFile),
-        securitBox,
-      );
+  ) async => encryptor.encrypt(
+    join(entry.relativeTo!, entry.relativePathToFile),
+    securitBox,
+  );
 
   /// encrypts and writes the TOC index (list of TOCEntrys )  to [securityBox]
   Future<void> append(
-      RandomAccessFile securityBox, FileEncryptor encryptor) async {
-    encryptor.encrypt(
-      tocStore.path,
-      securityBox,
-    );
+    RandomAccessFile securityBox,
+    FileEncryptor encryptor,
+  ) async {
+    encryptor.encrypt(pathToTemporaryToc, securityBox);
   }
 
   /// encrypt and save the toc to the [rafSecurityBox]
