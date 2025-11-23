@@ -1,21 +1,26 @@
 import 'dart:typed_data';
+
+import 'package:dvault/src/lockbox/file_entry.dart';
+import 'package:dvault/src/lockbox/lockbox_format.dart';
+import 'package:dvault/src/lockbox/lockbox_header.dart';
+import 'package:dvault/src/lockbox/lockbox_toc.dart';
 import 'package:test/test.dart';
-import 'package:dvault/src/format/dvault_format.dart';
-import 'package:dvault/src/format/dvault_header.dart';
-import 'package:dvault/src/format/dvault_toc.dart';
 
 void main() {
   group('DVaultFormat', () {
     test('constants are correct', () {
-      expect(DVaultFormat.magicBytes, equals([0x44, 0x56, 0x41, 0x55, 0x4C, 0x54]));
-      expect(DVaultFormat.version, equals(2));
-      expect(DVaultFormat.headerSize, equals(64));
-      expect(DVaultFormat.defaultPageSize, equals(64 * 1024));
-      expect(DVaultFormat.nonceSize, equals(12));
-      expect(DVaultFormat.authTagSize, equals(16));
-      expect(DVaultFormat.pageOverhead, equals(28));
-      expect(DVaultFormat.envPageCount, equals(1));
-      expect(DVaultFormat.firstFilePage, equals(1));
+      expect(
+        LockboxFormat.magicBytes,
+        equals([0x44, 0x56, 0x41, 0x55, 0x4C, 0x54]),
+      );
+      expect(LockboxFormat.version, equals(2));
+      expect(LockboxFormat.headerSize, equals(64));
+      expect(LockboxFormat.defaultPageSize, equals(64 * 1024));
+      expect(LockboxFormat.nonceSize, equals(12));
+      expect(LockboxFormat.authTagSize, equals(16));
+      expect(LockboxFormat.pageOverhead, equals(28));
+      expect(LockboxFormat.envPageCount, equals(1));
+      expect(LockboxFormat.firstFilePage, equals(1));
     });
   });
 
@@ -23,9 +28,9 @@ void main() {
     test('serializes and deserializes correctly', () {
       final salt = Uint8List.fromList(List.generate(16, (i) => i));
       final kdfParams = Uint8List.fromList(List.generate(16, (i) => i * 2));
-      
-      final header = DVaultHeader(
-        version: DVaultFormat.version,
+
+      final header = LockboxHeader(
+        version: LockboxFormat.version,
         pageSize: 65536,
         tocOffset: 1024,
         salt: salt,
@@ -33,9 +38,9 @@ void main() {
       );
 
       final bytes = header.toBytes();
-      expect(bytes.length, equals(DVaultFormat.headerSize));
+      expect(bytes.length, equals(LockboxFormat.headerSize));
 
-      final parsed = DVaultHeader.fromBytes(bytes);
+      final parsed = LockboxHeader.fromBytes(bytes);
       expect(parsed.version, equals(header.version));
       expect(parsed.pageSize, equals(header.pageSize));
       expect(parsed.tocOffset, equals(header.tocOffset));
@@ -46,27 +51,27 @@ void main() {
     test('rejects invalid magic bytes', () {
       final badBytes = Uint8List(64);
       badBytes.setRange(0, 6, [0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-      
+
       expect(
-        () => DVaultHeader.fromBytes(badBytes),
+        () => LockboxHeader.fromBytes(badBytes),
         throwsA(isA<FormatException>()),
       );
     });
 
     test('rejects invalid version', () {
       final badBytes = Uint8List(64);
-      badBytes.setRange(0, 6, DVaultFormat.magicBytes);
+      badBytes.setRange(0, 6, LockboxFormat.magicBytes);
       badBytes[6] = 99; // Invalid version
-      
+
       expect(
-        () => DVaultHeader.fromBytes(badBytes),
+        () => LockboxHeader.fromBytes(badBytes),
         throwsA(isA<FormatException>()),
       );
     });
 
     test('handles custom page sizes', () {
-      final header = DVaultHeader(
-        version: DVaultFormat.version,
+      final header = LockboxHeader(
+        version: LockboxFormat.version,
         pageSize: 128 * 1024, // 128KB
         tocOffset: 2048,
         salt: Uint8List(16),
@@ -74,23 +79,23 @@ void main() {
       );
 
       final bytes = header.toBytes();
-      final parsed = DVaultHeader.fromBytes(bytes);
-      
+      final parsed = LockboxHeader.fromBytes(bytes);
+
       expect(parsed.pageSize, equals(128 * 1024));
     });
   });
 
   group('DVaultTOC', () {
     test('serializes and deserializes empty TOC', () {
-      final toc = DVaultTOC();
+      final toc = LockboxTOC();
       final bytes = toc.toBytes();
-      
-      final parsed = DVaultTOC.fromBytes(bytes);
+
+      final parsed = LockboxTOC.fromBytes(bytes);
       expect(parsed.files, isEmpty);
     });
 
     test('serializes and deserializes TOC with files', () {
-      final toc = DVaultTOC();
+      final toc = LockboxTOC();
       toc.files['file1.txt'] = FileEntry(
         path: 'file1.txt',
         offset: 0,
@@ -107,7 +112,7 @@ void main() {
       );
 
       final bytes = toc.toBytes();
-      final parsed = DVaultTOC.fromBytes(bytes);
+      final parsed = LockboxTOC.fromBytes(bytes);
 
       expect(parsed.files.length, equals(2));
       expect(parsed.files['file1.txt']?.path, equals('file1.txt'));
@@ -119,7 +124,7 @@ void main() {
     });
 
     test('handles large file paths', () {
-      final toc = DVaultTOC();
+      final toc = LockboxTOC();
       final longPath = 'a' * 500; // 500 character path
       toc.files[longPath] = FileEntry(
         path: longPath,
@@ -130,13 +135,13 @@ void main() {
       );
 
       final bytes = toc.toBytes();
-      final parsed = DVaultTOC.fromBytes(bytes);
+      final parsed = LockboxTOC.fromBytes(bytes);
 
       expect(parsed.files[longPath]?.path, equals(longPath));
     });
 
     test('handles many files', () {
-      final toc = DVaultTOC();
+      final toc = LockboxTOC();
       for (int i = 0; i < 1000; i++) {
         toc.files['file$i.txt'] = FileEntry(
           path: 'file$i.txt',
@@ -148,14 +153,14 @@ void main() {
       }
 
       final bytes = toc.toBytes();
-      final parsed = DVaultTOC.fromBytes(bytes);
+      final parsed = LockboxTOC.fromBytes(bytes);
 
       expect(parsed.files.length, equals(1000));
       expect(parsed.files['file500.txt']?.offset, equals(50000));
     });
 
     test('handles unicode file names', () {
-      final toc = DVaultTOC();
+      final toc = LockboxTOC();
       toc.files['日本語.txt'] = FileEntry(
         path: '日本語.txt',
         offset: 0,
@@ -172,7 +177,7 @@ void main() {
       );
 
       final bytes = toc.toBytes();
-      final parsed = DVaultTOC.fromBytes(bytes);
+      final parsed = LockboxTOC.fromBytes(bytes);
 
       expect(parsed.files['日本語.txt']?.path, equals('日本語.txt'));
       expect(parsed.files['emoji_😀.txt']?.path, equals('emoji_😀.txt'));

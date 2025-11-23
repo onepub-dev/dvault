@@ -1,15 +1,15 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:dvault/src/vfs/dvault_file_system.dart';
+import 'package:dvault/src/vfs/lockbox_filesystem.dart';
 import 'package:file/file.dart';
 
-class DVaultFile extends File {
-  final DVaultFileSystem _fs;
+class LockboxFile extends File {
+  final LockboxFileSystem _fs;
   @override
   final String path;
 
-  DVaultFile(this._fs, this.path);
+  LockboxFile(this._fs, this.path);
 
   @override
   FileSystem get fileSystem => _fs;
@@ -17,7 +17,7 @@ class DVaultFile extends File {
   @override
   Future<File> create({bool recursive = false, bool exclusive = false}) async {
     // Creating a file means writing empty content
-    await _fs.repo.write(path, Uint8List(0));
+    await _fs.lockbox.write(path, Uint8List(0));
     return this;
   }
 
@@ -27,8 +27,8 @@ class DVaultFile extends File {
 
   @override
   Future<File> rename(String newPath) async {
-    await _fs.repo.rename(path, newPath);
-    return DVaultFile(_fs, newPath);
+    await _fs.lockbox.rename(path, newPath);
+    return LockboxFile(_fs, newPath);
   }
 
   @override
@@ -38,8 +38,8 @@ class DVaultFile extends File {
   @override
   Future<File> copy(String newPath) async {
     final content = await readAsBytes();
-    await _fs.repo.write(newPath, content);
-    return DVaultFile(_fs, newPath);
+    await _fs.lockbox.write(newPath, content);
+    return LockboxFile(_fs, newPath);
   }
 
   @override
@@ -48,7 +48,7 @@ class DVaultFile extends File {
 
   @override
   Future<int> length() async {
-    final entry = _fs.repo.stat(path);
+    final entry = _fs.lockbox.stat(path);
     return entry?.length ?? 0;
   }
 
@@ -57,7 +57,7 @@ class DVaultFile extends File {
 
   @override
   Future<DateTime> lastAccessed() async {
-    final entry = _fs.repo.stat(path);
+    final entry = _fs.lockbox.stat(path);
     return entry != null
         ? DateTime.fromMillisecondsSinceEpoch(entry.modified)
         : DateTime.now();
@@ -69,7 +69,7 @@ class DVaultFile extends File {
 
   @override
   Future<DateTime> lastModified() async {
-    final entry = _fs.repo.stat(path);
+    final entry = _fs.lockbox.stat(path);
     return entry != null
         ? DateTime.fromMillisecondsSinceEpoch(entry.modified)
         : DateTime.now();
@@ -85,7 +85,7 @@ class DVaultFile extends File {
     FileMode mode = FileMode.write,
     bool flush = false,
   }) async {
-    await _fs.repo.write(path, Uint8List.fromList(bytes));
+    await _fs.lockbox.write(path, Uint8List.fromList(bytes));
     return this;
   }
 
@@ -117,7 +117,7 @@ class DVaultFile extends File {
 
   @override
   Future<Uint8List> readAsBytes() async {
-    return await _fs.repo.read(path);
+    return await _fs.lockbox.read(path);
   }
 
   @override
@@ -146,7 +146,7 @@ class DVaultFile extends File {
 
   @override
   Future<bool> exists() async {
-    return _fs.repo.exists(path);
+    return _fs.lockbox.exists(path);
   }
 
   @override
@@ -154,7 +154,7 @@ class DVaultFile extends File {
 
   @override
   Future<File> delete({bool recursive = false}) async {
-    await _fs.repo.delete(path);
+    await _fs.lockbox.delete(path);
     return this;
   }
 

@@ -1,11 +1,12 @@
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:dvault/src/lockbox/file_entry.dart';
 
-import '../format/dvault_format.dart';
-import '../format/dvault_header.dart';
-import '../format/dvault_page.dart';
-import '../format/dvault_toc.dart';
+import 'lockbox_format.dart';
+import 'lockbox_header.dart';
+import 'lockbox_page.dart';
+import 'lockbox_toc.dart';
 
 /// Abstract base class for DVault repository implementations.
 ///
@@ -13,15 +14,18 @@ import '../format/dvault_toc.dart';
 /// - IORepository: CLI/VM using dart:io
 /// - OPFSRepository: Browser using OPFS
 /// - HttpRepository: Browser read-only using HTTP Range Requests
-abstract class DVaultRepository {
+abstract class LockBox {
   late final SecretKey _key;
-  late final DVaultHeader _header;
-  late DVaultTOC _toc;
+  late final LockboxHeader _header;
+  late LockboxTOC _toc;
   bool _dirty = false;
   final Map<String, String> _env = {};
 
+  /// File extension for lockbox files
+  static const String extension = 'lbox';
+
   // Protected constructor for subclasses
-  DVaultRepository();
+  LockBox();
 
   /// Platform-specific file I/O methods (to be implemented by subclasses)
 
@@ -43,8 +47,8 @@ abstract class DVaultRepository {
   /// Initialize the repository (called by subclass after opening file)
   Future<void> initialize({
     required SecretKey key,
-    required DVaultHeader header,
-    required DVaultTOC toc,
+    required LockboxHeader header,
+    required LockboxTOC toc,
   }) async {
     _key = key;
     _header = header;
@@ -52,11 +56,11 @@ abstract class DVaultRepository {
   }
 
   // Protected setter for subclasses
-  set toc(DVaultTOC value) => _toc = value;
+  set toc(LockboxTOC value) => _toc = value;
 
   // Protected getters for subclasses
   SecretKey get key => _key;
-  DVaultHeader get header => _header;
+  LockboxHeader get header => _header;
 
   // Shared encryption/decryption logic (platform-agnostic)
 
@@ -81,13 +85,13 @@ abstract class DVaultRepository {
     }
 
     final virtualPageSize = _header.pageSize;
-    final physicalPageSize = _header.pageSize + DVaultFormat.pageOverhead;
+    final physicalPageSize = _header.pageSize + LockboxFormat.pageOverhead;
 
     final totalFilePages =
         (virtualStreamSize + virtualPageSize - 1) ~/ virtualPageSize;
-    final totalPhysicalFilePages = totalFilePages + DVaultFormat.firstFilePage;
+    final totalPhysicalFilePages = totalFilePages + LockboxFormat.firstFilePage;
     final tocStartPhysicalOffset =
-        DVaultFormat.headerSize + (totalPhysicalFilePages * physicalPageSize);
+        LockboxFormat.headerSize + (totalPhysicalFilePages * physicalPageSize);
 
     var currentTocOffset = 0;
     var currentTocPageIdx = totalPhysicalFilePages;
@@ -128,7 +132,7 @@ abstract class DVaultRepository {
     await truncateFile(newFileSize);
 
     // Update header
-    final newHeader = DVaultHeader(
+    final newHeader = LockboxHeader(
       version: _header.version,
       pageSize: _header.pageSize,
       tocOffset: tocStartPhysicalOffset,
@@ -155,13 +159,13 @@ abstract class DVaultRepository {
 
     while (remaining > 0) {
       final virtualPageSize = _header.pageSize;
-      final physicalPageSize = _header.pageSize + DVaultFormat.pageOverhead;
+      final physicalPageSize = _header.pageSize + LockboxFormat.pageOverhead;
 
       final pageIdx = currentOffset ~/ virtualPageSize;
       final offsetInPage = currentOffset % virtualPageSize;
-      final physicalPageIdx = pageIdx + DVaultFormat.firstFilePage;
+      final physicalPageIdx = pageIdx + LockboxFormat.firstFilePage;
       final physicalOffset =
-          DVaultFormat.headerSize + (physicalPageIdx * physicalPageSize);
+          LockboxFormat.headerSize + (physicalPageIdx * physicalPageSize);
 
       final encryptedBytes = await readBytesAt(
         physicalOffset,
@@ -202,17 +206,17 @@ abstract class DVaultRepository {
     var currentOffset = startOffset;
 
     final virtualPageSize = _header.pageSize;
-    final physicalPageSize = _header.pageSize + DVaultFormat.pageOverhead;
+    final physicalPageSize = _header.pageSize + LockboxFormat.pageOverhead;
 
     while (written < length) {
       final pageIdx = currentOffset ~/ virtualPageSize;
       final offsetInPage = currentOffset % virtualPageSize;
-      final physicalPageIdx = pageIdx + DVaultFormat.firstFilePage;
+      final physicalPageIdx = pageIdx + LockboxFormat.firstFilePage;
 
       Uint8List pageData;
       if (offsetInPage > 0) {
         final physicalOffset =
-            DVaultFormat.headerSize + (physicalPageIdx * physicalPageSize);
+            LockboxFormat.headerSize + (physicalPageIdx * physicalPageSize);
         final encryptedBytes = await readBytesAt(
           physicalOffset,
           physicalPageSize,
@@ -242,12 +246,12 @@ abstract class DVaultRepository {
       final encryptedPage = await DVaultPage.encrypt(
         data: pageData,
         key: _key,
-        pageIndex: pageIdx + DVaultFormat.firstFilePage,
+        pageIndex: pageIdx + LockboxFormat.firstFilePage,
         salt: _header.salt,
       );
 
       final physicalOffset =
-          DVaultFormat.headerSize + (physicalPageIdx * physicalPageSize);
+          LockboxFormat.headerSize + (physicalPageIdx * physicalPageSize);
       await writeBytesAt(physicalOffset, encryptedPage);
 
       written += toWrite;
@@ -374,7 +378,7 @@ abstract class DVaultRepository {
       salt: _header.salt,
     );
 
-    await writeBytesAt(DVaultFormat.headerSize, encryptedPage);
+    await writeBytesAt(LockboxFormat.headerSize, encryptedPage);
   }
 
   // Simple JSON encoding/decoding (to avoid dart:convert in web)

@@ -7,6 +7,7 @@
 import 'package:dcli/dcli.dart';
 import 'package:dvault/src/dot_vault_file.dart';
 import 'package:dvault/src/dvault.dart';
+import 'package:dvault/src/lockbox/lock_box.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -17,16 +18,14 @@ void main() {
     /// create a test security box
     ///
 
-    await runCommand(
-      [
-        'decrypt',
-        '--env',
-        '-v',
-        'test/data/test_one.txt.sbox',
-        '-f',
-        'test/data/test_one.txt.result'
-      ],
-    );
+    await runCommand([
+      'decrypt',
+      '--env',
+      '-v',
+      'test/data/test_one.txt.${LockBox.extension}',
+      '-f',
+      'test/data/test_one.txt.result',
+    ]);
 
     //  ask('passphrase');
     DotVaultFile.load();

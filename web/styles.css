@@ -84,7 +84,7 @@ h3 {
     color: #721c24;
 }
 
-.vault-section, .http-section {
+.lockbox-section, .http-section {
     background: #f8f9fa;
     padding: 20px;
     border-radius: 8px;
@@ -153,7 +153,7 @@ textarea:focus {
     box-shadow: 0 4px 12px rgba(108, 117, 125, 0.4);
 }
 
-.vault-controls {
+.lockbox-controls {
     background: #f8f9fa;
     padding: 20px;
     border-radius: 8px;

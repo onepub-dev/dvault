@@ -1,5 +1,5 @@
 /// Constants and types for the DVault format.
-class DVaultFormat {
+class LockboxFormat {
   /// Magic bytes "DVAULT"
   static const List<int> magicBytes = [0x44, 0x56, 0x41, 0x55, 0x4C, 0x54];
 

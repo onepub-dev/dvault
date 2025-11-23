@@ -4,30 +4,30 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:web/web.dart' as web;
 
-import '../format/dvault_format.dart';
-import '../format/dvault_header.dart';
-import '../format/dvault_page.dart';
-import '../format/dvault_toc.dart';
-import 'dvault_repository_base.dart';
+import '../lockbox/lockbox_format.dart';
+import '../lockbox/lockbox_header.dart';
+import '../lockbox/lockbox_page.dart';
+import '../lockbox/lockbox_toc.dart';
+import '../lockbox/lock_box.dart';
 
 /// Read-only repository using HTTP Range Requests
-class HttpRepository extends DVaultRepository {
+class HTTPLockbox extends LockBox {
   final String _url;
   final Map<int, Uint8List> _cache = {};
   int? _fileSize;
 
-  HttpRepository._(this._url);
+  HTTPLockbox._(this._url);
 
   /// Open a remote vault via HTTP
-  static Future<HttpRepository> open({
+  static Future<HTTPLockbox> open({
     required String url,
     required String password,
   }) async {
-    final repo = HttpRepository._(url);
+    final repo = HTTPLockbox._(url);
 
     // Read header
     final headers = web.Headers();
-    headers.set('Range', 'bytes=0-${DVaultFormat.headerSize - 1}');
+    headers.set('Range', 'bytes=0-${LockboxFormat.headerSize - 1}');
 
     final response =
         await web.window
@@ -41,14 +41,14 @@ class HttpRepository extends DVaultRepository {
     final arrayBuffer = await response.arrayBuffer().toDart;
     final headerBytes = arrayBuffer.toDart.asUint8List();
 
-    if (headerBytes.length < DVaultFormat.headerSize) {
+    if (headerBytes.length < LockboxFormat.headerSize) {
       throw Exception('Invalid vault: header too small');
     }
 
-    final header = DVaultHeader.fromBytes(headerBytes);
+    final header = LockboxHeader.fromBytes(headerBytes);
     final key = await _deriveKey(password, header.salt);
 
-    await repo.initialize(key: key, header: header, toc: DVaultTOC());
+    await repo.initialize(key: key, header: header, toc: LockboxTOC());
 
     // Get file size from Content-Range header
     final contentRange = response.headers.get('Content-Range');
@@ -60,8 +60,8 @@ class HttpRepository extends DVaultRepository {
     }
 
     // Read Env Page (Page 0)
-    final physicalPageSize = header.pageSize + DVaultFormat.pageOverhead;
-    final envPageStart = DVaultFormat.headerSize;
+    final physicalPageSize = header.pageSize + LockboxFormat.pageOverhead;
+    final envPageStart = LockboxFormat.headerSize;
 
     final envPage = await repo.readBytesAt(envPageStart, physicalPageSize);
     if (envPage.length == physicalPageSize) {
@@ -81,8 +81,8 @@ class HttpRepository extends DVaultRepository {
     return repo;
   }
 
-  Future<DVaultTOC> _readTOC(int tocOffset) async {
-    final physicalPageSize = header.pageSize + DVaultFormat.pageOverhead;
+  Future<LockboxTOC> _readTOC(int tocOffset) async {
+    final physicalPageSize = header.pageSize + LockboxFormat.pageOverhead;
 
     final tocBytes = <int>[];
     var offset = tocOffset;
@@ -113,10 +113,10 @@ class HttpRepository extends DVaultRepository {
     }
 
     if (tocBytes.isEmpty) {
-      return DVaultTOC();
+      return LockboxTOC();
     }
 
-    return DVaultTOC.fromBytes(Uint8List.fromList(tocBytes));
+    return LockboxTOC.fromBytes(Uint8List.fromList(tocBytes));
   }
 
   static Future<SecretKey> _deriveKey(String password, Uint8List salt) async {
@@ -198,7 +198,7 @@ class HttpRepository extends DVaultRepository {
 
   @override
   Future<void> truncateFile(int length) async {
-    throw UnsupportedError('HTTP vaults are read-only');
+    throw UnsupportedError('HTTP lockboxes are read-only');
   }
 
   @override
@@ -209,17 +209,17 @@ class HttpRepository extends DVaultRepository {
   /// Override write operations to throw UnsupportedError
   @override
   Future<void> write(String path, Uint8List data) async {
-    throw UnsupportedError('HTTP vaults are read-only');
+    throw UnsupportedError('HTTP lockboxes are read-only');
   }
 
   @override
   Future<void> delete(String path) async {
-    throw UnsupportedError('HTTP vaults are read-only');
+    throw UnsupportedError('HTTP lockboxes are read-only');
   }
 
   @override
   Future<void> rename(String oldPath, String newPath) async {
-    throw UnsupportedError('HTTP vaults are read-only');
+    throw UnsupportedError('HTTP lockboxes are read-only');
   }
 
   @override

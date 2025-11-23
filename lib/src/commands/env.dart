@@ -1,14 +1,16 @@
 import 'dart:io';
+
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
-import '../vfs/io_repository.dart';
+
 import '../util/password_helper.dart';
+import '../vfs/io_lockbox.dart';
 
 class EnvCommand extends Command<void> {
   @override
   final String name = 'env';
   @override
-  final String description = 'Manage environment variables in the vault.';
+  final String description = 'Manage environment variables in the lockbox.';
 
   EnvCommand() {
     addSubcommand(EnvSetCommand());
@@ -30,30 +32,30 @@ class EnvSetCommand extends Command<void> {
   @override
   void run() async {
     if (argResults!.rest.length < 3) {
-      print(red('Usage: dvault env set <vault_path> <key> <value>'));
+      print(red('Usage: dvault env set <lockbox> <key> <value>'));
       exit(1);
     }
 
-    final vaultPath = argResults!.rest[0];
+    final lockboxPath = argResults!.rest[0];
     final key = argResults!.rest[1];
     final value = argResults!.rest[2];
 
-    if (!exists(vaultPath)) {
-      print(red('Vault not found: $vaultPath'));
+    if (!exists(lockboxPath)) {
+      print(red('Lockbox not found: $lockboxPath'));
       exit(1);
     }
 
     final password = await getPassword(this);
 
     try {
-      final repo = await IORepository.open(
-        file: File(vaultPath),
+      final repo = await IOLockbox.open(
+        file: File(lockboxPath),
         password: password,
       );
 
       await repo.setEnv(key, value);
       print(green('Set $key=$value'));
-      
+
       await repo.close();
     } catch (e) {
       print(red('Error: $e'));
@@ -75,23 +77,23 @@ class EnvGetCommand extends Command<void> {
   @override
   void run() async {
     if (argResults!.rest.length < 2) {
-      print(red('Usage: dvault env get <vault_path> <key>'));
+      print(red('Usage: dvault env get <lockbox_path> <key>'));
       exit(1);
     }
 
-    final vaultPath = argResults!.rest[0];
+    final lockboxPath = argResults!.rest[0];
     final key = argResults!.rest[1];
 
-    if (!exists(vaultPath)) {
-      print(red('Vault not found: $vaultPath'));
+    if (!exists(lockboxPath)) {
+      print(red('Lockbox not found: $lockboxPath'));
       exit(1);
     }
 
     final password = await getPassword(this);
 
     try {
-      final repo = await IORepository.open(
-        file: File(vaultPath),
+      final repo = await IOLockbox.open(
+        file: File(lockboxPath),
         password: password,
       );
 
@@ -102,7 +104,7 @@ class EnvGetCommand extends Command<void> {
         print(red('Key not found: $key'));
         exit(1);
       }
-      
+
       await repo.close();
     } catch (e) {
       print(red('Error: $e'));
@@ -124,22 +126,22 @@ class EnvListCommand extends Command<void> {
   @override
   void run() async {
     if (argResults!.rest.isEmpty) {
-      print(red('Usage: dvault env list <vault_path>'));
+      print(red('Usage: dvault env list <lockbox_path>'));
       exit(1);
     }
 
-    final vaultPath = argResults!.rest[0];
+    final lockboxPath = argResults!.rest[0];
 
-    if (!exists(vaultPath)) {
-      print(red('Vault not found: $vaultPath'));
+    if (!exists(lockboxPath)) {
+      print(red('Lockbox  not found: $lockboxPath'));
       exit(1);
     }
 
     final password = await getPassword(this);
 
     try {
-      final repo = await IORepository.open(
-        file: File(vaultPath),
+      final repo = await IOLockbox.open(
+        file: File(lockboxPath),
         password: password,
       );
 
@@ -147,7 +149,7 @@ class EnvListCommand extends Command<void> {
       for (final entry in envs.entries) {
         print('${entry.key}=${entry.value}');
       }
-      
+
       await repo.close();
     } catch (e) {
       print(red('Error: $e'));

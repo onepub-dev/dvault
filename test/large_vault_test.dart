@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:test/test.dart';
+
+import 'package:dvault/src/vfs/io_lockbox.dart';
 import 'package:path/path.dart' as p;
-import 'package:dvault/src/vfs/io_repository.dart';
+import 'package:path/path.dart' as LockBox;
+import 'package:test/test.dart';
 
 void main() {
   late Directory tempDir;
@@ -11,7 +13,7 @@ void main() {
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('dvault_large_test_');
-    vaultFile = File(p.join(tempDir.path, 'large.vault'));
+    vaultFile = File(p.join(tempDir.path, 'large.${LockBox.extension}'));
   });
 
   tearDown(() {
@@ -22,7 +24,7 @@ void main() {
 
   group('Large Vault Performance', () {
     test('handles 100MB file', () async {
-      final repo = await IORepository.open(
+      final repo = await IOLockbox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -30,25 +32,27 @@ void main() {
 
       // Create 100MB of data
       final chunkSize = 1024 * 1024; // 1MB chunks
-      final totalSize = 100 * 1024 * 1024; // 100MB
-      
+      //   final totalSize = 100 * 1024 * 1024; // 100MB
+
       print('Creating 100MB file...');
       final stopwatch = Stopwatch()..start();
-      
+
       // Write in smaller chunks to avoid memory issues
       for (int i = 0; i < 100; i++) {
-        final chunk = Uint8List.fromList(List.generate(chunkSize, (j) => (i + j) % 256));
+        final chunk = Uint8List.fromList(
+          List.generate(chunkSize, (j) => (i + j) % 256),
+        );
         await repo.write('chunk_$i.bin', chunk);
       }
-      
+
       stopwatch.stop();
       print('Write time: ${stopwatch.elapsedMilliseconds}ms');
-      
+
       // Verify we can read back
       final readStopwatch = Stopwatch()..start();
       final firstChunk = await repo.read('chunk_0.bin');
       readStopwatch.stop();
-      
+
       print('Read time (first chunk): ${readStopwatch.elapsedMilliseconds}ms');
       expect(firstChunk.length, equals(chunkSize));
 
@@ -56,7 +60,7 @@ void main() {
     }, timeout: Timeout(Duration(minutes: 5)));
 
     test('handles many small files (10,000)', () async {
-      final repo = await IORepository.open(
+      final repo = await IOLockbox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -64,33 +68,36 @@ void main() {
 
       print('Creating 10,000 small files...');
       final stopwatch = Stopwatch()..start();
-      
+
       for (int i = 0; i < 10000; i++) {
         final content = Uint8List.fromList('File $i content'.codeUnits);
         await repo.write('file_$i.txt', content);
-        
+
         if (i % 1000 == 0) {
           print('Created $i files...');
         }
       }
-      
+
       stopwatch.stop();
       print('Total write time: ${stopwatch.elapsedMilliseconds}ms');
       print('Average per file: ${stopwatch.elapsedMilliseconds / 10000}ms');
-      
+
       // Test random access
       final readStopwatch = Stopwatch()..start();
       final content5000 = await repo.read('file_5000.txt');
       readStopwatch.stop();
-      
+
       print('Random read time: ${readStopwatch.elapsedMilliseconds}ms');
-      expect(content5000, equals(Uint8List.fromList('File 5000 content'.codeUnits)));
+      expect(
+        content5000,
+        equals(Uint8List.fromList('File 5000 content'.codeUnits)),
+      );
 
       await repo.close();
     }, timeout: Timeout(Duration(minutes: 10)));
 
     test('handles deep directory structure', () async {
-      final repo = await IORepository.open(
+      final repo = await IOLockbox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -99,18 +106,18 @@ void main() {
       // Create 100 levels deep
       print('Creating deep directory structure...');
       final stopwatch = Stopwatch()..start();
-      
+
       String path = '';
       for (int i = 0; i < 100; i++) {
         path += 'dir$i/';
       }
       path += 'deep_file.txt';
-      
+
       await repo.write(path, Uint8List.fromList('deep content'.codeUnits));
-      
+
       stopwatch.stop();
       print('Write time: ${stopwatch.elapsedMilliseconds}ms');
-      
+
       // Verify we can read it back
       expect(repo.exists(path), isTrue);
       final content = await repo.read(path);
@@ -120,7 +127,7 @@ void main() {
     });
 
     test('vault file size is reasonable', () async {
-      final repo = await IORepository.open(
+      final repo = await IOLockbox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -129,7 +136,7 @@ void main() {
       // Write 10MB of actual data
       final totalDataSize = 10 * 1024 * 1024;
       final chunkSize = 1024 * 1024; // 1MB
-      
+
       for (int i = 0; i < 10; i++) {
         final chunk = Uint8List(chunkSize);
         for (int j = 0; j < chunkSize; j++) {
@@ -137,23 +144,25 @@ void main() {
         }
         await repo.write('data_$i.bin', chunk);
       }
-      
+
       await repo.close();
 
       final vaultSize = vaultFile.lengthSync();
       final overhead = vaultSize - totalDataSize;
       final overheadPercent = (overhead / totalDataSize) * 100;
-      
+
       print('Data size: ${totalDataSize / 1024 / 1024}MB');
       print('Vault size: ${vaultSize / 1024 / 1024}MB');
-      print('Overhead: ${overhead / 1024}KB (${overheadPercent.toStringAsFixed(2)}%)');
-      
+      print(
+        'Overhead: ${overhead / 1024}KB (${overheadPercent.toStringAsFixed(2)}%)',
+      );
+
       // Overhead should be reasonable (< 10% for this size)
       expect(overheadPercent, lessThan(10));
     });
 
     test('list operation performance on large vault', () async {
-      final repo = await IORepository.open(
+      final repo = await IOLockbox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -168,16 +177,19 @@ void main() {
       final stopwatch = Stopwatch()..start();
       final files = repo.list('/');
       stopwatch.stop();
-      
+
       print('List time for 1000 files: ${stopwatch.elapsedMilliseconds}ms');
       expect(files.length, equals(1000));
-      expect(stopwatch.elapsedMilliseconds, lessThan(1000)); // Should be fast (< 1s)
+      expect(
+        stopwatch.elapsedMilliseconds,
+        lessThan(1000),
+      ); // Should be fast (< 1s)
 
       await repo.close();
     });
 
     test('env vars work with large vault', () async {
-      final repo = await IORepository.open(
+      final repo = await IOLockbox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -192,18 +204,20 @@ void main() {
       final stopwatch = Stopwatch()..start();
       await repo.setEnv('TEST_VAR', 'test_value');
       stopwatch.stop();
-      
-      print('Set env var time in large vault: ${stopwatch.elapsedMilliseconds}ms');
-      expect(stopwatch.elapsedMilliseconds, lessThan(100)); // Should be very fast
+
+      print(
+        'Set env var time in large vault: ${stopwatch.elapsedMilliseconds}ms',
+      );
+      expect(
+        stopwatch.elapsedMilliseconds,
+        lessThan(100),
+      ); // Should be very fast
 
       // Verify env var persists
       await repo.close();
-      
-      final repo2 = await IORepository.open(
-        file: vaultFile,
-        password: password,
-      );
-      
+
+      final repo2 = await IOLockbox.open(file: vaultFile, password: password);
+
       expect(repo2.getEnv('TEST_VAR'), equals('test_value'));
       await repo2.close();
     });
@@ -211,7 +225,7 @@ void main() {
 
   group('Stress Tests', () {
     test('random access pattern', () async {
-      final repo = await IORepository.open(
+      final repo = await IOLockbox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -219,19 +233,22 @@ void main() {
 
       // Create 100 files
       for (int i = 0; i < 100; i++) {
-        await repo.write('file_$i.txt', Uint8List.fromList('File $i'.codeUnits));
+        await repo.write(
+          'file_$i.txt',
+          Uint8List.fromList('File $i'.codeUnits),
+        );
       }
 
       // Random access
       final random = Random(42); // Fixed seed for reproducibility
       final stopwatch = Stopwatch()..start();
-      
+
       for (int i = 0; i < 100; i++) {
         final fileNum = random.nextInt(100);
         final content = await repo.read('file_$fileNum.txt');
         expect(content.length, greaterThan(0));
       }
-      
+
       stopwatch.stop();
       print('100 random reads: ${stopwatch.elapsedMilliseconds}ms');
 

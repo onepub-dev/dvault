@@ -1,28 +1,13 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:dvault/src/lockbox/file_entry.dart';
 import 'package:dvault/src/util/byte_data_helper.dart';
 
-class FileEntry {
-  final String path;
-  final int offset;
-  final int length;
-  final int created; // Milliseconds since epoch
-  final int modified; // Milliseconds since epoch
-
-  FileEntry({
-    required this.path,
-    required this.offset,
-    required this.length,
-    required this.created,
-    required this.modified,
-  });
-}
-
-class DVaultTOC {
+class LockboxTOC {
   final Map<String, FileEntry> files = {};
 
-  DVaultTOC();
+  LockboxTOC();
 
   /// Serializes the TOC to a byte list.
   Uint8List toBytes() {
@@ -61,8 +46,8 @@ class DVaultTOC {
   }
 
   /// Parses the TOC from a byte list.
-  static DVaultTOC fromBytes(Uint8List bytes) {
-    final toc = DVaultTOC();
+  static LockboxTOC fromBytes(Uint8List bytes) {
+    final toc = LockboxTOC();
     final data = ByteData.view(bytes.buffer);
     int offset = 0;
 

@@ -14,7 +14,7 @@
 // void main() {
 //   test('security box ...', () async {
 //     await withTempDirAsync((dir) async {
-//       final pathToSecurityBox = join(dir, 'test.sbox');
+//       final pathToSecurityBox = join(dir, 'test.${LockBox.extension}');
 //       var securityBox = SecurityBox(pathToSecurityBox);
 
 //       await withTempFileAsync(

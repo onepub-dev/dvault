@@ -3,22 +3,22 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
 
-import '../format/dvault_format.dart';
+import '../lockbox/lockbox_format.dart';
 import '../util/password_helper.dart';
-import '../vfs/io_repository.dart';
+import '../vfs/io_lockbox.dart';
 
 class InitCommand extends Command<void> {
   @override
   final String name = 'init';
   @override
-  final String description = 'Initialize a new vault.';
+  final String description = 'Initialize a new lockbox.';
 
   InitCommand() {
     argParser.addOption(
       'page-size',
       abbr: 'p',
       help: 'Page size in bytes (default: 64KB)',
-      defaultsTo: DVaultFormat.defaultPageSize.toString(),
+      defaultsTo: LockboxFormat.defaultPageSize.toString(),
     );
     addPasswordOptions(this);
   }
@@ -30,13 +30,13 @@ class InitCommand extends Command<void> {
     if (argResults!.rest.isEmpty) {
       print(
         red(
-          'Usage: dvault init <vault_path> [--page-size <bytes>] [--password-file <file>]',
+          'Usage: dvault init <lockbox_path> [--page-size <bytes>] [--password-file <file>]',
         ),
       );
       exit(1);
     }
 
-    final vaultPath = argResults!.rest[0];
+    final lockboxPath = argResults!.rest[0];
     final pageSizeStr = argResults!['page-size'] as String;
     final pageSize = int.tryParse(pageSizeStr);
 
@@ -45,8 +45,8 @@ class InitCommand extends Command<void> {
       exit(1);
     }
 
-    if (exists(vaultPath)) {
-      print(red('Vault already exists: $vaultPath'));
+    if (exists(lockboxPath)) {
+      print(red('Lockbox already exists: $lockboxPath'));
       exit(1);
     }
 
@@ -70,8 +70,8 @@ class InitCommand extends Command<void> {
     }
 
     try {
-      final repo = await IORepository.open(
-        file: File(vaultPath),
+      final repo = await IOLockbox.open(
+        file: File(lockboxPath),
         password: password,
         create: true,
         pageSize: pageSize,
@@ -80,7 +80,7 @@ class InitCommand extends Command<void> {
       await repo.close();
       print(
         green(
-          'Vault initialized at $vaultPath with page size $pageSize bytes.',
+          'Lockbox initialized at $lockboxPath with page size $pageSize bytes.',
         ),
       );
     } catch (e) {

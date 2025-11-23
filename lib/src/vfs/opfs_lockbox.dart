@@ -5,25 +5,25 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:web/web.dart' as web;
 
-import '../format/dvault_format.dart';
-import '../format/dvault_header.dart';
-import '../format/dvault_page.dart';
-import '../format/dvault_toc.dart';
-import 'dvault_repository_base.dart';
+import '../lockbox/lockbox_format.dart';
+import '../lockbox/lockbox_header.dart';
+import '../lockbox/lockbox_page.dart';
+import '../lockbox/lockbox_toc.dart';
+import '../lockbox/lock_box.dart';
 
 /// Browser implementation using Origin Private File System (OPFS)
-class OPFSRepository extends DVaultRepository {
+class OPFSLockbox extends LockBox {
   final web.FileSystemFileHandle _fileHandle;
   int _fileSize = 0;
 
-  OPFSRepository._(this._fileHandle);
+  OPFSLockbox._(this._fileHandle);
 
   /// Open a vault stored in OPFS
-  static Future<OPFSRepository> open({
+  static Future<OPFSLockbox> open({
     required String vaultName,
     required String password,
     bool create = false,
-    int pageSize = DVaultFormat.defaultPageSize,
+    int pageSize = LockboxFormat.defaultPageSize,
   }) async {
     // Get OPFS root directory
     final root = await web.window.navigator.storage.getDirectory().toDart;
@@ -37,7 +37,7 @@ class OPFSRepository extends DVaultRepository {
             )
             .toDart;
 
-    final repo = OPFSRepository._(fileHandle);
+    final repo = OPFSLockbox._(fileHandle);
 
     // Get file size
     final file = await fileHandle.getFile().toDart;
@@ -48,16 +48,16 @@ class OPFSRepository extends DVaultRepository {
       final salt = _generateSalt();
       final kdfParams = Uint8List(16);
 
-      final header = DVaultHeader(
-        version: DVaultFormat.version,
+      final header = LockboxHeader(
+        version: LockboxFormat.version,
         pageSize: pageSize,
         tocOffset:
-            DVaultFormat.headerSize + (pageSize + DVaultFormat.pageOverhead),
+            LockboxFormat.headerSize + (pageSize + LockboxFormat.pageOverhead),
         salt: salt,
         kdfParams: kdfParams,
       );
 
-      final toc = DVaultTOC();
+      final toc = LockboxTOC();
       final key = await _deriveKey(password, salt);
 
       // Get writable stream
@@ -80,7 +80,7 @@ class OPFSRepository extends DVaultRepository {
 
       await repo.initialize(key: key, header: header, toc: toc);
       repo._fileSize =
-          DVaultFormat.headerSize + (pageSize + DVaultFormat.pageOverhead);
+          LockboxFormat.headerSize + (pageSize + LockboxFormat.pageOverhead);
       return repo;
     } else {
       // Read existing vault
@@ -88,21 +88,21 @@ class OPFSRepository extends DVaultRepository {
       final arrayBuffer = await file.arrayBuffer().toDart;
       final bytes = arrayBuffer.toDart.asUint8List();
 
-      if (bytes.length < DVaultFormat.headerSize) {
+      if (bytes.length < LockboxFormat.headerSize) {
         throw Exception('Invalid vault file: too small');
       }
 
-      final headerBytes = bytes.sublist(0, DVaultFormat.headerSize);
-      final header = DVaultHeader.fromBytes(headerBytes);
+      final headerBytes = bytes.sublist(0, LockboxFormat.headerSize);
+      final header = LockboxHeader.fromBytes(headerBytes);
 
       final key = await _deriveKey(password, header.salt);
 
-      await repo.initialize(key: key, header: header, toc: DVaultTOC());
+      await repo.initialize(key: key, header: header, toc: LockboxTOC());
       repo._fileSize = bytes.length;
 
       // Read Env Page (Page 0)
-      final physicalPageSize = header.pageSize + DVaultFormat.pageOverhead;
-      final envPageStart = DVaultFormat.headerSize;
+      final physicalPageSize = header.pageSize + LockboxFormat.pageOverhead;
+      final envPageStart = LockboxFormat.headerSize;
       final envPageEnd = envPageStart + physicalPageSize;
 
       if (bytes.length >= envPageEnd) {
@@ -134,7 +134,7 @@ class OPFSRepository extends DVaultRepository {
         }
 
         if (tocBytes.isNotEmpty) {
-          repo.toc = DVaultTOC.fromBytes(Uint8List.fromList(tocBytes));
+          repo.toc = LockboxTOC.fromBytes(Uint8List.fromList(tocBytes));
         }
       }
 

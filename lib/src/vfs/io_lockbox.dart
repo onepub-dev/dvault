@@ -3,23 +3,23 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
-import '../format/dvault_format.dart';
-import '../format/dvault_header.dart';
-import '../format/dvault_page.dart';
-import '../format/dvault_toc.dart';
-import 'dvault_repository_base.dart';
+import '../lockbox/lockbox_format.dart';
+import '../lockbox/lockbox_header.dart';
+import '../lockbox/lockbox_page.dart';
+import '../lockbox/lockbox_toc.dart';
+import '../lockbox/lock_box.dart';
 
 /// CLI/VM implementation of DVaultRepository using dart:io
-class IORepository extends DVaultRepository {
+class IOLockbox extends LockBox {
   final RandomAccessFile _raf;
 
-  IORepository._(this._raf);
+  IOLockbox._(this._raf);
 
-  static Future<IORepository> open({
+  static Future<IOLockbox> open({
     required File file,
     required String password,
     bool create = false,
-    int pageSize = DVaultFormat.defaultPageSize,
+    int pageSize = LockboxFormat.defaultPageSize,
   }) async {
     final raf = await file.open(mode: FileMode.append);
 
@@ -34,16 +34,16 @@ class IORepository extends DVaultRepository {
 
       final kdfParams = Uint8List(16);
 
-      final header = DVaultHeader(
-        version: DVaultFormat.version,
+      final header = LockboxHeader(
+        version: LockboxFormat.version,
         pageSize: pageSize,
         tocOffset:
-            DVaultFormat.headerSize + (pageSize + DVaultFormat.pageOverhead),
+            LockboxFormat.headerSize + (pageSize + LockboxFormat.pageOverhead),
         salt: salt,
         kdfParams: kdfParams,
       );
 
-      final toc = DVaultTOC();
+      final toc = LockboxTOC();
       final key = await _deriveKey(password, salt);
 
       // Write Header
@@ -58,27 +58,27 @@ class IORepository extends DVaultRepository {
         pageIndex: 0,
         salt: salt,
       );
-      await raf.setPosition(DVaultFormat.headerSize);
+      await raf.setPosition(LockboxFormat.headerSize);
       await raf.writeFrom(encryptedEnvPage);
 
-      final repo = IORepository._(raf);
+      final repo = IOLockbox._(raf);
       await repo.initialize(key: key, header: header, toc: toc);
       return repo;
     } else {
       // Read Header
       await raf.setPosition(0);
-      final headerBytes = await raf.read(DVaultFormat.headerSize);
-      final header = DVaultHeader.fromBytes(headerBytes);
+      final headerBytes = await raf.read(LockboxFormat.headerSize);
+      final header = LockboxHeader.fromBytes(headerBytes);
 
       final key = await _deriveKey(password, header.salt);
 
       // Read Env Page (Page 0)
-      final physicalPageSize = header.pageSize + DVaultFormat.pageOverhead;
-      await raf.setPosition(DVaultFormat.headerSize);
+      final physicalPageSize = header.pageSize + LockboxFormat.pageOverhead;
+      await raf.setPosition(LockboxFormat.headerSize);
       final encryptedEnvPage = await raf.read(physicalPageSize);
 
-      final repo = IORepository._(raf);
-      await repo.initialize(key: key, header: header, toc: DVaultTOC());
+      final repo = IOLockbox._(raf);
+      await repo.initialize(key: key, header: header, toc: LockboxTOC());
 
       if (encryptedEnvPage.length == physicalPageSize) {
         final envData = await DVaultPage.decrypt(
@@ -96,9 +96,8 @@ class IORepository extends DVaultRepository {
         await raf.setPosition(header.tocOffset);
 
         final tocBytes = BytesBuilder();
-        final totalFilePages =
-            (header.tocOffset - DVaultFormat.headerSize) ~/ physicalPageSize;
-        var currentPageIdx = totalFilePages;
+        // final totalFilePages =
+        //     (header.tocOffset - DVaultFormat.headerSize) ~/ physicalPageSize;
 
         var read = 0;
         while (read < tocLength) {
@@ -112,11 +111,10 @@ class IORepository extends DVaultRepository {
 
           tocBytes.add(decryptedPage);
           read += encryptedBytes.length;
-          currentPageIdx++;
         }
 
         if (tocBytes.isNotEmpty) {
-          repo.toc = DVaultTOC.fromBytes(tocBytes.toBytes());
+          repo.toc = LockboxTOC.fromBytes(tocBytes.toBytes());
         }
       }
 

@@ -11,22 +11,22 @@ import 'package:dcli/dcli.dart';
 import 'package:path/path.dart';
 
 import '../util/password_helper.dart';
-import '../vfs/io_repository.dart';
+import '../vfs/io_lockbox.dart';
 
 class UnlockCommand extends Command<void> {
   UnlockCommand() {
     argParser
       ..addOption(
-        'vault',
-        abbr: 'v',
-        help: 'The path and filename of the vault to decrypt.',
+        'lockbox',
+        abbr: 'b',
+        help: 'The path and filename of the lockbox to decrypt.',
       )
       ..addOption(
         'to',
         abbr: 't',
         help: '''
     The path to store the decrypted data in.
-    If not specified then the basename of the vault will be used.''',
+    If not specified then the basename of the lockbox will be used.''',
       )
       ..addFlag(
         'overwrite',
@@ -40,11 +40,11 @@ class UnlockCommand extends Command<void> {
 
   @override
   String get description => '''
-Decrypts the passed in vault and extracts all files.
-  dvault unlock --vault <vault_name.dvault>
+Decrypts the passed in lockbox and extracts all files.
+  dvault unlock --lockbox <lockbox_name.lockbox>
   
   Extract to a specific directory:
-    dvault unlock --vault important.dvault --to /path/to/extract
+    dvault unlock --lockbox important.lockbox --to /path/to/extract
   ''';
 
   @override
@@ -52,17 +52,17 @@ Decrypts the passed in vault and extracts all files.
 
   @override
   Future<void> run() async {
-    final pathToVault = argResults!['vault'] as String?;
+    final pathToLockbox = argResults!['lockbox'] as String?;
 
-    if (pathToVault == null) {
-      printerr("You must pass a 'vault' via the --vault option.");
+    if (pathToLockbox == null) {
+      printerr("You must pass a 'lockbox' via the --lockbox option.");
       print(argParser.usage);
       exit(1);
     }
 
-    if (!exists(pathToVault)) {
+    if (!exists(pathToLockbox)) {
       printerr(
-        'The passed vault path ${truepath(pathToVault)} '
+        'The passed lockbox path ${truepath(pathToLockbox)} '
         "doesn't exist.",
       );
       print(argParser.usage);
@@ -71,10 +71,10 @@ Decrypts the passed in vault and extracts all files.
 
     var outputPath = argResults!['to'] as String?;
 
-    // no output so use the [pathToVault] after stripping the .dvault extension.
+    // no output so use the [pathToLockbox] after stripping the .lockbox extension.
     outputPath ??= join(
-      dirname(pathToVault),
-      basenameWithoutExtension(pathToVault),
+      dirname(pathToLockbox),
+      basenameWithoutExtension(pathToLockbox),
     );
 
     final overwrite = argResults!['overwrite'] as bool;
@@ -103,24 +103,21 @@ Decrypts the passed in vault and extracts all files.
       exit(1);
     }
 
-    // Open and extract vault
-    IORepository? repo;
+    // Open and extract lockbox
+    IOLockbox? lockbox;
     try {
-      repo = await IORepository.open(
-        file: File(pathToVault),
-        password: password,
-      );
+      lockbox = await IOLockbox.open(file: File(pathToLockbox), password: password);
 
       // Create output directory
       createDir(outputPath, recursive: true);
 
       // Extract all files
-      final files = repo.list('/', recursive: true);
+      final files = lockbox.list('/', recursive: true);
       var count = 0;
 
       for (final filePath in files) {
-        if (!repo.isDirectory(filePath)) {
-          final data = await repo.read(filePath);
+        if (!lockbox.isDirectory(filePath)) {
+          final data = await lockbox.read(filePath);
           final outputFilePath = join(outputPath, filePath);
 
           // Create parent directories if needed
@@ -136,15 +133,15 @@ Decrypts the passed in vault and extracts all files.
         }
       }
 
-      await repo.close();
+      await lockbox.close();
       print(
         green(
-          'Successfully extracted $count file(s) from $pathToVault to $outputPath',
+          'Successfully extracted $count file(s) from $pathToLockbox to $outputPath',
         ),
       );
     } catch (e) {
       print(red('Error: $e'));
-      await repo?.close();
+      await lockbox?.close();
       exit(1);
     }
   }

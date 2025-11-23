@@ -105,10 +105,10 @@ class DotVaultFile {
   /// Returns an ecrypted version of the private key
   /// stored in the .dvault file.
   String privateKeyAsText(String passphrase) => RSAConvertor.privateKeyAsText(
-        privateKey(passphrase: passphrase),
-        encryptor(passphrase),
-        iv,
-      );
+    privateKey(passphrase: passphrase),
+    encryptor(passphrase),
+    iv,
+  );
 
   /// Returns the public key stored in the .dvault file
   /// in a text representation suitable for storage
@@ -172,12 +172,13 @@ class DotVaultFile {
     Encrypter encrypter,
     IV _iv,
   ) {
-    storagePath
-        .append(RSAConvertor.privateKeyAsText(privateKey, encrypter, _iv));
+    storagePath.append(
+      RSAConvertor.privateKeyAsText(privateKey, encrypter, _iv),
+    );
   }
 
   /// Creates an AES [Encrypter] from the given [passphrase]
-  /// and the salt held in the .vault file.
+  /// and the salt held in the .lbox file.
   Encrypter encryptor(String passphrase) =>
       _encrypterFromPassphrase(passphrase, salt);
 
@@ -204,13 +205,13 @@ class DotVaultFile {
     }
   }
 
-  /// Extract the Private Key from the .vault file
+  /// Extract the Private Key from the .dvault file
   /// The key is extracted verbatium and as such is
   /// still encrypted.
   List<String> extractPrivateKeyLines() =>
       RSAConvertor.extractPrivateKeyLines(_lines);
 
-  /// Extract the Private Key from the .vault file
+  /// Extract the Private Key from the .dvault file
   /// The key is extracted verbatium and as such is
   /// still encrypted.
   List<String> extractPublicKeyLines() =>

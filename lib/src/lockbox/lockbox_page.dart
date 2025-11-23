@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:dvault/src/util/byte_data_helper.dart';
 
-import 'dvault_format.dart';
+import 'lockbox_format.dart';
 
 class DVaultPage {
   static final _algorithm = AesGcm.with256bits();
@@ -26,16 +26,15 @@ class DVaultPage {
     );
 
     final result = Uint8List(
-      DVaultFormat.nonceSize +
+      LockboxFormat.nonceSize +
           secretBox.cipherText.length +
-          DVaultFormat.authTagSize,
+          LockboxFormat.authTagSize,
     );
-    final buffer = ByteData.view(result.buffer);
     int offset = 0;
 
     // Nonce (12)
-    result.setRange(offset, offset + DVaultFormat.nonceSize, nonce);
-    offset += DVaultFormat.nonceSize;
+    result.setRange(offset, offset + LockboxFormat.nonceSize, nonce);
+    offset += LockboxFormat.nonceSize;
 
     // Ciphertext
     result.setRange(
@@ -48,7 +47,7 @@ class DVaultPage {
     // Auth Tag (16)
     result.setRange(
       offset,
-      offset + DVaultFormat.authTagSize,
+      offset + LockboxFormat.authTagSize,
       secretBox.mac.bytes,
     );
 
@@ -61,7 +60,7 @@ class DVaultPage {
     required Uint8List encryptedPage,
     required SecretKey key,
   }) async {
-    if (encryptedPage.length < DVaultFormat.pageOverhead) {
+    if (encryptedPage.length < LockboxFormat.pageOverhead) {
       throw FormatException('Page too short');
     }
 
@@ -70,19 +69,19 @@ class DVaultPage {
     // Nonce
     final nonce = encryptedPage.sublist(
       offset,
-      offset + DVaultFormat.nonceSize,
+      offset + LockboxFormat.nonceSize,
     );
-    offset += DVaultFormat.nonceSize;
+    offset += LockboxFormat.nonceSize;
 
     // Ciphertext + Tag
     // The cryptography package expects the MAC to be separate or part of SecretBox.
     // We need to extract the MAC (last 16 bytes).
     final macBytes = encryptedPage.sublist(
-      encryptedPage.length - DVaultFormat.authTagSize,
+      encryptedPage.length - LockboxFormat.authTagSize,
     );
     final cipherText = encryptedPage.sublist(
       offset,
-      encryptedPage.length - DVaultFormat.authTagSize,
+      encryptedPage.length - LockboxFormat.authTagSize,
     );
 
     final secretBox = SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes));
@@ -97,10 +96,10 @@ class DVaultPage {
   /// For AES-GCM, nonce uniqueness is critical.
   /// We'll use the first 12 bytes of the salt XORed with the page index.
   static List<int> _generateNonce(int pageIndex, Uint8List salt) {
-    final nonce = Uint8List(DVaultFormat.nonceSize);
+    final nonce = Uint8List(LockboxFormat.nonceSize);
 
     // Copy first 12 bytes of salt (or pad if short, but salt is 16 bytes)
-    for (int i = 0; i < DVaultFormat.nonceSize; i++) {
+    for (int i = 0; i < LockboxFormat.nonceSize; i++) {
       nonce[i] = salt[i];
     }
 

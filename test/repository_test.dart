@@ -1,17 +1,19 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:test/test.dart';
+
+import 'package:dvault/src/lockbox/lock_box.dart';
+import 'package:dvault/src/vfs/io_lockbox.dart';
 import 'package:path/path.dart' as p;
-import 'package:dvault/src/vfs/io_repository.dart';
+import 'package:test/test.dart';
 
 void main() {
   late Directory tempDir;
-  late File vaultFile;
+  late File lockBoxFile;
   const password = 'test_password_123';
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('dvault_test_');
-    vaultFile = File(p.join(tempDir.path, 'test.vault'));
+    lockBoxFile = File(p.join(tempDir.path, 'test.${LockBox.extension}'));
   });
 
   tearDown(() {
@@ -21,22 +23,22 @@ void main() {
   });
 
   group('IORepository - Creation', () {
-    test('creates new vault with default page size', () async {
-      final repo = await IORepository.open(
-        file: vaultFile,
+    test('creates new lockbox with default page size', () async {
+      final repo = await IOLockbox.open(
+        file: lockBoxFile,
         password: password,
         create: true,
       );
 
-      expect(vaultFile.existsSync(), isTrue);
-      expect(vaultFile.lengthSync(), greaterThan(0));
+      expect(lockBoxFile.existsSync(), isTrue);
+      expect(lockBoxFile.lengthSync(), greaterThan(0));
 
       await repo.close();
     });
 
-    test('creates new vault with custom page size', () async {
-      final repo = await IORepository.open(
-        file: vaultFile,
+    test('creates new lockbox with custom page size', () async {
+      final repo = await IOLockbox.open(
+        file: lockBoxFile,
         password: password,
         create: true,
         pageSize: 128 * 1024, // 128KB
@@ -45,56 +47,52 @@ void main() {
       await repo.close();
 
       // Verify page size by reopening
-      final repo2 = await IORepository.open(
-        file: vaultFile,
-        password: password,
-      );
+      final repo2 = await IOLockbox.open(file: lockBoxFile, password: password);
 
       await repo2.close();
     });
 
-    test('fails to open non-existent vault without create flag', () async {
+    test('fails to open non-existent lockbox without create flag', () async {
       expect(
-        () => IORepository.open(file: vaultFile, password: password),
-        throwsA(anything), // Can throw FormatException or FileSystemException depending on implementation
+        () => IOLockbox.open(file: lockBoxFile, password: password),
+        throwsA(
+          anything,
+        ), // Can throw FormatException or FileSystemException depending on implementation
       );
     });
 
-    test('reopens existing vault', () async {
-      // Create vault
-      final repo1 = await IORepository.open(
-        file: vaultFile,
+    test('reopens existing lockbox', () async {
+      // Create lockbox
+      final lockbox1 = await IOLockbox.open(
+        file: lockBoxFile,
         password: password,
         create: true,
       );
-      await repo1.close();
+      await lockbox1.close();
 
       // Reopen
-      final repo2 = await IORepository.open(
-        file: vaultFile,
-        password: password,
-      );
-      await repo2.close();
+      final lockbox2 = await IOLockbox.open(file: lockBoxFile, password: password);
+      await lockbox2.close();
     });
 
     test('fails with wrong password', () async {
-      // Create vault
-      final repo1 = await IORepository.open(
-        file: vaultFile,
+      // Create lockbox
+      final lockbox1 = await IOLockbox.open(
+        file: lockBoxFile,
         password: password,
         create: true,
       );
-      await repo1.close();
+      await lockbox1.close();
 
       // Try to open with wrong password - this might throw or return corrupted data
       // The actual behavior depends on implementation
       // For now, just verify it doesn't crash
       try {
-        final repo2 = await IORepository.open(
-          file: vaultFile,
+        final lockbox2 = await IOLockbox.open(
+          file: lockBoxFile,
           password: 'wrong_password',
         );
-        await repo2.close();
+        await lockbox2.close();
       } catch (e) {
         // Expected to fail
       }
@@ -102,67 +100,78 @@ void main() {
   });
 
   group('IORepository - File Operations', () {
-    late IORepository repo;
+    late IOLockbox lockbox;
 
     setUp(() async {
-      repo = await IORepository.open(
-        file: vaultFile,
+      lockbox = await IOLockbox.open(
+        file: lockBoxFile,
         password: password,
         create: true,
       );
     });
 
     tearDown(() async {
-      await repo.close();
+      await lockbox.close();
     });
 
     test('writes and reads file', () async {
       final content = Uint8List.fromList('Hello, World!'.codeUnits);
-      await repo.write('test.txt', content);
+      await lockbox.write('test.txt', content);
 
-      final read = await repo.read('test.txt');
+      final read = await lockbox.read('test.txt');
       expect(read, equals(content));
     });
 
     test('writes and reads empty file', () async {
       final content = Uint8List(0);
-      await repo.write('empty.txt', content);
+      await lockbox.write('empty.txt', content);
 
-      final read = await repo.read('empty.txt');
+      final read = await lockbox.read('empty.txt');
       expect(read, equals(content));
     });
 
     test('writes and reads large file', () async {
       // 1MB file
-      final content = Uint8List.fromList(List.generate(1024 * 1024, (i) => i % 256));
-      await repo.write('large.bin', content);
+      final content = Uint8List.fromList(
+        List.generate(1024 * 1024, (i) => i % 256),
+      );
+      await lockbox.write('large.bin', content);
 
-      final read = await repo.read('large.bin');
+      final read = await lockbox.read('large.bin');
       expect(read, equals(content));
     });
 
     test('writes multiple files', () async {
-      await repo.write('file1.txt', Uint8List.fromList('File 1'.codeUnits));
-      await repo.write('file2.txt', Uint8List.fromList('File 2'.codeUnits));
-      await repo.write('file3.txt', Uint8List.fromList('File 3'.codeUnits));
+      await lockbox.write('file1.txt', Uint8List.fromList('File 1'.codeUnits));
+      await lockbox.write('file2.txt', Uint8List.fromList('File 2'.codeUnits));
+      await lockbox.write('file3.txt', Uint8List.fromList('File 3'.codeUnits));
 
-      expect(await repo.read('file1.txt'), equals(Uint8List.fromList('File 1'.codeUnits)));
-      expect(await repo.read('file2.txt'), equals(Uint8List.fromList('File 2'.codeUnits)));
-      expect(await repo.read('file3.txt'), equals(Uint8List.fromList('File 3'.codeUnits)));
+      expect(
+        await lockbox.read('file1.txt'),
+        equals(Uint8List.fromList('File 1'.codeUnits)),
+      );
+      expect(
+        await lockbox.read('file2.txt'),
+        equals(Uint8List.fromList('File 2'.codeUnits)),
+      );
+      expect(
+        await lockbox.read('file3.txt'),
+        equals(Uint8List.fromList('File 3'.codeUnits)),
+      );
     });
 
     test('checks file existence', () async {
-      expect(repo.exists('nonexistent.txt'), isFalse);
+      expect(lockbox.exists('nonexistent.txt'), isFalse);
 
-      await repo.write('exists.txt', Uint8List.fromList('data'.codeUnits));
-      expect(repo.exists('exists.txt'), isTrue);
+      await lockbox.write('exists.txt', Uint8List.fromList('data'.codeUnits));
+      expect(lockbox.exists('exists.txt'), isTrue);
     });
 
     test('gets file stats', () async {
       final content = Uint8List.fromList('test data'.codeUnits);
-      await repo.write('stats.txt', content);
+      await lockbox.write('stats.txt', content);
 
-      final stats = repo.stat('stats.txt');
+      final stats = lockbox.stat('stats.txt');
       expect(stats, isNotNull);
       expect(stats!.path, equals('stats.txt'));
       expect(stats.length, equals(content.length));
@@ -171,46 +180,49 @@ void main() {
     });
 
     test('deletes file', () async {
-      await repo.write('delete_me.txt', Uint8List.fromList('data'.codeUnits));
-      expect(repo.exists('delete_me.txt'), isTrue);
+      await lockbox.write('delete_me.txt', Uint8List.fromList('data'.codeUnits));
+      expect(lockbox.exists('delete_me.txt'), isTrue);
 
-      await repo.delete('delete_me.txt');
-      expect(repo.exists('delete_me.txt'), isFalse);
+      await lockbox.delete('delete_me.txt');
+      expect(lockbox.exists('delete_me.txt'), isFalse);
     });
 
     test('fails to delete nonexistent file', () async {
       expect(
-        () => repo.delete('nonexistent.txt'),
+        () => lockbox.delete('nonexistent.txt'),
         throwsA(isA<FileSystemException>()),
       );
     });
 
     test('renames file', () async {
-      await repo.write('old_name.txt', Uint8List.fromList('data'.codeUnits));
-      await repo.rename('old_name.txt', 'new_name.txt');
+      await lockbox.write('old_name.txt', Uint8List.fromList('data'.codeUnits));
+      await lockbox.rename('old_name.txt', 'new_name.txt');
 
-      expect(repo.exists('old_name.txt'), isFalse);
-      expect(repo.exists('new_name.txt'), isTrue);
-      expect(await repo.read('new_name.txt'), equals(Uint8List.fromList('data'.codeUnits)));
+      expect(lockbox.exists('old_name.txt'), isFalse);
+      expect(lockbox.exists('new_name.txt'), isTrue);
+      expect(
+        await lockbox.read('new_name.txt'),
+        equals(Uint8List.fromList('data'.codeUnits)),
+      );
     });
 
     test('fails to rename to existing file', () async {
-      await repo.write('file1.txt', Uint8List.fromList('data1'.codeUnits));
-      await repo.write('file2.txt', Uint8List.fromList('data2'.codeUnits));
+      await lockbox.write('file1.txt', Uint8List.fromList('data1'.codeUnits));
+      await lockbox.write('file2.txt', Uint8List.fromList('data2'.codeUnits));
 
       expect(
-        () => repo.rename('file1.txt', 'file2.txt'),
+        () => lockbox.rename('file1.txt', 'file2.txt'),
         throwsA(isA<FileSystemException>()),
       );
     });
   });
 
   group('IORepository - Directory Operations', () {
-    late IORepository repo;
+    late IOLockbox repo;
 
     setUp(() async {
-      repo = await IORepository.open(
-        file: vaultFile,
+      repo = await IOLockbox.open(
+        file: lockBoxFile,
         password: password,
         create: true,
       );
@@ -266,11 +278,11 @@ void main() {
   });
 
   group('IORepository - Environment Variables', () {
-    late IORepository repo;
+    late IOLockbox repo;
 
     setUp(() async {
-      repo = await IORepository.open(
-        file: vaultFile,
+      repo = await IOLockbox.open(
+        file: lockBoxFile,
         password: password,
         create: true,
       );
@@ -321,7 +333,7 @@ void main() {
       await repo.setEnv('PERSIST_VAR', 'persist_value');
       // Note: repo will be closed by tearDown, so we need to test this differently
       // We can't close repo here manually because tearDown will try to close it again
-      
+
       // Instead, just verify the value is set
       expect(repo.getEnv('PERSIST_VAR'), equals('persist_value'));
     });
@@ -335,8 +347,8 @@ void main() {
 
   group('IORepository - Persistence', () {
     test('files persist after close and reopen', () async {
-      final repo1 = await IORepository.open(
-        file: vaultFile,
+      final repo1 = await IOLockbox.open(
+        file: lockBoxFile,
         password: password,
         create: true,
       );
@@ -344,20 +356,20 @@ void main() {
       await repo1.write('persist.txt', Uint8List.fromList('data'.codeUnits));
       await repo1.close();
 
-      final repo2 = await IORepository.open(
-        file: vaultFile,
-        password: password,
-      );
+      final repo2 = await IOLockbox.open(file: lockBoxFile, password: password);
 
       expect(repo2.exists('persist.txt'), isTrue);
-      expect(await repo2.read('persist.txt'), equals(Uint8List.fromList('data'.codeUnits)));
+      expect(
+        await repo2.read('persist.txt'),
+        equals(Uint8List.fromList('data'.codeUnits)),
+      );
 
       await repo2.close();
     });
 
     test('multiple files persist correctly', () async {
-      final repo1 = await IORepository.open(
-        file: vaultFile,
+      final repo1 = await IOLockbox.open(
+        file: lockBoxFile,
         password: password,
         create: true,
       );
@@ -367,10 +379,7 @@ void main() {
       await repo1.write('dir/file3.txt', Uint8List.fromList('data3'.codeUnits));
       await repo1.close();
 
-      final repo2 = await IORepository.open(
-        file: vaultFile,
-        password: password,
-      );
+      final repo2 = await IOLockbox.open(file: lockBoxFile, password: password);
 
       expect(repo2.exists('file1.txt'), isTrue);
       expect(repo2.exists('file2.txt'), isTrue);

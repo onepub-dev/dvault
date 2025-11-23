@@ -46,7 +46,7 @@
 //   /// If [overwrite] is true and a vault with the name [vaultName]
 //   /// already exist it will be overwritten.
 //   ///
-//   /// The [vaultName] must end in .vault.
+//   /// The [vaultName] must end in .lbox.
 //   ///
 //   /// If [overwrite] is false and the [vaultName] file exists then
 //   /// a [SSHVaultException] will be thrown.
@@ -55,9 +55,9 @@
 //     required String vaultName,
 //     bool overwrite = false,
 //   }) {
-//     if (!vaultName.endsWith('.vault')) {
+//     if (!vaultName.endsWith('.lbox')) {
 //       throw SSHVaultException(
-//         'Invalid vaultName. The [vaultName] must end in ".vault".',
+//         'Invalid vaultName. The [vaultName] must end in ".lbox".',
 //       );
 //     }
 
@@ -89,9 +89,9 @@
 //     required String vaultName,
 //     bool overwrite = false,
 //   }) {
-//     if (!vaultName.endsWith('.vault')) {
+//     if (!vaultName.endsWith('.v.lbox')) {
 //       throw SSHVaultException(
-//         'Invalid vaultName. The [vaultName] must end in ".vault".',
+//         'Invalid vaultName. The [vaultName] must end in ".lbox".',
 //       );
 //     }
 

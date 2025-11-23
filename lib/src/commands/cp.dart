@@ -1,8 +1,10 @@
 import 'dart:io';
+
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
-import '../vfs/io_repository.dart';
+
 import '../util/password_helper.dart';
+import '../vfs/io_lockbox.dart';
 
 class CpCommand extends Command<void> {
   @override
@@ -18,17 +20,17 @@ class CpCommand extends Command<void> {
   @override
   void run() async {
     if (argResults!.rest.length < 3) {
-      print(red('Usage: dvault cp <vault_path> <src> <dest> [--extract]'));
+      print(red('Usage: dvault cp <lockbox_path> <src> <dest> [--extract]'));
       exit(1);
     }
 
-    final vaultPath = argResults!.rest[0];
+    final lockboxPath = argResults!.rest[0];
     final src = argResults!.rest[1];
     final dest = argResults!.rest[2];
     final extract = argResults!['extract'] as bool;
 
-    if (!exists(vaultPath) && !extract) {
-       // If copying IN, vault might not exist, we can create it?
+    if (!exists(lockboxPath) && !extract) {
+       // If copying IN, lockbox might not exist, we can create it?
        // For now, assume it must exist or use `create` command first.
        // But `open(create: true)` supports it.
        // Let's allow creating if it doesn't exist.
@@ -37,16 +39,16 @@ class CpCommand extends Command<void> {
     final password = await getPassword(this);
 
     try {
-      final repo = await IORepository.open(
-        file: File(vaultPath),
+      final repo = await IOLockbox.open(
+        file: File(lockboxPath),
         password: password,
-        create: !extract && !exists(vaultPath),
+        create: !extract && !exists(lockboxPath),
       );
 
       if (extract) {
         // Copy OUT: src is internal, dest is local
         if (!repo.exists(src)) {
-          print(red('File not found in vault: $src'));
+          print(red('File not found in lockbox: $src'));
           exit(1);
         }
         final data = await repo.read(src);

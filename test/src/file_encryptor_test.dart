@@ -22,7 +22,7 @@
 //       ..write('1Hello World')
 //       ..append('2Hello World');
 
-//     const pathToSecurityBox = 'testfile.sbox';
+//     const pathToSecurityBox = 'testfile.${LockBox.extension}';
 
 //     await withRandomAccessFile(
 //       pathTo: pathToSecurityBox,
@@ -80,7 +80,7 @@
 // }
 
 // String _lock(String pathToPlainText, FileEncryptor encryptor) {
-//   const pathToSecurityBox = 'testfile.sbox';
+//   const pathToSecurityBox = 'testfile.${LockBox.extension}';
 //   withRandomAccessFile(
 //     pathTo: pathToSecurityBox,
 //     action: (securityBox) {

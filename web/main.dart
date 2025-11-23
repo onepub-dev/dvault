@@ -2,12 +2,12 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
-import 'package:dvault/src/vfs/dvault_repository_base.dart';
-import 'package:dvault/src/vfs/http_repository.dart';
-import 'package:dvault/src/vfs/opfs_repository.dart';
+import 'package:dvault/src/vfs/http_lockbox.dart';
+import 'package:dvault/src/lockbox/lock_box.dart';
+import 'package:dvault/src/vfs/opfs_lockbox.dart';
 import 'package:web/web.dart' as web;
 
-DVaultRepository? currentVault;
+LockBox? currentVault;
 bool isReadOnly = false;
 
 void main() {
@@ -154,7 +154,7 @@ Future<void> createVault() async {
 
     log('Creating vault "$name"...', 'info');
 
-    currentVault = await OPFSRepository.open(
+    currentVault = await OPFSLockbox.open(
       vaultName: name,
       password: password,
       create: true,
@@ -180,10 +180,7 @@ Future<void> openVault() async {
 
     log('Opening vault "$name"...', 'info');
 
-    currentVault = await OPFSRepository.open(
-      vaultName: name,
-      password: password,
-    );
+    currentVault = await OPFSLockbox.open(vaultName: name, password: password);
 
     isReadOnly = false;
     log('✓ Vault opened successfully!', 'success');
@@ -210,7 +207,7 @@ Future<void> openHttpVault() async {
 
     log('Opening remote vault...', 'info');
 
-    currentVault = await HttpRepository.open(url: url, password: password);
+    currentVault = await HTTPLockbox.open(url: url, password: password);
 
     isReadOnly = true;
     log('✓ Remote vault opened (read-only)!', 'success');
@@ -382,10 +379,10 @@ void log(String message, [String type = 'info']) {
 }
 
 Future<void> updateStorageInfo() async {
-  if (!OPFSRepository.isSupported()) return;
+  if (!OPFSLockbox.isSupported()) return;
 
   try {
-    final estimate = await OPFSRepository.getStorageEstimate();
+    final estimate = await OPFSLockbox.getStorageEstimate();
     final usage = estimate['usage']!;
     final quota = estimate['quota']!;
     final usedMB = (usage / 1024 / 1024).toStringAsFixed(2);

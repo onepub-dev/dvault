@@ -1,14 +1,16 @@
 import 'dart:io';
+
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
-import '../vfs/io_repository.dart';
+
 import '../util/password_helper.dart';
+import '../vfs/io_lockbox.dart';
 
 class MvCommand extends Command<void> {
   @override
   final String name = 'mv';
   @override
-  final String description = 'Move or rename files within the vault.';
+  final String description = 'Move or rename files within the lockbox.';
 
   MvCommand() {
     addPasswordOptions(this);
@@ -17,32 +19,32 @@ class MvCommand extends Command<void> {
   @override
   void run() async {
     if (argResults!.rest.length < 3) {
-      print(red('Usage: dvault mv <vault_path> <old_path> <new_path>'));
+      print(red('Usage: dvault mv <lockbox_path> <old_path> <new_path>'));
       exit(1);
     }
 
-    final vaultPath = argResults!.rest[0];
+    final pathToLockbox = argResults!.rest[0];
     final oldPath = argResults!.rest[1];
     final newPath = argResults!.rest[2];
 
-    if (!exists(vaultPath)) {
-      print(red('Vault not found: $vaultPath'));
+    if (!exists(pathToLockbox)) {
+      print(red('Lockbox not found: $pathToLockbox'));
       exit(1);
     }
 
     final password = await getPassword(this);
 
     try {
-      final repo = await IORepository.open(
-        file: File(vaultPath),
+      final repo = await IOLockbox.open(
+        file: File(pathToLockbox),
         password: password,
       );
 
       if (!repo.exists(oldPath)) {
-        print(red('File not found in vault: $oldPath'));
+        print(red('File not found in lockbox: $oldPath'));
         exit(1);
       }
-      
+
       if (repo.exists(newPath)) {
         print(red('Destination already exists: $newPath'));
         exit(1);
@@ -50,7 +52,7 @@ class MvCommand extends Command<void> {
 
       await repo.rename(oldPath, newPath);
       print(green('Moved $oldPath to $newPath'));
-      
+
       await repo.close();
     } catch (e) {
       print(red('Error: $e'));

@@ -11,29 +11,29 @@ import 'package:dcli/dcli.dart';
 import 'package:path/path.dart';
 
 import '../util/password_helper.dart';
-import '../vfs/io_repository.dart';
+import '../vfs/io_lockbox.dart';
 
 class LockCommand extends Command<void> {
   LockCommand() {
     argParser
       ..addOption(
-        'vault',
-        abbr: 'v',
+        'lockbox',
+        abbr: 'b',
         help: '''
-  The path and filename of the vault to store the file into.
-    If you don't pass a vault then the [file] name will be used with a .dvault extension''',
+  The path and filename of the lockbox to store the file into.
+    If you don't pass a lockbox then the [file] name will be used with a .lockbox extension''',
       )
       ..addFlag(
         'overwrite',
         abbr: 'o',
         negatable: false,
-        help: 'Overwrites the vault if it already exists',
+        help: 'Overwrites the lockbox if it already exists',
       )
       ..addFlag(
         'recurse',
         abbr: 'r',
         negatable: false,
-        help: 'Encrypt child directories and their files into the vault',
+        help: 'Encrypt child directories and their files into the lockbox',
       );
 
     addPasswordOptions(this);
@@ -41,21 +41,21 @@ class LockCommand extends Command<void> {
 
   @override
   String get description => '''
-Locks the passed in file or directory by adding it to a vault.
-  Generate a vault called important.dvault.
+Locks the passed in file or directory by adding it to a lockbox.
+  Generate a lockbox called important.lockbox.
     dvault lock path/to/important.txt
 
-  Generate the vault in an alternate file/path
-    dvault lock --vault ~/mysavednotes/important.dvault /path/to/important.txt
+  Generate the lockbox in an alternate file/path
+    dvault lock --lockbox ~/mysavednotes/important.lockbox /path/to/important.txt
 
-  Lock the contents of a directory into a single vault file.
+  Lock the contents of a directory into a single lockbox file.
     dvault lock /path/to/encrypt
 
   Add the contents of a directory and all its children directories and their files
-   into a single vault file.
+   into a single lockbox file.
     dvault lock --recurse /path/to/encrypt
 
-  Overwrite the vault if it already exists.
+  Overwrite the lockbox if it already exists.
     dvault lock --overwrite  /path/to/important.txt
 
   ''';
@@ -67,7 +67,7 @@ Locks the passed in file or directory by adding it to a vault.
   Future<void> run() async {
     final overwrite = argResults!['overwrite'] as bool;
     final includeChildren = argResults!['recurse'] as bool;
-    var pathToVault = argResults!['vault'] as String?;
+    var pathToLockbox = argResults!['lockbox'] as String?;
 
     if (argResults!.rest.isEmpty) {
       printerr(red('You must pass one or more files/directories to lock'));
@@ -76,30 +76,30 @@ Locks the passed in file or directory by adding it to a vault.
     }
     final filePaths = argResults!.rest;
 
-    if (pathToVault == null) {
+    if (pathToLockbox == null) {
       if (filePaths.length > 1) {
         printerr(
           red(
-            'As you have passed multiple paths you must pass a vault '
-            'name via the -v option',
+            'As you have passed multiple paths you must pass a lockbox '
+            'name via the -b option',
           ),
         );
         print(argParser.usage);
         exit(1);
       }
       final file = filePaths.first;
-      // just a single file to lock, derive the vault name from the filename.
-      pathToVault =
-          '${join(dirname(file), basenameWithoutExtension(file))}.dvault';
+      // just a single file to lock, derive the lockbox name from the filename.
+      pathToLockbox =
+          '${join(dirname(file), basenameWithoutExtension(file))}.lbox';
     }
 
-    if (exists(pathToVault)) {
+    if (exists(pathToLockbox)) {
       if (overwrite) {
-        delete(pathToVault);
+        delete(pathToLockbox);
       } else {
         printerr(
           red(
-            'The passed vault path ${truepath(pathToVault)} '
+            'The passed lockbox path ${truepath(pathToLockbox)} '
             'already exists.',
           ),
         );
@@ -108,12 +108,12 @@ Locks the passed in file or directory by adding it to a vault.
       }
     }
 
-    await addToVault(filePaths, pathToVault, includeChildren: includeChildren);
+    await addToLockbox(filePaths, pathToLockbox, includeChildren: includeChildren);
   }
 
-  Future<void> addToVault(
+  Future<void> addToLockbox(
     List<String> filePaths,
-    String pathToVault, {
+    String pathToLockbox, {
     required bool includeChildren,
   }) async {
     // Get password
@@ -125,19 +125,19 @@ Locks the passed in file or directory by adding it to a vault.
       exit(1);
     }
 
-    // Create or open the vault
-    IORepository? repo;
+    // Create or open the lockbox
+    IOLockbox? repo;
     try {
-      final vaultFile = File(pathToVault);
-      final create = !vaultFile.existsSync();
+      final lockboxFile = File(pathToLockbox);
+      final create = !lockboxFile.existsSync();
 
-      repo = await IORepository.open(
-        file: vaultFile,
+      repo = await IOLockbox.open(
+        file: lockboxFile,
         password: password,
         create: create,
       );
 
-      // Add files to vault
+      // Add files to lockbox
       for (final filePath in filePaths) {
         if (!exists(filePath)) {
           printerr("The passed path ${truepath(filePath)} doesn't exist.");
@@ -156,7 +156,7 @@ Locks the passed in file or directory by adding it to a vault.
       await repo.close();
       print(
         green(
-          'Successfully locked ${filePaths.length} path(s) to $pathToVault',
+          'Successfully locked ${filePaths.length} path(s) to $pathToLockbox',
         ),
       );
     } catch (e) {
@@ -166,17 +166,17 @@ Locks the passed in file or directory by adding it to a vault.
     }
   }
 
-  Future<void> _addFile(IORepository repo, String filePath) async {
+  Future<void> _addFile(IOLockbox repo, String filePath) async {
     final file = File(filePath);
     final bytes = await file.readAsBytes();
-    final vaultPath = basename(filePath);
+    final lockboxPath = basename(filePath);
 
-    await repo.write(vaultPath, bytes);
-    print('Added: $filePath -> $vaultPath');
+    await repo.write(lockboxPath, bytes);
+    print('Added: $filePath -> $lockboxPath');
   }
 
   Future<void> _addDirectory(
-    IORepository repo,
+    IOLockbox repo,
     String dirPath, {
     required bool recursive,
   }) async {
