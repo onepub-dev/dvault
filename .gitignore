@@ -10,3 +10,5 @@ doc/api/
 .history
 pubspec.lock
 custom_lint.log
+logs
+
