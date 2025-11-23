@@ -8,13 +8,18 @@ dependencies:
   archive: ^4.0.7
   args: ^2.0.0
   async: ^2.11.0
-  dcli: ^7.0.3
-  dcli_core: ^7.0.2
+  cryptography: ^2.9.0
+  dcli: ^8.2.0
+  dcli_core: ^8.0.0
   encrypt: ^5.0.1
+  file: ^7.0.1
+  fixnum: ^1.1.1
   meta: ^1.0.0
   path: ^1.0.0
   pointycastle: ^3.0.0
+  web: ^1.1.1
 dev_dependencies: 
+  build_web_compilers: ^4.0.0
   lint_hard: ^6.1.1
   test: ^1.24.9
 executables:

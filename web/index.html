@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DVault - Browser Demo</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔐 DVault Browser Demo</h1>
+            <p>Encrypted vault storage in your browser</p>
+        </header>
+
+        <div class="feature-check">
+            <h2>Feature Support</h2>
+            <div id="support-info">
+                <p>Checking browser capabilities...</p>
+            </div>
+        </div>
+
+        <div class="vault-section">
+            <h2>Create New Vault (OPFS)</h2>
+            <div class="form-group">
+                <label for="vault-name">Vault Name:</label>
+                <input type="text" id="vault-name" value="my-vault" />
+            </div>
+            <div class="form-group">
+                <label for="vault-password">Password:</label>
+                <input type="password" id="vault-password" value="test123" />
+            </div>
+            <button id="create-vault-btn" class="btn btn-primary">Create Vault</button>
+            <button id="open-vault-btn" class="btn btn-secondary">Open Existing Vault</button>
+        </div>
+
+        <div class="http-section">
+            <h2>Open Remote Vault (HTTP)</h2>
+            <div class="form-group">
+                <label for="vault-url">Vault URL:</label>
+                <input type="text" id="vault-url" placeholder="https://example.com/vault.dvault" />
+            </div>
+            <div class="form-group">
+                <label for="http-password">Password:</label>
+                <input type="password" id="http-password" />
+            </div>
+            <button id="open-http-btn" class="btn btn-secondary">Open Remote Vault</button>
+        </div>
+
+        <div id="vault-controls" class="vault-controls" style="display: none;">
+            <h2>Vault Operations</h2>
+            
+            <div class="operation-group">
+                <h3>Add File</h3>
+                <div class="form-group">
+                    <label for="file-path">File Path:</label>
+                    <input type="text" id="file-path" placeholder="documents/test.txt" />
+                </div>
+                <div class="form-group">
+                    <label for="file-content">Content:</label>
+                    <textarea id="file-content" rows="4" placeholder="File content..."></textarea>
+                </div>
+                <button id="add-file-btn" class="btn btn-primary">Add File</button>
+            </div>
+
+            <div class="operation-group">
+                <h3>Environment Variables</h3>
+                <div class="form-group">
+                    <label for="env-key">Key:</label>
+                    <input type="text" id="env-key" placeholder="MY_VAR" />
+                </div>
+                <div class="form-group">
+                    <label for="env-value">Value:</label>
+                    <input type="text" id="env-value" placeholder="my_value" />
+                </div>
+                <button id="set-env-btn" class="btn btn-primary">Set Env Var</button>
+                <button id="list-env-btn" class="btn btn-secondary">List All</button>
+            </div>
+
+            <div class="operation-group">
+                <h3>Files in Vault</h3>
+                <button id="list-files-btn" class="btn btn-secondary">List Files</button>
+                <div id="file-list" class="file-list"></div>
+            </div>
+        </div>
+
+        <div id="output" class="output"></div>
+
+        <div id="storage-info" class="storage-info"></div>
+    </div>
+
+    <script type="module" src="main.dart.js"></script>
+</body>
+</html>

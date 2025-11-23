@@ -1,92 +1,91 @@
-/* Copyright (C) S. Brett Sutton - All Rights Reserved
- * Unauthorized copying of this file, via any medium is strictly prohibited
- * Proprietary and confidential
- * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
- */
-
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
 
-import '../dot_vault_file.dart';
-import '../env.dart';
-import '../rsa/rsa_generator.dart';
-import '../util/messages.dart';
-import 'helper.dart';
+import '../format/dvault_format.dart';
+import '../util/password_helper.dart';
+import '../vfs/io_repository.dart';
 
 class InitCommand extends Command<void> {
-  static int minPassPhraseLength = 12;
+  @override
+  final String name = 'init';
+  @override
+  final String description = 'Initialize a new vault.';
 
   InitCommand() {
-    argParser.addFlag(
-      'env',
-      abbr: 'e',
-      negatable: false,
-      help: 'If set the passphrase will be read from the '
-          '${Constants.dvaultPassphraseEnvKey} environment variable.',
+    argParser.addOption(
+      'page-size',
+      abbr: 'p',
+      help: 'Page size in bytes (default: 64KB)',
+      defaultsTo: DVaultFormat.defaultPageSize.toString(),
     );
+    addPasswordOptions(this);
   }
 
-  @override
-  String get description => '''
-  Initialise DVault creating an RSA key pair used to encrypt/decrypt files.
-  dvault init''';
+  static int get minPassPhraseLength => 12;
 
   @override
-  String get name => 'init';
-
-  @override
-  void run() {
-    if (exists(DotVaultFile.storagePath)) {
-      print(red('${'*' * 40}  WARNING  ${'*' * 40}'));
-      print(orange('Your .dvault file already exists.'));
+  void run() async {
+    if (argResults!.rest.isEmpty) {
       print(
-        orange('If you continue you will lose access to all '
-            'existing security boxes.'),
+        red(
+          'Usage: dvault init <vault_path> [--page-size <bytes>] [--password-file <file>]',
+        ),
       );
-      print(blue("If you want to change your passphrase use 'dvault reset'."));
-      if (!confirm(
-        red('Are you sure you want to lose access to existing security boxes?'),
-      )) {
-        print('Init stopped.');
-        exit(1);
-      } else {
-        backupFile(DotVaultFile.storagePath);
-        print('');
-        print(
-          blue('Your .dvault file has been backed up to a .bak subdirectory'),
-        );
-        print('');
-        delete(DotVaultFile.storagePath);
-      }
-    }
-    String? passPhrase;
-    if (argResults!['env'] as bool) {
-      passPhrase = env[Constants.dvaultPassphraseEnvKey];
-    } else {
-      print(
-        'To protect your keys we lock them with a passphrase with a '
-        'minimum length of ${InitCommand.minPassPhraseLength}).',
-      );
-      passPhrase = askForPassPhrase();
-    }
-
-    if (passPhrase!.length < minPassPhraseLength) {
-      printerr(
-        red('The passphrase must be at least '
-            '${InitCommand.minPassPhraseLength} characters long.'),
-      );
-      print(argParser.usage);
       exit(1);
     }
 
-    print('Generating and saving key pair. Be patient this can take a while.');
-    final keyPair = RSAGenerator().generateKeyPair();
+    final vaultPath = argResults!.rest[0];
+    final pageSizeStr = argResults!['page-size'] as String;
+    final pageSize = int.tryParse(pageSizeStr);
 
-    DotVaultFile.create(keyPair.privateKey, keyPair.publicKey, passPhrase);
-    print('Key pair generation complete');
+    if (pageSize == null || pageSize <= 0) {
+      print(red('Invalid page size: $pageSizeStr'));
+      exit(1);
+    }
 
-    printBackupMessage(DotVaultFile.storagePath);
+    if (exists(vaultPath)) {
+      print(red('Vault already exists: $vaultPath'));
+      exit(1);
+    }
+
+    // Get password using helper
+    final isInteractive =
+        !argResults!.wasParsed('password-file') &&
+        !argResults!.wasParsed('password-stdin') &&
+        !Platform.environment.containsKey('DVAULT_PASSWORD');
+
+    String password;
+    if (isInteractive) {
+      password = ask('Password:', hidden: true);
+      final confirm = ask('Confirm Password:', hidden: true);
+
+      if (password != confirm) {
+        print(red('Passwords do not match.'));
+        exit(1);
+      }
+    } else {
+      password = await getPassword(this);
+    }
+
+    try {
+      final repo = await IORepository.open(
+        file: File(vaultPath),
+        password: password,
+        create: true,
+        pageSize: pageSize,
+      );
+
+      await repo.close();
+      print(
+        green(
+          'Vault initialized at $vaultPath with page size $pageSize bytes.',
+        ),
+      );
+    } catch (e) {
+      print(red('Error: $e'));
+      exit(1);
+    }
   }
 }

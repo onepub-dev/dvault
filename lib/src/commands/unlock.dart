@@ -10,47 +10,41 @@ import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
 import 'package:path/path.dart';
 
-import '../env.dart';
-import '../security_box/security_box.dart';
-import 'helper.dart';
+import '../util/password_helper.dart';
+import '../vfs/io_repository.dart';
 
 class UnlockCommand extends Command<void> {
   UnlockCommand() {
     argParser
       ..addOption(
-        'box',
-        abbr: 'b',
-        help: 'The path and filename of the security box to decrypt.',
+        'vault',
+        abbr: 'v',
+        help: 'The path and filename of the vault to decrypt.',
       )
       ..addOption(
         'to',
         abbr: 't',
         help: '''
     The path to store the decrypted data in.
-    If not specified than the basename of the security box will be used.''',
+    If not specified then the basename of the vault will be used.''',
       )
       ..addFlag(
         'overwrite',
         abbr: 'o',
         negatable: false,
         help: 'Overwrites the output if it already exists',
-      )
-      ..addFlag(
-        'env',
-        abbr: 'e',
-        negatable: false,
-        help: '''
-If set the passphrase will be read from the 
-${Constants.dvaultPassphraseEnvKey} environment variable.
-otherwise the user will be prompted to enter the passphrase''',
-      )
-      ..addFlag('debug', abbr: 'd', help: 'Output debug information');
+      );
+
+    addPasswordOptions(this);
   }
 
   @override
   String get description => '''
-Decrypts the passed in security box.
-  dvault decrypt <box_name.sbox>
+Decrypts the passed in vault and extracts all files.
+  dvault unlock --vault <vault_name.dvault>
+  
+  Extract to a specific directory:
+    dvault unlock --vault important.dvault --to /path/to/extract
   ''';
 
   @override
@@ -58,52 +52,100 @@ Decrypts the passed in security box.
 
   @override
   Future<void> run() async {
-    Settings().setVerbose(enabled: argResults!['debug'] as bool);
-    final pathToSecurityBox = argResults!['box'] as String?;
+    final pathToVault = argResults!['vault'] as String?;
 
-    if (pathToSecurityBox == null) {
-      printerr("You must pass a 'security box' via the --box option.");
+    if (pathToVault == null) {
+      printerr("You must pass a 'vault' via the --vault option.");
       print(argParser.usage);
       exit(1);
     }
 
-    if (!exists(pathToSecurityBox)) {
-      printerr('The passed security box path ${truepath(pathToSecurityBox)} '
-          "doesn't exists.");
+    if (!exists(pathToVault)) {
+      printerr(
+        'The passed vault path ${truepath(pathToVault)} '
+        "doesn't exist.",
+      );
       print(argParser.usage);
       exit(1);
     }
 
     var outputPath = argResults!['to'] as String?;
 
-    // no output so use the [pathToSecurityBox] after stripping the .sbox
-    // extension.
-    outputPath ??= join(dirname(pathToSecurityBox),
-        basenameWithoutExtension(pathToSecurityBox));
+    // no output so use the [pathToVault] after stripping the .dvault extension.
+    outputPath ??= join(
+      dirname(pathToVault),
+      basenameWithoutExtension(pathToVault),
+    );
 
-    final overwrite = argResults!['overwrite'] as bool?;
+    final overwrite = argResults!['overwrite'] as bool;
 
     if (exists(outputPath)) {
-      if (!overwrite!) {
+      if (!overwrite) {
         printerr('The output path ${truepath(outputPath)} already exists.');
         print(argParser.usage);
         exit(1);
       }
-      delete(outputPath);
+
+      // Delete existing output
+      if (isDirectory(outputPath)) {
+        deleteDir(outputPath);
+      } else {
+        delete(outputPath);
+      }
     }
 
-    String? passphrase;
-    if (argResults!['env'] as bool) {
-      passphrase = env[Constants.dvaultPassphraseEnvKey];
-    } else {
-      passphrase = askForPassPhrase();
-    }
-    if (passphrase!.length < 16) {
-      printerr(red('The passphrase must be at least 16 characters long.'));
-      print(argParser.usage);
+    // Get password
+    String password;
+    try {
+      password = await getPassword(this);
+    } catch (e) {
+      printerr(red('Error getting password: $e'));
       exit(1);
     }
 
-    await (await SecurityBox.load(pathToSecurityBox)).loadFromDisk(outputPath);
+    // Open and extract vault
+    IORepository? repo;
+    try {
+      repo = await IORepository.open(
+        file: File(pathToVault),
+        password: password,
+      );
+
+      // Create output directory
+      createDir(outputPath, recursive: true);
+
+      // Extract all files
+      final files = repo.list('/', recursive: true);
+      var count = 0;
+
+      for (final filePath in files) {
+        if (!repo.isDirectory(filePath)) {
+          final data = await repo.read(filePath);
+          final outputFilePath = join(outputPath, filePath);
+
+          // Create parent directories if needed
+          final parentDir = dirname(outputFilePath);
+          if (!exists(parentDir)) {
+            createDir(parentDir, recursive: true);
+          }
+
+          // Write file
+          File(outputFilePath).writeAsBytesSync(data);
+          print('Extracted: $filePath -> $outputFilePath');
+          count++;
+        }
+      }
+
+      await repo.close();
+      print(
+        green(
+          'Successfully extracted $count file(s) from $pathToVault to $outputPath',
+        ),
+      );
+    } catch (e) {
+      print(red('Error: $e'));
+      await repo?.close();
+      exit(1);
+    }
   }
 }

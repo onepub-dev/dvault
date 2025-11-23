@@ -1,36 +1,36 @@
-import 'package:dcli/dcli.dart';
+// import 'package:dcli/dcli.dart';
 
-import 'line.dart';
+// import 'line.dart';
 
-/// Used by [TOCStore] and [TOCBuilder] to
-/// store line based entries.
-abstract class LineStore<E extends Line> {
-  /// path to the file containing the [TOCEntry]s.
-  /// Each entry is stored as a single line.
-  String _pathToTemporaryToc;
+// /// Used by [TOCStore] and [TOCBuilder] to
+// /// store line based entries.
+// abstract class LineStore<E extends Line> {
+//   /// path to the file containing the [TOCEntry]s.
+//   /// Each entry is stored as a single line.
+//   String _pathToTemporaryToc;
 
-  bool _open = false;
+//   bool _open = false;
 
-  LineStore() : _pathToTemporaryToc = createTempFilename();
+//   LineStore() : _pathToTemporaryToc = createTempFilename();
 
-  /// path to the TOC file
-  String get path => _pathToTemporaryToc;
+//   /// path to the TOC file
+//   String get path => _pathToTemporaryToc;
 
-  // return a stream of the current [TOCEntry]s.
-  Stream<E> get content => read(_pathToTemporaryToc).stream.map(fromLine);
+//   // return a stream of the current [TOCEntry]s.
+//   Stream<E> get content => read(_pathToTemporaryToc).stream.map(fromLine);
 
-  // Adds a file to the TOC index.
-  // The file is not processed in any way
-  void append(Line line) {
-    _openFile();
-    _pathToTemporaryToc.append(line.asString!);
-  }
+//   // Adds a file to the TOC index.
+//   // The file is not processed in any way
+//   void append(Line line) {
+//     _openFile();
+//     _pathToTemporaryToc.append(line.asString!);
+//   }
 
-  E fromLine(String line);
+//   E fromLine(String line);
 
-  void _openFile() {
-    if (!_open) {
-      _open = true;
-    }
-  }
-}
+//   void _openFile() {
+//     if (!_open) {
+//       _open = true;
+//     }
+//   }
+// }

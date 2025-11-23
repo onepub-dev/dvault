@@ -7,6 +7,12 @@
 import 'package:args/command_runner.dart';
 
 import 'commands/init.dart';
+import 'commands/ls.dart';
+import 'commands/cat.dart';
+import 'commands/cp.dart';
+import 'commands/rm.dart';
+import 'commands/mv.dart';
+import 'commands/env.dart';
 import 'commands/lock.dart';
 import 'commands/reset.dart';
 import 'commands/unlock.dart';
@@ -14,9 +20,15 @@ import 'commands/unlock.dart';
 Future<void> runCommand(List<String> args) async {
   final runner = CommandRunner<void>(
     'vault',
-    'Locks/Unlocks a file by encrypting it into a transportable "security box".',
+    'Locks/Unlocks a file or directory by encrypting it into a transportable "security box".',
   )
     ..addCommand(InitCommand())
+    ..addCommand(LsCommand())
+    ..addCommand(CatCommand())
+    ..addCommand(CpCommand())
+    ..addCommand(RmCommand())
+    ..addCommand(MvCommand())
+    ..addCommand(EnvCommand())
     ..addCommand(LockCommand())
     ..addCommand(UnlockCommand())
     ..addCommand(ResetCommand());

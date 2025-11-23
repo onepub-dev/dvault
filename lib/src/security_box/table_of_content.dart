@@ -1,87 +1,87 @@
-/* Copyright (C) S. Brett Sutton - All Rights Reserved
- * Unauthorized copying of this file, via any medium is strictly prohibited
- * Proprietary and confidential
- * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
- */
+// /* Copyright (C) S. Brett Sutton - All Rights Reserved
+//  * Unauthorized copying of this file, via any medium is strictly prohibited
+//  * Proprietary and confidential
+//  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
+//  */
 
-import 'dart:io';
+// import 'dart:io';
 
-import 'package:dcli/dcli.dart';
-import 'package:dvault/src/security_box/toc_store.dart';
-import 'package:path/path.dart';
+// import 'package:dcli/dcli.dart';
+// import 'package:dvault/src/security_box/toc_store.dart';
+// import 'package:path/path.dart';
 
-import '../file_encryptor.dart';
-import '../util/raf_helper.dart';
-import 'toc_entry.dart';
+// import '../file_encryptor.dart';
+// import '../util/raf_helper.dart';
+// import 'toc_entry.dart';
 
-class TableOfContent {
-  TOCStore tocStore = TOCStore();
+// class TableOfContent {
+//   TOCStore tocStore = TOCStore();
 
-  TableOfContent();
+//   TableOfContent();
 
-  // return a stream of the current [TOCEntry]s.
-  Stream<TOCEntry> get content => tocStore.content;
+//   // return a stream of the current [TOCEntry]s.
+//   Stream<TOCEntry> get content => tocStore.content;
 
-  Future<int> addFileToSecurityBox(
-    RandomAccessFile securitBox,
-    TOCEntry entry,
-    FileEncryptor encryptor,
-  ) async => encryptor.encrypt(
-    join(entry.relativeTo!, entry.relativePathToFile),
-    securitBox,
-  );
+//   Future<int> addFileToSecurityBox(
+//     RandomAccessFile securitBox,
+//     TOCEntry entry,
+//     FileEncryptor encryptor,
+//   ) async => encryptor.encrypt(
+//     join(entry.relativeTo!, entry.relativePathToFile),
+//     securitBox,
+//   );
 
-  /// encrypts and writes the TOC index (list of TOCEntrys )  to [securityBox]
-  Future<void> append(
-    RandomAccessFile securityBox,
-    FileEncryptor encryptor,
-  ) async {
-    encryptor.encrypt(pathToTemporaryToc, securityBox);
-  }
+//   /// encrypts and writes the TOC index (list of TOCEntrys )  to [securityBox]
+//   Future<void> append(
+//     RandomAccessFile securityBox,
+//     FileEncryptor encryptor,
+//   ) async {
+//     encryptor.encrypt(pathToTemporaryToc, securityBox);
+//   }
 
-  /// encrypt and save the toc to the [rafSecurityBox]
-  /// returning the length of the encrypted data
-  // int append(FileSync securityBox, FileEncryptor encryptor) =>
-  //     withTempFile((pathToTempToc) {
-  //       // the no. of entries in the toc
-  //       pathToTempToc.append(_tocEntryCountLine);
-  //       // each toc to its own line
-  //       for (final entry in entries) {
-  //         pathToTempToc.append(entry.asLine);
-  //       }
-  //       return encryptor.encrypt(pathToTempToc, securityBox);
-  //     });
+//   /// encrypt and save the toc to the [rafSecurityBox]
+//   /// returning the length of the encrypted data
+//   // int append(FileSync securityBox, FileEncryptor encryptor) =>
+//   //     withTempFile((pathToTempToc) {
+//   //       // the no. of entries in the toc
+//   //       pathToTempToc.append(_tocEntryCountLine);
+//   //       // each toc to its own line
+//   //       for (final entry in entries) {
+//   //         pathToTempToc.append(entry.asLine);
+//   //       }
+//   //       return encryptor.encrypt(pathToTempToc, securityBox);
+//   //     });
 
-  /// Load the table of contents from [rafSecurityBox] starting
-  /// at position [startOfToc]
-  void load(int startOfToc, RandomAccessFile rafSecurityBox) async {
-    await withTempFileAsync((pathToToc) async {
-      final writeTo = File(pathToToc).openWrite();
-      try {
-        FileEncryptor().decryptFileEntry(startOfToc, rafSecurityBox, writeTo);
+//   /// Load the table of contents from [rafSecurityBox] starting
+//   /// at position [startOfToc]
+//   void load(int startOfToc, RandomAccessFile rafSecurityBox) async {
+//     await withTempFileAsync((pathToToc) async {
+//       final writeTo = File(pathToToc).openWrite();
+//       try {
+//         FileEncryptor().decryptFileEntry(startOfToc, rafSecurityBox, writeTo);
 
-        // ignore: discarded_futures
-        final raf = await File(pathToToc).open();
+//         // ignore: discarded_futures
+//         final raf = await File(pathToToc).open();
 
-        try {
-          final entryCount = parseNo(readLine(raf, 'entries'), 'entries');
+//         try {
+//           final entryCount = parseNo(readLine(raf, 'entries'), 'entries');
 
-          for (var i = 0; i < entryCount; i++) {
-            final entry = TOCEntry.fromLine(readLine(raf, 'offset'));
-            _writeTempTocEntry(entry);
-          }
-        } finally {
-          await raf.close();
-        }
-      } finally {
-        await writeTo.close();
-      }
-    });
-  }
+//           for (var i = 0; i < entryCount; i++) {
+//             final entry = TOCEntry.fromLine(readLine(raf, 'offset'));
+//             _writeTempTocEntry(entry);
+//           }
+//         } finally {
+//           await raf.close();
+//         }
+//       } finally {
+//         await writeTo.close();
+//       }
+//     });
+//   }
 
-  // // ignore: unused_field
-  // int? _startOfFiles;
+//   // // ignore: unused_field
+//   // int? _startOfFiles;
 
-  // // ignore: avoid_setters_without_getters
-  // set setStartOfFiles(int startOfFiles) => _startOfFiles = startOfFiles;
-}
+//   // // ignore: avoid_setters_without_getters
+//   // set setStartOfFiles(int startOfFiles) => _startOfFiles = startOfFiles;
+// }
