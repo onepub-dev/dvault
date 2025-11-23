@@ -4,48 +4,56 @@ import 'package:dvault/src/lockbox/file_entry.dart';
 import 'package:dvault/src/lockbox/lockbox_format.dart';
 import 'package:dvault/src/lockbox/lockbox_header.dart';
 import 'package:dvault/src/lockbox/lockbox_toc.dart';
+import 'package:dvault/src/lockbox/recipient.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('DVaultFormat', () {
+  group('LockboxFormat', () {
     test('constants are correct', () {
       expect(
         LockboxFormat.magicBytes,
         equals([0x44, 0x56, 0x41, 0x55, 0x4C, 0x54]),
       );
-      expect(LockboxFormat.version, equals(2));
-      expect(LockboxFormat.headerSize, equals(64));
+      expect(LockboxFormat.version, equals(1));
+      expect(LockboxFormat.minHeaderSize, equals(26));
       expect(LockboxFormat.defaultPageSize, equals(64 * 1024));
       expect(LockboxFormat.nonceSize, equals(12));
       expect(LockboxFormat.authTagSize, equals(16));
       expect(LockboxFormat.pageOverhead, equals(28));
-      expect(LockboxFormat.envPageCount, equals(1));
       expect(LockboxFormat.firstFilePage, equals(1));
     });
   });
 
-  group('DVaultHeader', () {
+  group('LockboxHeader', () {
     test('serializes and deserializes correctly', () {
-      final salt = Uint8List.fromList(List.generate(16, (i) => i));
-      final kdfParams = Uint8List.fromList(List.generate(16, (i) => i * 2));
+      final keyId = Uint8List.fromList(List.generate(16, (i) => i));
+      final encryptedKey = Uint8List.fromList(List.generate(32, (i) => i));
+
+      final recipient = Recipient(
+        type: RecipientType.password,
+        keyId: keyId,
+        encryptedSessionKey: encryptedKey,
+      );
 
       final header = LockboxHeader(
         version: LockboxFormat.version,
         pageSize: 65536,
         tocOffset: 1024,
-        salt: salt,
-        kdfParams: kdfParams,
+        recipients: [recipient],
       );
 
       final bytes = header.toBytes();
-      expect(bytes.length, equals(LockboxFormat.headerSize));
+      // Header size = Fixed (26) + Recipient (1 + 4 + 16 + 4 + 32 = 57) = 83
+      expect(bytes.length, equals(83));
 
       final parsed = LockboxHeader.fromBytes(bytes);
       expect(parsed.version, equals(header.version));
       expect(parsed.pageSize, equals(header.pageSize));
       expect(parsed.tocOffset, equals(header.tocOffset));
-      expect(parsed.salt, equals(header.salt));
-      expect(parsed.kdfParams, equals(header.kdfParams));
+      expect(parsed.recipients.length, equals(1));
+      expect(parsed.recipients.first.type, equals(RecipientType.password));
+      expect(parsed.recipients.first.keyId, equals(keyId));
+      expect(parsed.recipients.first.encryptedSessionKey, equals(encryptedKey));
     });
 
     test('rejects invalid magic bytes', () {
@@ -61,7 +69,8 @@ void main() {
     test('rejects invalid version', () {
       final badBytes = Uint8List(64);
       badBytes.setRange(0, 6, LockboxFormat.magicBytes);
-      badBytes[6] = 99; // Invalid version
+      final data = ByteData.view(badBytes.buffer);
+      data.setUint16(6, 99, Endian.little); // Invalid version
 
       expect(
         () => LockboxHeader.fromBytes(badBytes),
@@ -70,12 +79,17 @@ void main() {
     });
 
     test('handles custom page sizes', () {
+      final recipient = Recipient(
+        type: RecipientType.password,
+        keyId: Uint8List(16),
+        encryptedSessionKey: Uint8List(32),
+      );
+
       final header = LockboxHeader(
         version: LockboxFormat.version,
         pageSize: 128 * 1024, // 128KB
         tocOffset: 2048,
-        salt: Uint8List(16),
-        kdfParams: Uint8List(16),
+        recipients: [recipient],
       );
 
       final bytes = header.toBytes();

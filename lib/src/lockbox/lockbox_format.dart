@@ -4,11 +4,11 @@ class LockboxFormat {
   static const List<int> magicBytes = [0x44, 0x56, 0x41, 0x55, 0x4C, 0x54];
 
   /// Current format version
-  static const int version = 2;
+  static const int version = 1;
 
-  /// Size of the header in bytes.
-  /// Magic (6) + Version (2) + PageSize (4) + TOC Pointer (8) + Salt (16) + KDF Params (16) + Reserved (12) = 64 bytes
-  static const int headerSize = 64;
+  /// Minimum size of the header in bytes.
+  /// Magic (6) + Version (2) + PageSize (4) + TOC Pointer (8) + HeaderSize (4) + RecipientCount (2) = 26 bytes
+  static const int minHeaderSize = 26;
 
   /// Default page size (64KB)
   static const int defaultPageSize = 64 * 1024;

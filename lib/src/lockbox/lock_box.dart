@@ -91,7 +91,7 @@ abstract class LockBox {
         (virtualStreamSize + virtualPageSize - 1) ~/ virtualPageSize;
     final totalPhysicalFilePages = totalFilePages + LockboxFormat.firstFilePage;
     final tocStartPhysicalOffset =
-        LockboxFormat.headerSize + (totalPhysicalFilePages * physicalPageSize);
+        _header.headerSize + (totalPhysicalFilePages * physicalPageSize);
 
     var currentTocOffset = 0;
     var currentTocPageIdx = totalPhysicalFilePages;
@@ -108,11 +108,11 @@ abstract class LockBox {
       final paddedChunk = Uint8List(virtualPageSize);
       paddedChunk.setRange(0, chunk.length, chunk);
 
-      final encryptedPage = await DVaultPage.encrypt(
+      final encryptedPage = await LockboxPage.encrypt(
         data: paddedChunk,
         key: _key,
         pageIndex: currentTocPageIdx,
-        salt: _header.salt,
+        pageSize: virtualPageSize,
       );
 
       final offset =
@@ -136,8 +136,7 @@ abstract class LockBox {
       version: _header.version,
       pageSize: _header.pageSize,
       tocOffset: tocStartPhysicalOffset,
-      salt: _header.salt,
-      kdfParams: _header.kdfParams,
+      recipients: _header.recipients,
     );
 
     await writeBytesAt(0, newHeader.toBytes());
@@ -165,7 +164,7 @@ abstract class LockBox {
       final offsetInPage = currentOffset % virtualPageSize;
       final physicalPageIdx = pageIdx + LockboxFormat.firstFilePage;
       final physicalOffset =
-          LockboxFormat.headerSize + (physicalPageIdx * physicalPageSize);
+          _header.headerSize + (physicalPageIdx * physicalPageSize);
 
       final encryptedBytes = await readBytesAt(
         physicalOffset,
@@ -173,9 +172,10 @@ abstract class LockBox {
       );
       if (encryptedBytes.isEmpty) break;
 
-      final decryptedPage = await DVaultPage.decrypt(
+      final decryptedPage = await LockboxPage.decrypt(
         encryptedPage: encryptedBytes,
         key: _key,
+        pageIndex: physicalPageIdx,
       );
 
       final availableInPage = decryptedPage.length - offsetInPage;
@@ -216,15 +216,16 @@ abstract class LockBox {
       Uint8List pageData;
       if (offsetInPage > 0) {
         final physicalOffset =
-            LockboxFormat.headerSize + (physicalPageIdx * physicalPageSize);
+            _header.headerSize + (physicalPageIdx * physicalPageSize);
         final encryptedBytes = await readBytesAt(
           physicalOffset,
           physicalPageSize,
         );
         if (encryptedBytes.isNotEmpty) {
-          pageData = await DVaultPage.decrypt(
+          pageData = await LockboxPage.decrypt(
             encryptedPage: encryptedBytes,
             key: _key,
+            pageIndex: physicalPageIdx,
           );
         } else {
           pageData = Uint8List(virtualPageSize);
@@ -243,15 +244,15 @@ abstract class LockBox {
         data.sublist(written, written + toWrite),
       );
 
-      final encryptedPage = await DVaultPage.encrypt(
+      final encryptedPage = await LockboxPage.encrypt(
         data: pageData,
         key: _key,
         pageIndex: pageIdx + LockboxFormat.firstFilePage,
-        salt: _header.salt,
+        pageSize: virtualPageSize,
       );
 
       final physicalOffset =
-          LockboxFormat.headerSize + (physicalPageIdx * physicalPageSize);
+          _header.headerSize + (physicalPageIdx * physicalPageSize);
       await writeBytesAt(physicalOffset, encryptedPage);
 
       written += toWrite;
@@ -371,14 +372,14 @@ abstract class LockBox {
     final pageData = Uint8List(_header.pageSize);
     pageData.setRange(0, bytes.length, bytes);
 
-    final encryptedPage = await DVaultPage.encrypt(
+    final encryptedPage = await LockboxPage.encrypt(
       data: pageData,
       key: _key,
       pageIndex: 0,
-      salt: _header.salt,
+      pageSize: _header.pageSize,
     );
 
-    await writeBytesAt(LockboxFormat.headerSize, encryptedPage);
+    await writeBytesAt(_header.headerSize, encryptedPage);
   }
 
   // Simple JSON encoding/decoding (to avoid dart:convert in web)

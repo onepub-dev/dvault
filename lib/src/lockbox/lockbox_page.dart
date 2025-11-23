@@ -1,11 +1,16 @@
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
-import 'package:dvault/src/util/byte_data_helper.dart';
 
 import 'lockbox_format.dart';
 
-class DVaultPage {
+/// A Lockbox is stored as a set of pages (blocks).
+/// Each page can contain multiple files and a file may span multiple
+/// pages. Using pages allows us to access any file without having to download
+/// or decrypt the entire lockbox.
+/// Each page is encrypted using AES-GCM with a unique nonce.
+class LockboxPage {
   static final _algorithm = AesGcm.with256bits();
 
   /// Encrypts a page of data.
@@ -14,10 +19,13 @@ class DVaultPage {
     required Uint8List data,
     required SecretKey key,
     required int pageIndex,
-    required Uint8List salt,
+    required int pageSize,
   }) async {
-    // Generate deterministic nonce: Hash(Salt + PageIndex) -> 12 bytes
-    final nonce = _generateNonce(pageIndex, salt);
+    // Generate random nonce (12 bytes)
+    // We don't strictly need pageIndex if we use a random nonce,
+    // but we could include it as associated data if we wanted to bind the page to its index.
+    // For now, simple random nonce.
+    final nonce = _generateRandomNonce();
 
     final secretBox = await _algorithm.encrypt(
       data,
@@ -59,6 +67,7 @@ class DVaultPage {
   static Future<Uint8List> decrypt({
     required Uint8List encryptedPage,
     required SecretKey key,
+    required int pageIndex,
   }) async {
     if (encryptedPage.length < LockboxFormat.pageOverhead) {
       throw FormatException('Page too short');
@@ -91,25 +100,15 @@ class DVaultPage {
     );
   }
 
-  /// Generates a deterministic nonce based on page index and salt.
-  /// We use a simple XOR/Hash combination or just the index if safe.
-  /// For AES-GCM, nonce uniqueness is critical.
-  /// We'll use the first 12 bytes of the salt XORed with the page index.
-  static List<int> _generateNonce(int pageIndex, Uint8List salt) {
-    final nonce = Uint8List(LockboxFormat.nonceSize);
-
-    // Copy first 12 bytes of salt (or pad if short, but salt is 16 bytes)
-    for (int i = 0; i < LockboxFormat.nonceSize; i++) {
-      nonce[i] = salt[i];
-    }
-
-    // XOR the page index into the last 8 bytes (little endian)
-    final data = ByteData.view(nonce.buffer);
-    // We only have 12 bytes. Let's use the last 8 bytes for the counter.
-    // Bytes 4-11.
-    final current = ByteDataHelper.getUint64(data, 4, Endian.little);
-    ByteDataHelper.setUint64(data, 4, current ^ pageIndex, Endian.little);
-
-    return nonce;
+  /// Generates a cryptographically secure random nonce for AES-GCM encryption.
+  ///
+  /// Uses dart:math's Random.secure() to generate 12 truly random bytes.
+  /// Each nonce MUST be unique for the same key to maintain AES-GCM security.
+  static List<int> _generateRandomNonce() {
+    final random = Random.secure();
+    return List<int>.generate(
+      LockboxFormat.nonceSize,
+      (_) => random.nextInt(256),
+    );
   }
 }

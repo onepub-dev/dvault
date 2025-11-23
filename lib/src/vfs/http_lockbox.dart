@@ -4,11 +4,12 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:web/web.dart' as web;
 
+import '../lockbox/lock_box.dart';
 import '../lockbox/lockbox_format.dart';
 import '../lockbox/lockbox_header.dart';
 import '../lockbox/lockbox_page.dart';
 import '../lockbox/lockbox_toc.dart';
-import '../lockbox/lock_box.dart';
+import '../lockbox/recipient.dart';
 
 /// Read-only repository using HTTP Range Requests
 class HTTPLockbox extends LockBox {
@@ -25,9 +26,9 @@ class HTTPLockbox extends LockBox {
   }) async {
     final repo = HTTPLockbox._(url);
 
-    // Read header
+    // Read minimum header size
     final headers = web.Headers();
-    headers.set('Range', 'bytes=0-${LockboxFormat.headerSize - 1}');
+    headers.set('Range', 'bytes=0-${LockboxFormat.minHeaderSize - 1}');
 
     final response =
         await web.window
@@ -39,19 +40,53 @@ class HTTPLockbox extends LockBox {
     }
 
     final arrayBuffer = await response.arrayBuffer().toDart;
-    final headerBytes = arrayBuffer.toDart.asUint8List();
+    final minHeaderBytes = arrayBuffer.toDart.asUint8List();
 
-    if (headerBytes.length < LockboxFormat.headerSize) {
+    if (minHeaderBytes.length < LockboxFormat.minHeaderSize) {
       throw Exception('Invalid vault: header too small');
     }
 
-    final header = LockboxHeader.fromBytes(headerBytes);
-    final key = await _deriveKey(password, header.salt);
+    // Parse header size
+    final tempHeader = LockboxHeader.fromBytes(minHeaderBytes);
+    final fullHeaderSize = tempHeader.headerSize;
 
-    await repo.initialize(key: key, header: header, toc: LockboxTOC());
+    // Read full header
+    final fullHeaderHeaders = web.Headers();
+    fullHeaderHeaders.set('Range', 'bytes=0-${fullHeaderSize - 1}');
+
+    final fullHeaderResponse =
+        await web.window
+            .fetch(url.toJS, web.RequestInit(headers: fullHeaderHeaders))
+            .toDart;
+
+    if (!fullHeaderResponse.ok) {
+      throw Exception(
+        'Failed to fetch full header: ${fullHeaderResponse.status}',
+      );
+    }
+
+    final fullHeaderBuffer = await fullHeaderResponse.arrayBuffer().toDart;
+    final headerBytes = fullHeaderBuffer.toDart.asUint8List();
+
+    final header = LockboxHeader.fromBytes(headerBytes);
+
+    // Decrypt Session Key
+    final recipient = header.recipients.firstWhere(
+      (r) => r.type == RecipientType.password,
+      orElse: () => throw Exception('No password recipient found'),
+    );
+
+    final salt = recipient.keyId;
+    final passwordKey = await _deriveKey(password, salt);
+    final sessionKey = await _unwrapKey(
+      recipient.encryptedSessionKey,
+      passwordKey,
+    );
+
+    await repo.initialize(key: sessionKey, header: header, toc: LockboxTOC());
 
     // Get file size from Content-Range header
-    final contentRange = response.headers.get('Content-Range');
+    final contentRange = fullHeaderResponse.headers.get('Content-Range');
     if (contentRange != null) {
       final match = RegExp(r'bytes \d+-\d+/(\d+)').firstMatch(contentRange);
       if (match != null) {
@@ -61,13 +96,14 @@ class HTTPLockbox extends LockBox {
 
     // Read Env Page (Page 0)
     final physicalPageSize = header.pageSize + LockboxFormat.pageOverhead;
-    final envPageStart = LockboxFormat.headerSize;
+    final envPageStart = fullHeaderSize;
 
     final envPage = await repo.readBytesAt(envPageStart, physicalPageSize);
     if (envPage.length == physicalPageSize) {
-      final envData = await DVaultPage.decrypt(
+      final envData = await LockboxPage.decrypt(
         encryptedPage: envPage,
-        key: key,
+        key: sessionKey,
+        pageIndex: 0,
       );
       await repo.parseEnv(envData);
     }
@@ -86,17 +122,20 @@ class HTTPLockbox extends LockBox {
 
     final tocBytes = <int>[];
     var offset = tocOffset;
-    var pageIndex = 0;
+    var pageIndex =
+        (header.tocOffset - header.headerSize) ~/ physicalPageSize +
+        LockboxFormat.firstFilePage;
 
     // Read TOC pages (estimate max 10 pages for TOC)
-    while (pageIndex < 10 && (_fileSize == null || offset < _fileSize!)) {
+    while (pageIndex < 100 && (_fileSize == null || offset < _fileSize!)) {
       try {
         final page = await readBytesAt(offset, physicalPageSize);
         if (page.length < physicalPageSize) break;
 
-        final decrypted = await DVaultPage.decrypt(
+        final decrypted = await LockboxPage.decrypt(
           encryptedPage: page,
           key: key,
+          pageIndex: pageIndex,
         );
 
         tocBytes.addAll(decrypted);
@@ -117,6 +156,34 @@ class HTTPLockbox extends LockBox {
     }
 
     return LockboxTOC.fromBytes(Uint8List.fromList(tocBytes));
+  }
+
+  /// Unwraps (decrypts) the session key.
+  static Future<SecretKey> _unwrapKey(
+    Uint8List encryptedSessionKey,
+    SecretKey wrappingKey,
+  ) async {
+    final algorithm = AesGcm.with256bits();
+
+    if (encryptedSessionKey.length < 12 + 16) {
+      throw FormatException('Invalid encrypted key length');
+    }
+
+    final nonce = encryptedSessionKey.sublist(0, 12);
+    final tag = encryptedSessionKey.sublist(encryptedSessionKey.length - 16);
+    final ciphertext = encryptedSessionKey.sublist(
+      12,
+      encryptedSessionKey.length - 16,
+    );
+
+    final secretBox = SecretBox(ciphertext, nonce: nonce, mac: Mac(tag));
+
+    final sessionKeyBytes = await algorithm.decrypt(
+      secretBox,
+      secretKey: wrappingKey,
+    );
+
+    return SecretKey(sessionKeyBytes);
   }
 
   static Future<SecretKey> _deriveKey(String password, Uint8List salt) async {
