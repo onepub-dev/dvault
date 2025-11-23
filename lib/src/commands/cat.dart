@@ -34,7 +34,7 @@ class CatCommand extends Command<void> {
     final password = await getPassword(this);
 
     try {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: File(lockboxPath),
         password: password,
       );
@@ -46,7 +46,7 @@ class CatCommand extends Command<void> {
 
       final bytes = await repo.read(filePath);
       stdout.add(bytes);
-      
+
       await repo.close();
     } catch (e) {
       print(red('Error: $e'));

@@ -70,7 +70,7 @@ class InitCommand extends Command<void> {
     }
 
     try {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: File(lockboxPath),
         password: password,
         create: true,

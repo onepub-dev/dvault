@@ -108,7 +108,11 @@ Locks the passed in file or directory by adding it to a lockbox.
       }
     }
 
-    await addToLockbox(filePaths, pathToLockbox, includeChildren: includeChildren);
+    await addToLockbox(
+      filePaths,
+      pathToLockbox,
+      includeChildren: includeChildren,
+    );
   }
 
   Future<void> addToLockbox(
@@ -126,12 +130,12 @@ Locks the passed in file or directory by adding it to a lockbox.
     }
 
     // Create or open the lockbox
-    IOLockbox? repo;
+    IOLockBox? repo;
     try {
       final lockboxFile = File(pathToLockbox);
       final create = !lockboxFile.existsSync();
 
-      repo = await IOLockbox.open(
+      repo = await IOLockBox.open(
         file: lockboxFile,
         password: password,
         create: create,
@@ -166,7 +170,7 @@ Locks the passed in file or directory by adding it to a lockbox.
     }
   }
 
-  Future<void> _addFile(IOLockbox repo, String filePath) async {
+  Future<void> _addFile(IOLockBox repo, String filePath) async {
     final file = File(filePath);
     final bytes = await file.readAsBytes();
     final lockboxPath = basename(filePath);
@@ -176,7 +180,7 @@ Locks the passed in file or directory by adding it to a lockbox.
   }
 
   Future<void> _addDirectory(
-    IOLockbox repo,
+    IOLockBox repo,
     String dirPath, {
     required bool recursive,
   }) async {

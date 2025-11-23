@@ -1,106 +1,198 @@
-# Overview
+# Lockbox - Secure File Encryption
 
-DVault is designed to make protecting (encrypting) files and directories simple and secure.
-When protecting a file or directory DVault uses the terms 'lock' and 'unlock' to indicate the process of protecting (locking) a file or directroy and opening (unlocking) a file or directory.
+Lockbox (formerly DVault) is designed to make protecting (encrypting) files and directories simple and secure using Public Key Infrastructure (PKI).
 
-When you lock a file or directory with DVault it creates a single self contained 'lockbox' file.
+When you lock a file or directory with Lockbox, it creates a single self-contained `.lbox` file that can be:
+- **Unlocked by you** using your private key
+- **Shared with team members** by adding them as recipients
+- **Accessed in CI/CD** using machine keys
+- **Decrypted in a web browser** for on-demand access
 
-DVault uses a passphrase to protected a lockbox, however you only need your passphrase when opening a lockbox.
+Lockbox works as both an interactive command line tool and can be called by other scripts. It supports Linux, macOS, and Windows.
 
-DVault works as a simple interactive command line tool but is also designed to be called by other scripts.
+## Quick Start
 
-DVault supports Linux, Mac OSX and Windows. 
-For those interested; the gory technical details about RSA and AES are covered below.
-
-
-## Locking a file
-When you lock a file with DVault the original file or directory is (optionally) deleted and replaced with a new .lbox file.
-
-e.g. important.txt becomes important.txt.lbox.
-
-When you unlock a lockbox, the lockbox is deleted and your original file is restored.
-
-e.g. important.txt.lbox becomes important.txt
-
-# Initialise DVault
-To install DVault run:
-```
+### Installation
+```bash
 dart pub global activate dvault
 ```
 
-After installing DVault you need to run a one time initialisation process:
+### Initialize Lockbox
+After installing, run the one-time initialization to create your PKI key pair:
 
-```
-dvault init
+```bash
+lockbox init
   Enter passphrase: ******
-  Confirm passphrase: ***** 
-  Generating keys, this make take a couple of minutes.
-  Generating: ......
+  Confirm passphrase: *****
+  Generating RSA key pair...
   Keys saved to ~/.dvault
 
-  Be sure to backup the ~/.dvault file as it is critical to unlocking your lockboxes.
+  ⚠️  IMPORTANT: Backup ~/.dvault - it's critical for accessing your lockboxes!
 ```
 
-## Lock the file
-To lock a file:
-```
-dvault lock important.txt
-  Stored and locked in important.txt.lbox.
+This creates an RSA public/private key pair in `~/.dvault`. The private key is encrypted with your passphrase.
+
+### Lock a File
+```bash
+lockbox lock important.txt
+  Stored and locked in important.txt.lbox
 ```
 
-## Unlock the file
-To unlock an existing lockbox you need the passphrase used when initialising dvault.
+The original file is (optionally) deleted and replaced with `important.txt.lbox`.
 
-```
-dvault unlock important.txt.lbox
-  Passphrase: ****** 
+### Unlock a File
+```bash
+lockbox unlock important.txt.lbox
+  Passphrase: ******
   Unlocked to important.txt
 ```
 
-As a .lbox file contains the original keys, the lockbox can be copied to any machine and provided you know the passphrase you can always unlock the file.
+## Advanced Features
 
-# Send a lockbox to a friend
-If you want to send an lbox to a friend, you can create a lockbox using a single use passphrase which you can share with a friend.
+### Team Sharing
+Add team members as recipients to a lockbox so they can decrypt it with their own keys:
+
+```bash
+lockbox recipient add important.txt.lbox user@example.com
+  Fetching public key for user@example.com from OnePub...
+  Added user@example.com as recipient
+```
+
+Team members can then unlock the lockbox using their own `~/.dvault` key.
+
+### CI/CD Integration
+Generate a machine key for CI/CD environments:
+
+```bash
+lockbox ci generate
+  Machine key generated: ci-key-2024-01-15.pem
+  
+  Add this key to your lockbox:
+  lockbox recipient add secrets.lbox --key ci-key-2024-01-15.pem
+  
+  In your CI environment, set:
+  export DVAULT_KEY=$(cat ci-key-2024-01-15.pem)
+```
+
+Your CI pipeline can then decrypt lockboxes without a passphrase:
+
+```bash
+lockbox unlock secrets.lbox  # Uses DVAULT_KEY environment variable
+```
+
+### Password-Based Sharing (Legacy)
+For one-time sharing with someone who doesn't have Lockbox set up:
+
+```bash
+lockbox share important.txt
+  ⚠️  DO NOT USE YOUR NORMAL LOCKBOX PASSPHRASE ⚠️
+  Enter one-time passphrase: *****
+  Confirm passphrase: *****
+  Stored and locked in important.txt.lbox
+  
+  Share the passphrase securely (phone call, Signal, etc.)
+  ⚠️  DO NOT EMAIL OR TWEET THE PASSPHRASE! ⚠️
+```
+
+Send `important.txt.lbox` to your recipient along with instructions to:
+1. Install Lockbox: `dart pub global activate dvault`
+2. Unlock with the shared passphrase: `lockbox unlock important.txt.lbox`
+
+## Technical Architecture
+
+### PKI-Based Encryption
+
+Lockbox uses a hybrid encryption approach:
+
+1. **User Keys**: Each user has an RSA-2048 public/private key pair stored in `~/.dvault`
+   - Private key is encrypted with the user's passphrase (Argon2id)
+   - Public key can be shared via OnePub for team collaboration
+
+2. **Session Keys**: Each lockbox has a unique AES-256 session key
+   - Generated randomly when the lockbox is created
+   - Encrypted separately for each recipient using their public key
+   - Stored in the lockbox header
+
+3. **File Encryption**: Files are encrypted using AES-256-GCM
+   - Each page (64KB block) uses a unique random nonce
+   - Allows partial file access without decrypting the entire lockbox
+
+### Lockbox File Format
+
+A `.lbox` file contains:
 
 ```
-dvault share important.txt
-   Looks like you are going to share a lockbox with a friend.
-   When prompted enter a passphrase that you can give to your friend.
-   **** DO NOT USE YOUR NORMAL DVAULT PASSPHRASE ****
-   Enter passphrase: *****
-   Confirm passphrase: *****
-   Stored and locked in important.txt.lbox
-   
-   Call your friend and give them the passphase or send it to them via
-   some other secure means. 
-   **** DO NOT EMAIL OR TWEET THE PASSPHRASE! ****
-   Email 'imporantant.txt.lbox to your friend'
-   
-   You may also want to send them the following instruction.
-   
-   Please find the attached .lbox file which contains the documents discussed.
-   To unlock the lockbox you will need to download and install DVault from
-   https://github.com/onepub-dev/dvault/wiki/Shared-Vault
-   The above link also contains instructions on how to unlock the lockbox.
-   I will ring with the required passphrase shortly.
+[Header]
+  - Magic bytes: "DVAULT"
+  - Version: 1
+  - Page size: 64KB (configurable)
+  - Recipients: List of authorized users/keys
+    - Type: PKI (RSA) or Password
+    - Key ID: Public key hash or password salt
+    - Encrypted Session Key
 
-```   
+[Environment Page]
+  - Encrypted key-value pairs
+  - Metadata about the lockbox
 
+[File Pages]
+  - Each page: [Nonce (12B)] + [Ciphertext] + [Auth Tag (16B)]
+  - Files can span multiple pages
+  - Random access without full decryption
 
-# Technical details
+[Table of Contents]
+  - File paths, offsets, lengths
+  - Timestamps (created, modified)
+```
 
-## Key management.
-When you run dvault init a public/private key pair is created and stored into the ~/.dvault file (or suitable per user OS sepecific location). The dvault file is configured with appropriate permissions to prevent unauthorised access.
+### Security Features
 
-When you create a lockbox, a per lockbox session key is created and stored in the lockbox after being encrypted with your 
-public key (from the .dvault file).
-When you add files to the lockbox the session key is used to encrypt those files.
+- **AES-256-GCM**: Authenticated encryption for all data
+- **RSA-2048**: Public key encryption for session keys
+- **Argon2id**: Memory-hard key derivation for passphrases
+- **Random Nonces**: Cryptographically secure random nonces for each page
+- **No Key Reuse**: Each lockbox has a unique session key
 
-To unlock the lockbox, the session key is decrypted using your private key (from the .dvault file).
+### Multi-Recipient Support
 
-If you loose the .dvault file then you will loose access to ALL your lockboxes, so it is critical to backup your .dvault file.
+A single lockbox can have multiple recipients:
+- **Users**: Team members with their own `~/.dvault` keys
+- **Machine Keys**: CI/CD agents with standalone RSA keys
+- **Passwords**: Legacy/share mode for one-time access
 
+Each recipient has the session key encrypted with their specific key, allowing independent access without sharing private keys.
 
+## Browser Integration
 
+Lockbox files can be decrypted in a web browser:
 
+1. Upload your `~/.dvault` file (stays client-side)
+2. Enter your passphrase to decrypt your private key
+3. Browse and decrypt files on-demand
 
+All decryption happens in the browser - your private key never leaves your device.
+
+## Backup & Recovery
+
+**Critical**: Backup your `~/.dvault` file!
+
+- Without it, you cannot decrypt any lockboxes created with your key
+- Store it securely (password manager, encrypted backup, etc.)
+- Consider printing a paper backup of the private key for disaster recovery
+
+## Migration from DVault
+
+If you have existing DVault files, they will continue to work. The new PKI features are opt-in:
+
+- Old password-based lockboxes: Still work with `lockbox unlock`
+- New PKI lockboxes: Use the enhanced features above
+
+## Contributing
+
+Lockbox is open source. Contributions welcome!
+
+Repository: https://github.com/onepub-dev/dvault
+
+## License
+
+MIT License - see LICENSE file for details

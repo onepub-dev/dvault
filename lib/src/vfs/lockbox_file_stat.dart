@@ -1,6 +1,6 @@
 import 'dart:io';
 
-class LockboxFileStat implements FileStat {
+class LockBoxFileStat implements FileStat {
   @override
   final DateTime changed;
   @override
@@ -14,7 +14,7 @@ class LockboxFileStat implements FileStat {
   @override
   final int size;
 
-  LockboxFileStat({
+  LockBoxFileStat({
     required this.changed,
     required this.modified,
     required this.accessed,
@@ -23,8 +23,8 @@ class LockboxFileStat implements FileStat {
     required this.size,
   });
 
-  static LockboxFileStat notFound() {
-    return LockboxFileStat(
+  static LockBoxFileStat notFound() {
+    return LockBoxFileStat(
       changed: DateTime.now(),
       modified: DateTime.now(),
       accessed: DateTime.now(),

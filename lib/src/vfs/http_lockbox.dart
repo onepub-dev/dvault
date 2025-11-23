@@ -12,19 +12,19 @@ import '../lockbox/lockbox_toc.dart';
 import '../lockbox/recipient.dart';
 
 /// Read-only repository using HTTP Range Requests
-class HTTPLockbox extends LockBox {
+class HTTPLockBox extends LockBox {
   final String _url;
   final Map<int, Uint8List> _cache = {};
   int? _fileSize;
 
-  HTTPLockbox._(this._url);
+  HTTPLockBox._(this._url);
 
   /// Open a remote vault via HTTP
-  static Future<HTTPLockbox> open({
+  static Future<HTTPLockBox> open({
     required String url,
     required String password,
   }) async {
-    final repo = HTTPLockbox._(url);
+    final repo = HTTPLockBox._(url);
 
     // Read minimum header size
     final headers = web.Headers();

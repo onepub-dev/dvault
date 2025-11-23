@@ -2,8 +2,8 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
-import 'package:dvault/src/vfs/http_lockbox.dart';
 import 'package:dvault/src/lockbox/lock_box.dart';
+import 'package:dvault/src/vfs/http_lockbox.dart';
 import 'package:dvault/src/vfs/opfs_lockbox.dart';
 import 'package:web/web.dart' as web;
 
@@ -207,7 +207,7 @@ Future<void> openHttpVault() async {
 
     log('Opening remote vault...', 'info');
 
-    currentVault = await HTTPLockbox.open(url: url, password: password);
+    currentVault = await HTTPLockBox.open(url: url, password: password);
 
     isReadOnly = true;
     log('✓ Remote vault opened (read-only)!', 'success');

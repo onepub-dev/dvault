@@ -104,9 +104,12 @@ Decrypts the passed in lockbox and extracts all files.
     }
 
     // Open and extract lockbox
-    IOLockbox? lockbox;
+    IOLockBox? lockbox;
     try {
-      lockbox = await IOLockbox.open(file: File(pathToLockbox), password: password);
+      lockbox = await IOLockBox.open(
+        file: File(pathToLockbox),
+        password: password,
+      );
 
       // Create output directory
       createDir(outputPath, recursive: true);

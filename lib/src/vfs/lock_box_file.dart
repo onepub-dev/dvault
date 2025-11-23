@@ -4,12 +4,12 @@ import 'dart:typed_data';
 import 'package:dvault/src/vfs/lockbox_filesystem.dart';
 import 'package:file/file.dart';
 
-class LockboxFile extends File {
-  final LockboxFileSystem _fs;
+class LockBoxFile extends File {
+  final LockBoxFileSystem _fs;
   @override
   final String path;
 
-  LockboxFile(this._fs, this.path);
+  LockBoxFile(this._fs, this.path);
 
   @override
   FileSystem get fileSystem => _fs;
@@ -28,7 +28,7 @@ class LockboxFile extends File {
   @override
   Future<File> rename(String newPath) async {
     await _fs.lockbox.rename(path, newPath);
-    return LockboxFile(_fs, newPath);
+    return LockBoxFile(_fs, newPath);
   }
 
   @override
@@ -39,7 +39,7 @@ class LockboxFile extends File {
   Future<File> copy(String newPath) async {
     final content = await readAsBytes();
     await _fs.lockbox.write(newPath, content);
-    return LockboxFile(_fs, newPath);
+    return LockBoxFile(_fs, newPath);
   }
 
   @override

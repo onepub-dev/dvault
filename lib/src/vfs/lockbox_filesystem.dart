@@ -1,20 +1,20 @@
 import 'package:dvault/src/lockbox/lock_box.dart';
-import 'package:dvault/src/vfs/lockbox_directory.dart';
-import 'package:dvault/src/vfs/lockbox_file.dart';
+import 'package:dvault/src/vfs/lock_box_directory.dart';
+import 'package:dvault/src/vfs/lock_box_file.dart';
 import 'package:dvault/src/vfs/lockbox_file_stat.dart';
 import 'package:file/file.dart';
 import 'package:path/path.dart' as p;
 
-class LockboxFileSystem extends FileSystem {
+class LockBoxFileSystem extends FileSystem {
   final LockBox lockbox;
 
-  LockboxFileSystem(this.lockbox);
+  LockBoxFileSystem(this.lockbox);
 
   @override
-  Directory directory(dynamic path) => LockboxDirectory(this, _getPath(path));
+  Directory directory(dynamic path) => LockBoxDirectory(this, _getPath(path));
 
   @override
-  File file(dynamic path) => LockboxFile(this, _getPath(path));
+  File file(dynamic path) => LockBoxFile(this, _getPath(path));
 
   @override
   Link link(dynamic path) => throw UnsupportedError('Links not supported');
@@ -50,7 +50,7 @@ class LockboxFileSystem extends FileSystem {
   Future<FileStat> stat(String path) async {
     final entry = lockbox.stat(path);
     if (entry != null) {
-      return LockboxFileStat(
+      return LockBoxFileStat(
         changed: DateTime.fromMillisecondsSinceEpoch(entry.modified),
         modified: DateTime.fromMillisecondsSinceEpoch(entry.modified),
         accessed: DateTime.fromMillisecondsSinceEpoch(entry.modified),
@@ -61,7 +61,7 @@ class LockboxFileSystem extends FileSystem {
     }
 
     if (lockbox.isDirectory(path)) {
-      return LockboxFileStat(
+      return LockBoxFileStat(
         changed: DateTime.now(),
         modified: DateTime.now(),
         accessed: DateTime.now(),
@@ -71,7 +71,7 @@ class LockboxFileSystem extends FileSystem {
       );
     }
 
-    return LockboxFileStat.notFound();
+    return LockBoxFileStat.notFound();
   }
 
   @override

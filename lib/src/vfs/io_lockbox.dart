@@ -11,12 +11,12 @@ import '../lockbox/lockbox_toc.dart';
 import '../lockbox/recipient.dart';
 
 /// CLI/VM implementation of DVaultRepository using dart:io
-class IOLockbox extends LockBox {
+class IOLockBox extends LockBox {
   final RandomAccessFile _raf;
 
-  IOLockbox._(this._raf);
+  IOLockBox._(this._raf);
 
-  static Future<IOLockbox> open({
+  static Future<IOLockBox> open({
     required File file,
     required String password,
     bool create = false,
@@ -81,7 +81,7 @@ class IOLockbox extends LockBox {
       await raf.setPosition(realHeaderSize);
       await raf.writeFrom(encryptedEnvPage);
 
-      final repo = IOLockbox._(raf);
+      final repo = IOLockBox._(raf);
       await repo.initialize(
         key: randomSessionKey,
         header: finalHeader,
@@ -124,7 +124,7 @@ class IOLockbox extends LockBox {
       await raf.setPosition(fullHeaderSize);
       final encryptedEnvPage = await raf.read(physicalPageSize);
 
-      final repo = IOLockbox._(raf);
+      final repo = IOLockBox._(raf);
       await repo.initialize(key: sessionKey, header: header, toc: LockboxTOC());
 
       if (encryptedEnvPage.length == physicalPageSize) {

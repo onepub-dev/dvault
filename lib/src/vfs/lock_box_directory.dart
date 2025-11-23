@@ -1,13 +1,13 @@
-import 'package:dvault/src/vfs/lockbox_file.dart';
+import 'package:dvault/src/vfs/lock_box_file.dart';
 import 'package:dvault/src/vfs/lockbox_filesystem.dart';
 import 'package:file/file.dart';
 
-class LockboxDirectory extends Directory {
-  final LockboxFileSystem _fs;
+class LockBoxDirectory extends Directory {
+  final LockBoxFileSystem _fs;
   @override
   final String path;
 
-  LockboxDirectory(this._fs, this.path);
+  LockBoxDirectory(this._fs, this.path);
 
   @override
   FileSystem get fileSystem => _fs;
@@ -54,9 +54,9 @@ class LockboxDirectory extends Directory {
     final paths = _fs.lockbox.list(path, recursive: recursive);
     for (final p in paths) {
       if (_fs.lockbox.isDirectory(p)) {
-        yield LockboxDirectory(_fs, p);
+        yield LockBoxDirectory(_fs, p);
       } else {
-        yield LockboxFile(_fs, p);
+        yield LockBoxFile(_fs, p);
       }
     }
   }

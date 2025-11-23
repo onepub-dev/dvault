@@ -13,7 +13,12 @@ class CpCommand extends Command<void> {
   final String description = 'Copy files into or out of the vault.';
 
   CpCommand() {
-    argParser.addFlag('extract', abbr: 'x', help: 'Extract from vault to local', defaultsTo: false);
+    argParser.addFlag(
+      'extract',
+      abbr: 'x',
+      help: 'Extract from vault to local',
+      defaultsTo: false,
+    );
     addPasswordOptions(this);
   }
 
@@ -30,16 +35,16 @@ class CpCommand extends Command<void> {
     final extract = argResults!['extract'] as bool;
 
     if (!exists(lockboxPath) && !extract) {
-       // If copying IN, lockbox might not exist, we can create it?
-       // For now, assume it must exist or use `create` command first.
-       // But `open(create: true)` supports it.
-       // Let's allow creating if it doesn't exist.
+      // If copying IN, lockbox might not exist, we can create it?
+      // For now, assume it must exist or use `create` command first.
+      // But `open(create: true)` supports it.
+      // Let's allow creating if it doesn't exist.
     }
 
     final password = await getPassword(this);
 
     try {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: File(lockboxPath),
         password: password,
         create: !extract && !exists(lockboxPath),
@@ -64,7 +69,7 @@ class CpCommand extends Command<void> {
         await repo.write(dest, data);
         print(green('Added $src to $dest'));
       }
-      
+
       await repo.close();
     } catch (e) {
       print(red('Error: $e'));

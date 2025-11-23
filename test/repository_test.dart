@@ -24,7 +24,7 @@ void main() {
 
   group('IORepository - Creation', () {
     test('creates new lockbox with default page size', () async {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: lockBoxFile,
         password: password,
         create: true,
@@ -37,7 +37,7 @@ void main() {
     });
 
     test('creates new lockbox with custom page size', () async {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: lockBoxFile,
         password: password,
         create: true,
@@ -47,14 +47,14 @@ void main() {
       await repo.close();
 
       // Verify page size by reopening
-      final repo2 = await IOLockbox.open(file: lockBoxFile, password: password);
+      final repo2 = await IOLockBox.open(file: lockBoxFile, password: password);
 
       await repo2.close();
     });
 
     test('fails to open non-existent lockbox without create flag', () async {
       expect(
-        () => IOLockbox.open(file: lockBoxFile, password: password),
+        () => IOLockBox.open(file: lockBoxFile, password: password),
         throwsA(
           anything,
         ), // Can throw FormatException or FileSystemException depending on implementation
@@ -63,7 +63,7 @@ void main() {
 
     test('reopens existing lockbox', () async {
       // Create lockbox
-      final lockbox1 = await IOLockbox.open(
+      final lockbox1 = await IOLockBox.open(
         file: lockBoxFile,
         password: password,
         create: true,
@@ -71,13 +71,16 @@ void main() {
       await lockbox1.close();
 
       // Reopen
-      final lockbox2 = await IOLockbox.open(file: lockBoxFile, password: password);
+      final lockbox2 = await IOLockBox.open(
+        file: lockBoxFile,
+        password: password,
+      );
       await lockbox2.close();
     });
 
     test('fails with wrong password', () async {
       // Create lockbox
-      final lockbox1 = await IOLockbox.open(
+      final lockbox1 = await IOLockBox.open(
         file: lockBoxFile,
         password: password,
         create: true,
@@ -88,7 +91,7 @@ void main() {
       // The actual behavior depends on implementation
       // For now, just verify it doesn't crash
       try {
-        final lockbox2 = await IOLockbox.open(
+        final lockbox2 = await IOLockBox.open(
           file: lockBoxFile,
           password: 'wrong_password',
         );
@@ -100,10 +103,10 @@ void main() {
   });
 
   group('IORepository - File Operations', () {
-    late IOLockbox lockbox;
+    late IOLockBox lockbox;
 
     setUp(() async {
-      lockbox = await IOLockbox.open(
+      lockbox = await IOLockBox.open(
         file: lockBoxFile,
         password: password,
         create: true,
@@ -180,7 +183,10 @@ void main() {
     });
 
     test('deletes file', () async {
-      await lockbox.write('delete_me.txt', Uint8List.fromList('data'.codeUnits));
+      await lockbox.write(
+        'delete_me.txt',
+        Uint8List.fromList('data'.codeUnits),
+      );
       expect(lockbox.exists('delete_me.txt'), isTrue);
 
       await lockbox.delete('delete_me.txt');
@@ -218,10 +224,10 @@ void main() {
   });
 
   group('IORepository - Directory Operations', () {
-    late IOLockbox repo;
+    late IOLockBox repo;
 
     setUp(() async {
-      repo = await IOLockbox.open(
+      repo = await IOLockBox.open(
         file: lockBoxFile,
         password: password,
         create: true,
@@ -278,10 +284,10 @@ void main() {
   });
 
   group('IORepository - Environment Variables', () {
-    late IOLockbox repo;
+    late IOLockBox repo;
 
     setUp(() async {
-      repo = await IOLockbox.open(
+      repo = await IOLockBox.open(
         file: lockBoxFile,
         password: password,
         create: true,
@@ -347,7 +353,7 @@ void main() {
 
   group('IORepository - Persistence', () {
     test('files persist after close and reopen', () async {
-      final repo1 = await IOLockbox.open(
+      final repo1 = await IOLockBox.open(
         file: lockBoxFile,
         password: password,
         create: true,
@@ -356,7 +362,7 @@ void main() {
       await repo1.write('persist.txt', Uint8List.fromList('data'.codeUnits));
       await repo1.close();
 
-      final repo2 = await IOLockbox.open(file: lockBoxFile, password: password);
+      final repo2 = await IOLockBox.open(file: lockBoxFile, password: password);
 
       expect(repo2.exists('persist.txt'), isTrue);
       expect(
@@ -368,7 +374,7 @@ void main() {
     });
 
     test('multiple files persist correctly', () async {
-      final repo1 = await IOLockbox.open(
+      final repo1 = await IOLockBox.open(
         file: lockBoxFile,
         password: password,
         create: true,
@@ -379,7 +385,7 @@ void main() {
       await repo1.write('dir/file3.txt', Uint8List.fromList('data3'.codeUnits));
       await repo1.close();
 
-      final repo2 = await IOLockbox.open(file: lockBoxFile, password: password);
+      final repo2 = await IOLockBox.open(file: lockBoxFile, password: password);
 
       expect(repo2.exists('file1.txt'), isTrue);
       expect(repo2.exists('file2.txt'), isTrue);

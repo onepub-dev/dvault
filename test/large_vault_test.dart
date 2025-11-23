@@ -2,8 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dvault/src/vfs/io_lockbox.dart';
-import 'package:path/path.dart' as p;
 import 'package:path/path.dart' as LockBox;
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 void main() {
@@ -24,7 +24,7 @@ void main() {
 
   group('Large Vault Performance', () {
     test('handles 100MB file', () async {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -60,7 +60,7 @@ void main() {
     }, timeout: Timeout(Duration(minutes: 5)));
 
     test('handles many small files (10,000)', () async {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -97,7 +97,7 @@ void main() {
     }, timeout: Timeout(Duration(minutes: 10)));
 
     test('handles deep directory structure', () async {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -127,7 +127,7 @@ void main() {
     });
 
     test('vault file size is reasonable', () async {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -162,7 +162,7 @@ void main() {
     });
 
     test('list operation performance on large vault', () async {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -189,7 +189,7 @@ void main() {
     });
 
     test('env vars work with large vault', () async {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: vaultFile,
         password: password,
         create: true,
@@ -216,7 +216,7 @@ void main() {
       // Verify env var persists
       await repo.close();
 
-      final repo2 = await IOLockbox.open(file: vaultFile, password: password);
+      final repo2 = await IOLockBox.open(file: vaultFile, password: password);
 
       expect(repo2.getEnv('TEST_VAR'), equals('test_value'));
       await repo2.close();
@@ -225,7 +225,7 @@ void main() {
 
   group('Stress Tests', () {
     test('random access pattern', () async {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: vaultFile,
         password: password,
         create: true,

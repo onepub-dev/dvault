@@ -34,7 +34,7 @@ class RmCommand extends Command<void> {
     final password = await getPassword(this);
 
     try {
-      final repo = await IOLockbox.open(
+      final repo = await IOLockBox.open(
         file: File(lockboxPath),
         password: password,
       );
