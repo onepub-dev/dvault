@@ -80,7 +80,7 @@ Your CI pipeline can then decrypt lockboxes without a passphrase:
 lockbox unlock secrets.lbox  # Uses DVAULT_KEY environment variable
 ```
 
-### Password-Based Sharing (Legacy)
+### Passphrase-Based Sharing (Legacy)
 For one-time sharing with someone who doesn't have Lockbox set up:
 
 ```bash
@@ -184,7 +184,7 @@ All decryption happens in the browser - your private key never leaves your devic
 
 If you have existing DVault files, they will continue to work. The new PKI features are opt-in:
 
-- Old password-based lockboxes: Still work with `lockbox unlock`
+- Old passphrase-based lockboxes: Still work with `lockbox unlock`
 - New PKI lockboxes: Use the enhanced features above
 
 ## Contributing

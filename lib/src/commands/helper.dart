@@ -4,20 +4,15 @@
  * Written by Brett Sutton <bsutton@onepub.dev>, Jan 2022
  */
 
-import 'package:dcli/dcli.dart';
+import 'package:dvault/src/util/ask.dart';
+import 'package:dvault/src/util/strong_key.dart';
 
-import 'init.dart';
-
-String askForPassPhrase({String prompt = 'Passphrase'}) {
+Future<StrongKey> askForPassPhrase({String prompt = 'Passphrase'}) async {
   const comfirmed = false;
-  String passphrase;
+  StrongKey passphrase;
   do {
-    passphrase = ask(
-      '$prompt:',
-      hidden: true,
-      validator: Ask.lengthMin(InitCommand.minPassPhraseLength),
-    );
-    final confirm = ask('Confirm $prompt:', hidden: true);
+    passphrase = await askForPassword('$prompt:');
+    final confirm = await askForPassword('Confirm $prompt:');
 
     if (passphrase == confirm) {
       break;

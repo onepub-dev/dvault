@@ -45,18 +45,18 @@ class EnvSetCommand extends Command<void> {
       exit(1);
     }
 
-    final password = await getPassword(this);
+    final password = await getPassPhrase(this);
 
     try {
-      final repo = await IOLockBox.open(
+      final lockBox = await IOLockBox.open(
         file: File(lockboxPath),
-        password: password,
+        strongKey: await password,
       );
 
-      await repo.setEnv(key, value);
+      await lockBox.setEnv(key, value);
       print(green('Set $key=$value'));
 
-      await repo.close();
+      await lockBox.close();
     } catch (e) {
       print(red('Error: $e'));
       exit(1);
@@ -89,12 +89,12 @@ class EnvGetCommand extends Command<void> {
       exit(1);
     }
 
-    final password = await getPassword(this);
+    final password = await getPassPhrase(this);
 
     try {
       final repo = await IOLockBox.open(
         file: File(lockboxPath),
-        password: password,
+        strongKey: password,
       );
 
       final value = repo.getEnv(key);
@@ -137,12 +137,12 @@ class EnvListCommand extends Command<void> {
       exit(1);
     }
 
-    final password = await getPassword(this);
+    final password = await getPassPhrase(this);
 
     try {
       final repo = await IOLockBox.open(
         file: File(lockboxPath),
-        password: password,
+        strongKey: password,
       );
 
       final envs = repo.listEnv();

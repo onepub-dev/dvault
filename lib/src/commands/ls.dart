@@ -39,12 +39,12 @@ class LsCommand extends Command<void> {
       exit(1);
     }
 
-    final password = await getPassword(this);
+    final password = await getPassPhrase(this);
 
     try {
       final repo = await IOLockBox.open(
         file: File(lockboxPath),
-        password: password,
+        strongKey: password,
       );
 
       final files = repo.list(internalPath, recursive: recursive);

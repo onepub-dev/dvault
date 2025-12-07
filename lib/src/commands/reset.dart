@@ -6,6 +6,7 @@
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/util/strong_key.dart';
 
 import '../dot_vault_file.dart';
 import '../util/messages.dart';
@@ -25,25 +26,27 @@ class ResetCommand extends Command<void> {
   String get name => 'reset';
 
   @override
-  void run() {
+  void run() async {
     print(blue('Preparing to reset your passphrase.'));
     print(
       'To protect your keys we lock them with a passphrase with a '
       'minimum length of ${ResetCommand.minPassPhraseLength}).',
     );
 
-    String? current;
+    StrongKey? current;
     do {
       if (current != null) {
         print(red('Invalid passphrase.'));
       }
-      current = ask('Current passphrase:', hidden: true);
+      current = await askForPassPhrase(prompt: 'Current passphrase:');
     } while (!DotVaultFile.load().validatePassphrase(current));
 
-    final newPassphrase = askForPassPhrase(prompt: 'New passphrase');
+    final newPassphrase = await askForPassPhrase(prompt: 'New passphrase');
 
-    DotVaultFile.load()
-        .resetPassphrase(current: current, newPassphrase: newPassphrase);
+    DotVaultFile.load().resetPassphrase(
+      current: current,
+      newPassphrase: newPassphrase,
+    );
 
     print('');
     print(green('Your passphrase has been reset.'));

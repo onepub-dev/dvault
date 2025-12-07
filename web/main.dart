@@ -2,12 +2,13 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
-import 'package:dvault/src/lockbox/lock_box.dart';
+import 'package:dvault/src/lockbox/lockbox.dart';
+import 'package:dvault/src/util/strong_key.dart';
 import 'package:dvault/src/vfs/http_lockbox.dart';
 import 'package:dvault/src/vfs/opfs_lockbox.dart';
 import 'package:web/web.dart' as web;
 
-LockBox? currentVault;
+LockBox? currentLockbox;
 bool isReadOnly = false;
 
 void main() {
@@ -31,7 +32,7 @@ void checkBrowserSupport() {
     opfsSupported = false;
   }
   supportInfo.appendChild(
-    _createSupportItem('OPFS (Writable Vaults)', opfsSupported),
+    _createSupportItem('OPFS (Writable LockBoxes)', opfsSupported),
   );
 
   // Check Fetch API
@@ -42,7 +43,7 @@ void checkBrowserSupport() {
     fetchSupported = false;
   }
   supportInfo.appendChild(
-    _createSupportItem('HTTP Fetch (Remote Vaults)', fetchSupported),
+    _createSupportItem('HTTP Fetch (Remote LockBoxes)', fetchSupported),
   );
 
   // Check Crypto API
@@ -80,16 +81,17 @@ web.HTMLElement _createSupportItem(String feature, bool supported) {
 
 void setupEventListeners() {
   final createBtn =
-      web.document.getElementById('create-vault-btn') as web.HTMLButtonElement;
+      web.document.getElementById('create-lockbox-btn')
+          as web.HTMLButtonElement;
   createBtn.addEventListener(
     'click',
     ((web.Event event) {
-      createVault();
+      createLockBox();
     }).toJS,
   );
 
   final openBtn =
-      web.document.getElementById('open-vault-btn') as web.HTMLButtonElement;
+      web.document.getElementById('open-lockbox-btn') as web.HTMLButtonElement;
   openBtn.addEventListener(
     'click',
     ((web.Event event) {
@@ -143,85 +145,96 @@ void setupEventListeners() {
   );
 }
 
-Future<void> createVault() async {
+Future<void> createLockBox() async {
   try {
     final name =
-        (web.document.getElementById('vault-name') as web.HTMLInputElement)
+        (web.document.getElementById('lockbox-name') as web.HTMLInputElement)
             .value;
     final password =
-        (web.document.getElementById('vault-password') as web.HTMLInputElement)
+        (web.document.getElementById('lockbox-password')
+                as web.HTMLInputElement)
             .value;
 
-    log('Creating vault "$name"...', 'info');
+    log('Creating lockbox "$name"...', 'info');
 
-    currentVault = await OPFSLockbox.open(
-      vaultName: name,
-      password: password,
+    final strongKey = await StrongKey.fromString(password);
+
+    currentLockbox = await OPFSLockbox.open(
+      lockBoxName: name,
+      strongKey: strongKey,
       create: true,
     );
 
     isReadOnly = false;
-    log('✓ Vault created successfully!', 'success');
+    log('✓ LockBox created successfully!', 'success');
     showVaultControls();
     updateStorageInfo();
   } catch (e) {
-    log('✗ Error creating vault: $e', 'error');
+    log('✗ Error creating LockBox: $e', 'error');
   }
 }
 
 Future<void> openVault() async {
   try {
     final name =
-        (web.document.getElementById('vault-name') as web.HTMLInputElement)
+        (web.document.getElementById('lockbox-name') as web.HTMLInputElement)
             .value;
     final password =
-        (web.document.getElementById('vault-password') as web.HTMLInputElement)
+        (web.document.getElementById('lockbox-password')
+                as web.HTMLInputElement)
             .value;
 
-    log('Opening vault "$name"...', 'info');
+    final strongKey = await StrongKey.fromString(password);
 
-    currentVault = await OPFSLockbox.open(vaultName: name, password: password);
+    log('Opening LockBox "$name"...', 'info');
+
+    currentLockbox = await OPFSLockbox.open(
+      lockBoxName: name,
+      strongKey: strongKey,
+    );
 
     isReadOnly = false;
     log('✓ Vault opened successfully!', 'success');
     showVaultControls();
     await listFiles();
   } catch (e) {
-    log('✗ Error opening vault: $e', 'error');
+    log('✗ Error opening LockBox: $e', 'error');
   }
 }
 
 Future<void> openHttpVault() async {
   try {
     final url =
-        (web.document.getElementById('vault-url') as web.HTMLInputElement)
+        (web.document.getElementById('lockbox-url') as web.HTMLInputElement)
             .value;
     final password =
         (web.document.getElementById('http-password') as web.HTMLInputElement)
             .value;
 
+    final strongKey = await StrongKey.fromString(password);
+
     if (url.isEmpty) {
-      log('✗ Please enter a vault URL', 'error');
+      log('✗ Please enter a LockBox URL', 'error');
       return;
     }
 
-    log('Opening remote vault...', 'info');
+    log('Opening remote LockBox...', 'info');
 
-    currentVault = await HTTPLockBox.open(url: url, password: password);
+    currentLockbox = await HTTPLockBox.open(url: url, strongKey: strongKey);
 
     isReadOnly = true;
-    log('✓ Remote vault opened (read-only)!', 'success');
-    log('ℹ Note: HTTP vaults are read-only', 'info');
+    log('✓ Remote LockBox opened (read-only)!', 'success');
+    log('ℹ Note: HTTP LockBox are read-only', 'info');
     showVaultControls();
     await listFiles();
   } catch (e) {
-    log('✗ Error opening remote vault: $e', 'error');
+    log('✗ Error opening remote LockBox: $e', 'error');
     log('  Make sure the server supports CORS and Range requests', 'info');
   }
 }
 
 Future<void> addFile() async {
-  if (currentVault == null) {
+  if (currentLockbox == null) {
     log('✗ No vault open', 'error');
     return;
   }
@@ -247,7 +260,7 @@ Future<void> addFile() async {
     log('Adding file "$path"...', 'info');
 
     final data = Uint8List.fromList(content.codeUnits);
-    await currentVault!.write(path, data);
+    await currentLockbox!.write(path, data);
 
     log('✓ File added successfully!', 'success');
     await listFiles();
@@ -257,13 +270,13 @@ Future<void> addFile() async {
 }
 
 Future<void> setEnvVar() async {
-  if (currentVault == null) {
-    log('✗ No vault open', 'error');
+  if (currentLockbox == null) {
+    log('✗ No LockBox open', 'error');
     return;
   }
 
   if (isReadOnly) {
-    log('✗ Cannot set env vars in read-only vault', 'error');
+    log('✗ Cannot set env vars in read-only LockBox', 'error');
     return;
   }
 
@@ -281,7 +294,7 @@ Future<void> setEnvVar() async {
 
     log('Setting $key=$value...', 'info');
 
-    await currentVault!.setEnv(key, value);
+    await currentLockbox!.setEnv(key, value);
 
     log('✓ Environment variable set!', 'success');
   } catch (e) {
@@ -290,13 +303,13 @@ Future<void> setEnvVar() async {
 }
 
 Future<void> listEnvVars() async {
-  if (currentVault == null) {
-    log('✗ No vault open', 'error');
+  if (currentLockbox == null) {
+    log('✗ No LockBox open', 'error');
     return;
   }
 
   try {
-    final envVars = currentVault!.listEnv();
+    final envVars = currentLockbox!.listEnv();
 
     if (envVars.isEmpty) {
       log('No environment variables set', 'info');
@@ -312,21 +325,21 @@ Future<void> listEnvVars() async {
 }
 
 Future<void> listFiles() async {
-  if (currentVault == null) {
-    log('✗ No vault open', 'error');
+  if (currentLockbox == null) {
+    log('✗ No LockBox open', 'error');
     return;
   }
 
   try {
-    final files = currentVault!.list('/', recursive: true);
+    final files = currentLockbox!.list('/', recursive: true);
 
     final fileListDiv = web.document.getElementById('file-list')!;
     fileListDiv.innerHTML = ''.toJS;
 
     if (files.isEmpty) {
-      fileListDiv.textContent = 'No files in vault';
+      fileListDiv.textContent = 'No files in LockBox';
     } else {
-      log('Files in vault: ${files.length}', 'info');
+      log('Files in LockBox: ${files.length}', 'info');
 
       for (final file in files) {
         final fileItem =
@@ -348,12 +361,12 @@ Future<void> listFiles() async {
 }
 
 Future<void> readFile(String path) async {
-  if (currentVault == null) return;
+  if (currentLockbox == null) return;
 
   try {
     log('Reading "$path"...', 'info');
 
-    final data = await currentVault!.read(path);
+    final data = await currentLockbox!.read(path);
     final content = String.fromCharCodes(data);
 
     log('Content of "$path":', 'info');
@@ -365,7 +378,7 @@ Future<void> readFile(String path) async {
 
 void showVaultControls() {
   final controls =
-      web.document.getElementById('vault-controls') as web.HTMLElement;
+      web.document.getElementById('lockbox-controls') as web.HTMLElement;
   controls.style.display = 'block';
 }
 

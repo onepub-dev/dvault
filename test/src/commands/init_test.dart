@@ -5,24 +5,30 @@
  */
 
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/commands/init.dart';
 import 'package:dvault/src/dot_vault_file.dart';
 import 'package:dvault/src/dvault.dart';
 import 'package:dvault/src/rsa/rsa_generator.dart';
 import 'package:dvault/src/util/exceptions.dart';
+import 'package:dvault/src/util/strong_key.dart';
 import 'package:test/test.dart';
 
 import '../test_settings.dart';
 
 void main() {
   test('create keys ...', () async {
-    env['DVAULT_PASSPHRASE'] = testPassPhrase;
+    env[InitCommand.DVAULT_PASSPHRASE] = testPassPhrase;
     await runCommand(['init', '--env']);
 
     print('Generating key pair, be patient...');
     final pair = RSAGenerator().generateKeyPair();
 
     print('saving file');
-    DotVaultFile.create(pair.privateKey, pair.publicKey, testPassPhrase);
+    DotVaultFile.create(
+      pair.privateKey,
+      pair.publicKey,
+      StrongKey.fromString(testPassPhrase),
+    );
 
     print('loading file');
     //  ask('passphrase');
@@ -34,7 +40,9 @@ void main() {
     env['DVAULT_PASSPHRASE'] = passPhrase;
 
     expect(
-      () => DotVaultFile.load().privateKey(passphrase: '${passPhrase}bad'),
+      () => DotVaultFile.load().privateKey(
+        passphrase: StrongKey.fromString('${passPhrase}bad'),
+      ),
       throwsA(const TypeMatcher<InvalidPassphraseException>()),
     );
   });

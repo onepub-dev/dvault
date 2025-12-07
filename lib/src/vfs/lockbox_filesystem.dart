@@ -1,4 +1,4 @@
-import 'package:dvault/src/lockbox/lock_box.dart';
+import 'package:dvault/src/lockbox/lockbox.dart';
 import 'package:dvault/src/vfs/lock_box_directory.dart';
 import 'package:dvault/src/vfs/lock_box_file.dart';
 import 'package:dvault/src/vfs/lockbox_file_stat.dart';

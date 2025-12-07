@@ -15,27 +15,41 @@ class DVaultAESEncryptor {
   static const blockSize = 16;
 
   final IV iv;
-
   final Uint8List salt;
+  final Key key;
+  final Encrypter encryptor;
 
-  late final Key key;
+  /// Uses a pre-derived AES key (bytes) and caller-provided salt/IV.
+  DVaultAESEncryptor({
+    required Uint8List keyBytes,
+    required Uint8List salt,
+    IV? iv,
+  })  : iv = iv ?? IV.fromSecureRandom(blockSize),
+        salt = Uint8List.fromList(salt),
+        key = Key(keyBytes),
+        encryptor = Encrypter(AES(Key(keyBytes)));
 
-  late final Encrypter encryptor;
-
-  /// Creates an AES encryptor from [passphrase]
-  /// We use this encryptor for encrypting/decrypting the text
-  /// representation of the PrivateKey.
-  DVaultAESEncryptor(String passphrase)
-      : iv = IV.fromSecureRandom(blockSize),
-        salt = StrongKey.generateSalt {
-    final strongKey = StrongKey.fromPassPhrase(passphrase);
-
-    // TODO: change interation count to 100,000 and change ui to
-    // indicate the user should wait.
-    // Need advice on this as using 100,000 interations takes a
-    // long time. This means unlocking a file is going to take a long time.
-    key = strongKey.stretch(32, iterationCount: 1000, salt: salt);
-    // padding was null but I think we resolved the issue.
-    encryptor = Encrypter(AES(key));
+  /// Convenience for deriving with Argon2id before constructing.
+  static Future<DVaultAESEncryptor> fromPassphrase({
+    required StrongKey passphrase,
+    required Uint8List salt,
+    int memoryKib = 65536,
+    int iterations = 3,
+    int parallelism = 1,
+    int desiredKeyLength = 32,
+    IV? iv,
+  }) async {
+    final keyBytes = await passphrase.deriveKeyBytes(
+      salt: salt,
+      memoryKib: memoryKib,
+      iterations: iterations,
+      parallelism: parallelism,
+      desiredKeyLength: desiredKeyLength,
+    );
+    return DVaultAESEncryptor(
+      keyBytes: keyBytes,
+      salt: salt,
+      iv: iv,
+    );
   }
 }

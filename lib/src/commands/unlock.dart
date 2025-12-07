@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/util/strong_key.dart';
 import 'package:path/path.dart';
 
 import '../util/password_helper.dart';
@@ -95,9 +96,9 @@ Decrypts the passed in lockbox and extracts all files.
     }
 
     // Get password
-    String password;
+    StrongKey password;
     try {
-      password = await getPassword(this);
+      password = await getPassPhrase(this);
     } catch (e) {
       printerr(red('Error getting password: $e'));
       exit(1);
@@ -108,7 +109,7 @@ Decrypts the passed in lockbox and extracts all files.
     try {
       lockbox = await IOLockBox.open(
         file: File(pathToLockbox),
-        password: password,
+        strongKey: password,
       );
 
       // Create output directory

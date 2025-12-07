@@ -1,5 +1,5 @@
 import 'package:dcli/dcli.dart';
-import 'package:dvault/src/lockbox/lock_box.dart';
+import 'package:dvault/src/lockbox/lockbox.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 

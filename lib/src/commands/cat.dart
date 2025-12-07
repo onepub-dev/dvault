@@ -31,23 +31,23 @@ class CatCommand extends Command<void> {
       exit(1);
     }
 
-    final password = await getPassword(this);
+    final secretKey = await getPassPhrase(this);
 
     try {
-      final repo = await IOLockBox.open(
+      final lockbox = await IOLockBox.open(
         file: File(lockboxPath),
-        password: password,
+        strongKey: await secretKey,
       );
 
-      if (!repo.exists(filePath)) {
+      if (!lockbox.exists(filePath)) {
         print(red('File not found in lockbox: $filePath'));
         exit(1);
       }
 
-      final bytes = await repo.read(filePath);
+      final bytes = await lockbox.read(filePath);
       stdout.add(bytes);
 
-      await repo.close();
+      await lockbox.close();
     } catch (e) {
       print(red('Error: $e'));
       exit(1);

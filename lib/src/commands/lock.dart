@@ -8,6 +8,9 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/lockbox/lockbox_format.dart';
+import 'package:dvault/src/lockbox/lockbox_page.dart';
+import 'package:dvault/src/util/strong_key.dart';
 import 'package:path/path.dart';
 
 import '../util/password_helper.dart';
@@ -34,7 +37,14 @@ class LockCommand extends Command<void> {
         abbr: 'r',
         negatable: false,
         help: 'Encrypt child directories and their files into the lockbox',
+      )
+      ..addOption(
+        'page-size',
+        abbr: 'p',
+        help: 'Page size in bytes (default: 64KB)',
+        defaultsTo: LockBoxFormat.defaultPageSize.toString(),
       );
+    ;
 
     addPasswordOptions(this);
   }
@@ -68,6 +78,18 @@ Locks the passed in file or directory by adding it to a lockbox.
     final overwrite = argResults!['overwrite'] as bool;
     final includeChildren = argResults!['recurse'] as bool;
     var pathToLockbox = argResults!['lockbox'] as String?;
+
+    final pageSizeStr = argResults!['page-size'] as String;
+    final pageSize = int.tryParse(pageSizeStr);
+
+    if (pageSize != null && pageSize < LockBoxPage.minimumSize) {
+      print(
+        red(
+          'Invalid page size: $pageSizeStr, minimim page size is ${LockBoxPage.minimumSize}',
+        ),
+      );
+      exit(1);
+    }
 
     if (argResults!.rest.isEmpty) {
       printerr(red('You must pass one or more files/directories to lock'));
@@ -112,33 +134,36 @@ Locks the passed in file or directory by adding it to a lockbox.
       filePaths,
       pathToLockbox,
       includeChildren: includeChildren,
+      pageSize: pageSize,
     );
   }
 
   Future<void> addToLockbox(
     List<String> filePaths,
     String pathToLockbox, {
+    int? pageSize,
     required bool includeChildren,
   }) async {
     // Get password
-    String password;
+    StrongKey password;
     try {
-      password = await getPassword(this);
+      password = await getPassPhrase(this);
     } catch (e) {
       printerr(red('Error getting password: $e'));
       exit(1);
     }
 
     // Create or open the lockbox
-    IOLockBox? repo;
+    IOLockBox? lockbox;
     try {
       final lockboxFile = File(pathToLockbox);
       final create = !lockboxFile.existsSync();
 
-      repo = await IOLockBox.open(
+      lockbox = await IOLockBox.open(
         file: lockboxFile,
-        password: password,
+        strongKey: password,
         create: create,
+        pageSize: pageSize ?? LockBoxFormat.defaultPageSize,
       );
 
       // Add files to lockbox
@@ -149,15 +174,15 @@ Locks the passed in file or directory by adding it to a lockbox.
         }
 
         if (isFile(filePath)) {
-          await _addFile(repo, filePath);
+          await _addFile(lockbox, filePath);
         } else if (isDirectory(filePath)) {
-          await _addDirectory(repo, filePath, recursive: includeChildren);
+          await _addDirectory(lockbox, filePath, recursive: includeChildren);
         } else {
           print('Skipping $filePath');
         }
       }
 
-      await repo.close();
+      await lockbox.close();
       print(
         green(
           'Successfully locked ${filePaths.length} path(s) to $pathToLockbox',
@@ -165,7 +190,7 @@ Locks the passed in file or directory by adding it to a lockbox.
       );
     } catch (e) {
       print(red('Error: $e'));
-      await repo?.close();
+      await lockbox?.close();
       exit(1);
     }
   }

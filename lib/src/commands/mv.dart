@@ -32,12 +32,12 @@ class MvCommand extends Command<void> {
       exit(1);
     }
 
-    final password = await getPassword(this);
+    final password = await getPassPhrase(this);
 
     try {
       final repo = await IOLockBox.open(
         file: File(pathToLockbox),
-        password: password,
+        strongKey: password,
       );
 
       if (!repo.exists(oldPath)) {

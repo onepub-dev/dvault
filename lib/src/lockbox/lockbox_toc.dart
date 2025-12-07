@@ -1,13 +1,17 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:dvault/src/lockbox/file_entry.dart';
+import 'package:dvault/src/lockbox/lockbox_format.dart';
+import 'package:dvault/src/lockbox/lockbox_page.dart';
 import 'package:dvault/src/util/byte_data_helper.dart';
+import 'package:dvault/src/vfs/lock_box_writer.dart';
 
-class LockboxTOC {
-  final Map<String, FileEntry> files = {};
+class LockBoxTOC {
+  final Map<String, FileEntry> _files = {};
 
-  LockboxTOC();
+  LockBoxTOC();
 
   /// Serializes the TOC to a byte list.
   Uint8List toBytes() {
@@ -16,10 +20,10 @@ class LockboxTOC {
     // Files
     // Count (4)
     final countBytes = Uint8List(4);
-    ByteData.view(countBytes.buffer).setUint32(0, files.length, Endian.little);
+    ByteData.view(countBytes.buffer).setUint32(0, _files.length, Endian.little);
     buffer.add(countBytes);
 
-    for (final entry in files.values) {
+    for (final entry in _files.values) {
       final pathBytes = utf8.encode(entry.path);
 
       // Path Length (2)
@@ -45,9 +49,57 @@ class LockboxTOC {
     return buffer.toBytes();
   }
 
+  Future<void> write(
+    LockBoxWriter writer,
+    int pageOffset,
+    int pageSize,
+    SecretKey sessionKey,
+  ) async {
+    final bytes = toBytes();
+
+    final payloadSize = pageSize - LockBoxFormat.pageOverhead;
+    var offset = 0;
+    var pageIndex = 0;
+
+    while (offset < bytes.length) {
+      final remaining = bytes.length - offset;
+      final toWrite = remaining > payloadSize ? payloadSize : remaining;
+
+      final pageData = Uint8List(payloadSize);
+      pageData.setRange(0, toWrite, bytes.sublist(offset, offset + toWrite));
+
+      final encryptedPage = await LockBoxPage.encrypt(
+        data: pageData,
+        key: sessionKey,
+        pageSize: pageSize,
+      );
+
+      final physicalOffset = pageOffset + (pageIndex * pageSize);
+      await writer.writeBytesAt(physicalOffset, encryptedPage);
+
+      offset += toWrite;
+      pageIndex++;
+    }
+  }
+
+  /// True if [path] exists in the TOC.
+  bool exists(String path) => _files.containsKey(path);
+
+  int get count => _files.length;
+
+  FileEntry? stat(String path) => _files[path];
+
+  bool get isNotEmpty => _files.isNotEmpty;
+
+  bool get isEmpty => _files.isEmpty;
+
+  FileEntry get lastFile => _files.values.reduce(
+    (a, b) => a.offset + a.length > b.offset + b.length ? a : b,
+  );
+
   /// Parses the TOC from a byte list.
-  static LockboxTOC fromBytes(Uint8List bytes) {
-    final toc = LockboxTOC();
+  static LockBoxTOC fromBytes(Uint8List bytes) {
+    final toc = LockBoxTOC();
     final data = ByteData.view(bytes.buffer);
     int offset = 0;
 
@@ -91,7 +143,7 @@ class LockboxTOC {
       );
       offset += 32;
 
-      toc.files[path] = FileEntry(
+      toc._files[path] = FileEntry(
         path: path,
         offset: fileOffset,
         length: fileLength,
@@ -101,5 +153,45 @@ class LockboxTOC {
     }
 
     return toc;
+  }
+
+  void append(String path, FileEntry fileEntry) {
+    _files[path] = fileEntry;
+  }
+
+  bool isDirectory(String path) {
+    if (path == '/' || path == '') return true;
+    final prefix = path.endsWith('/') ? path : '$path/';
+    for (final key in _files.keys) {
+      if (key.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  List<String> list(String path, {bool recursive = false}) {
+    final entries = <String>{};
+    final prefix =
+        (path == '/' || path == '')
+            ? ''
+            : (path.endsWith('/') ? path : '$path/');
+
+    for (final key in _files.keys) {
+      if (key.startsWith(prefix)) {
+        if (recursive) {
+          entries.add(key);
+        } else {
+          final relative = key.substring(prefix.length);
+          final parts = relative.split('/');
+          if (parts.isNotEmpty) {
+            entries.add(prefix + parts[0]);
+          }
+        }
+      }
+    }
+    return entries.toList();
+  }
+
+  FileEntry? remove(String path) {
+    return _files.remove(path);
   }
 }

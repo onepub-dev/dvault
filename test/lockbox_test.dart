@@ -1,15 +1,16 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dvault/src/lockbox/lock_box.dart';
+import 'package:dvault/src/lockbox/lockbox.dart';
+import 'package:dvault/src/util/strong_key.dart';
 import 'package:dvault/src/vfs/io_lockbox.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-void main() {
+void main() async {
   late Directory tempDir;
   late File lockBoxFile;
-  const password = 'test_password_123';
+  final password = await StrongKey.fromString('test_password_123');
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('dvault_test_');
@@ -26,7 +27,7 @@ void main() {
     test('creates new lockbox with default page size', () async {
       final repo = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 
@@ -39,7 +40,7 @@ void main() {
     test('creates new lockbox with custom page size', () async {
       final repo = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
         create: true,
         pageSize: 128 * 1024, // 128KB
       );
@@ -47,14 +48,17 @@ void main() {
       await repo.close();
 
       // Verify page size by reopening
-      final repo2 = await IOLockBox.open(file: lockBoxFile, password: password);
+      final repo2 = await IOLockBox.open(
+        file: lockBoxFile,
+        strongKey: password,
+      );
 
       await repo2.close();
     });
 
     test('fails to open non-existent lockbox without create flag', () async {
       expect(
-        () => IOLockBox.open(file: lockBoxFile, password: password),
+        () => IOLockBox.open(file: lockBoxFile, strongKey: password),
         throwsA(
           anything,
         ), // Can throw FormatException or FileSystemException depending on implementation
@@ -65,7 +69,7 @@ void main() {
       // Create lockbox
       final lockbox1 = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
       await lockbox1.close();
@@ -73,7 +77,7 @@ void main() {
       // Reopen
       final lockbox2 = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
       );
       await lockbox2.close();
     });
@@ -82,7 +86,7 @@ void main() {
       // Create lockbox
       final lockbox1 = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
       await lockbox1.close();
@@ -93,7 +97,7 @@ void main() {
       try {
         final lockbox2 = await IOLockBox.open(
           file: lockBoxFile,
-          password: 'wrong_password',
+          strongKey: await StrongKey.fromString('wrong_password'),
         );
         await lockbox2.close();
       } catch (e) {
@@ -108,7 +112,7 @@ void main() {
     setUp(() async {
       lockbox = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
     });
@@ -229,7 +233,7 @@ void main() {
     setUp(() async {
       repo = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
     });
@@ -284,70 +288,70 @@ void main() {
   });
 
   group('IORepository - Environment Variables', () {
-    late IOLockBox repo;
+    late IOLockBox lockbox;
 
     setUp(() async {
-      repo = await IOLockBox.open(
+      lockbox = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
     });
 
     tearDown(() async {
-      await repo.close();
+      await lockbox.close();
     });
 
     test('gets nonexistent env var', () {
-      expect(repo.getEnv('NONEXISTENT'), isNull);
+      expect(lockbox.getEnv('NONEXISTENT'), isNull);
     });
 
     test('sets and gets env var', () async {
-      await repo.setEnv('MY_VAR', 'my_value');
-      expect(repo.getEnv('MY_VAR'), equals('my_value'));
+      await lockbox.setEnv('MY_VAR', 'my_value');
+      expect(lockbox.getEnv('MY_VAR'), equals('my_value'));
     });
 
     test('sets multiple env vars', () async {
-      await repo.setEnv('VAR1', 'value1');
-      await repo.setEnv('VAR2', 'value2');
-      await repo.setEnv('VAR3', 'value3');
+      await lockbox.setEnv('VAR1', 'value1');
+      await lockbox.setEnv('VAR2', 'value2');
+      await lockbox.setEnv('VAR3', 'value3');
 
-      expect(repo.getEnv('VAR1'), equals('value1'));
-      expect(repo.getEnv('VAR2'), equals('value2'));
-      expect(repo.getEnv('VAR3'), equals('value3'));
+      expect(lockbox.getEnv('VAR1'), equals('value1'));
+      expect(lockbox.getEnv('VAR2'), equals('value2'));
+      expect(lockbox.getEnv('VAR3'), equals('value3'));
     });
 
     test('updates env var', () async {
-      await repo.setEnv('VAR', 'value1');
-      expect(repo.getEnv('VAR'), equals('value1'));
+      await lockbox.setEnv('VAR', 'value1');
+      expect(lockbox.getEnv('VAR'), equals('value1'));
 
-      await repo.setEnv('VAR', 'value2');
-      expect(repo.getEnv('VAR'), equals('value2'));
+      await lockbox.setEnv('VAR', 'value2');
+      expect(lockbox.getEnv('VAR'), equals('value2'));
     });
 
     test('lists env vars', () async {
-      await repo.setEnv('VAR1', 'value1');
-      await repo.setEnv('VAR2', 'value2');
+      await lockbox.setEnv('VAR1', 'value1');
+      await lockbox.setEnv('VAR2', 'value2');
 
-      final envs = repo.listEnv();
+      final envs = lockbox.listEnv();
       expect(envs.length, equals(2));
       expect(envs['VAR1'], equals('value1'));
       expect(envs['VAR2'], equals('value2'));
     });
 
     test('env vars persist after close and reopen', () async {
-      await repo.setEnv('PERSIST_VAR', 'persist_value');
+      await lockbox.setEnv('PERSIST_VAR', 'persist_value');
       // Note: repo will be closed by tearDown, so we need to test this differently
       // We can't close repo here manually because tearDown will try to close it again
 
       // Instead, just verify the value is set
-      expect(repo.getEnv('PERSIST_VAR'), equals('persist_value'));
+      expect(lockbox.getEnv('PERSIST_VAR'), equals('persist_value'));
     });
 
     test('handles large env var values', () async {
       final largeValue = 'x' * 10000; // 10KB value
-      await repo.setEnv('LARGE_VAR', largeValue);
-      expect(repo.getEnv('LARGE_VAR'), equals(largeValue));
+      await lockbox.setEnv('LARGE_VAR', largeValue);
+      expect(lockbox.getEnv('LARGE_VAR'), equals(largeValue));
     });
   });
 
@@ -355,14 +359,17 @@ void main() {
     test('files persist after close and reopen', () async {
       final repo1 = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 
       await repo1.write('persist.txt', Uint8List.fromList('data'.codeUnits));
       await repo1.close();
 
-      final repo2 = await IOLockBox.open(file: lockBoxFile, password: password);
+      final repo2 = await IOLockBox.open(
+        file: lockBoxFile,
+        strongKey: password,
+      );
 
       expect(repo2.exists('persist.txt'), isTrue);
       expect(
@@ -376,7 +383,7 @@ void main() {
     test('multiple files persist correctly', () async {
       final repo1 = await IOLockBox.open(
         file: lockBoxFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 
@@ -385,7 +392,10 @@ void main() {
       await repo1.write('dir/file3.txt', Uint8List.fromList('data3'.codeUnits));
       await repo1.close();
 
-      final repo2 = await IOLockBox.open(file: lockBoxFile, password: password);
+      final repo2 = await IOLockBox.open(
+        file: lockBoxFile,
+        strongKey: password,
+      );
 
       expect(repo2.exists('file1.txt'), isTrue);
       expect(repo2.exists('file2.txt'), isTrue);

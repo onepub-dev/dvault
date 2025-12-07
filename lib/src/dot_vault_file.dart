@@ -12,7 +12,7 @@ import 'package:dcli/dcli.dart';
 import 'package:dcli/posix.dart';
 import 'package:encrypt/encrypt.dart';
 import 'package:path/path.dart';
-import 'package:pointycastle/pointycastle.dart';
+import 'package:pointycastle/pointycastle.dart' as pointy;
 
 import 'rsa/convertor.dart';
 import 'util/exceptions.dart';
@@ -35,9 +35,9 @@ class DotVaultFile {
 
   var _lines = <String>[];
 
-  RSAPrivateKey? _privateKey;
+  pointy.RSAPrivateKey? _privateKey;
 
-  RSAPublicKey? _publicKey;
+  pointy.RSAPublicKey? _publicKey;
 
   late final IV iv;
 
@@ -60,15 +60,15 @@ class DotVaultFile {
 
   /// Saves the key pair to disk encrypting the private key.
   static void create(
-    RSAPrivateKey privateKey,
-    RSAPublicKey publicKey,
-    String passphrase,
+    pointy.RSAPrivateKey privateKey,
+    pointy.RSAPublicKey publicKey,
+    StrongKey passphrase,
   ) {
     storagePath.write('version:$version');
     final _iv = IV.fromSecureRandom(16);
     storagePath.append('iv:${_iv.base64}');
 
-    final salt = StrongKey.generateSalt;
+    final salt = StrongKey.generateSalt();
 
     storagePath.append('salt:${base64Encode(salt)}');
     final encrypter = _encrypterFromPassphrase(passphrase, salt);
@@ -89,7 +89,7 @@ class DotVaultFile {
     }
   }
 
-  RSAPrivateKey privateKey({required String passphrase}) {
+  pointy.RSAPrivateKey privateKey({required StrongKey passphrase}) {
     if (_privateKey == null) {
       final encrypter = _encrypterFromPassphrase(passphrase, salt);
 
@@ -104,11 +104,12 @@ class DotVaultFile {
 
   /// Returns an ecrypted version of the private key
   /// stored in the .dvault file.
-  String privateKeyAsText(String passphrase) => RSAConvertor.privateKeyAsText(
-    privateKey(passphrase: passphrase),
-    encryptor(passphrase),
-    iv,
-  );
+  String privateKeyAsText(StrongKey passphrase) =>
+      RSAConvertor.privateKeyAsText(
+        privateKey(passphrase: passphrase),
+        encryptor(passphrase),
+        iv,
+      );
 
   /// Returns the public key stored in the .dvault file
   /// in a text representation suitable for storage
@@ -117,14 +118,14 @@ class DotVaultFile {
 
   /// Loads just the public key from this key file.
   /// Used when we are encrypting and don't need the private key.
-  RSAPublicKey get publicKey {
+  pointy.RSAPublicKey get publicKey {
     _publicKey ??= _loadPublicKey(_lines);
     return _publicKey!;
   }
 
   void resetPassphrase({
-    required String current,
-    required String newPassphrase,
+    required StrongKey current,
+    required StrongKey newPassphrase,
   }) {
     backupFile(DotVaultFile.storagePath);
     delete(DotVaultFile.storagePath);
@@ -135,7 +136,7 @@ class DotVaultFile {
     );
   }
 
-  bool _validatePassphrase(String passphrase, Encrypter encrypter) {
+  bool _validatePassphrase(StrongKey passphrase, Encrypter encrypter) {
     final encrypted = Encrypted.fromBase64(_test);
 
     String testConfirm;
@@ -150,7 +151,7 @@ class DotVaultFile {
     return testConfirm == 'test';
   }
 
-  bool validatePassphrase(String passphrase) {
+  bool validatePassphrase(StrongKey passphrase) {
     final encrypter = _encrypterFromPassphrase(passphrase, salt);
 
     return _validatePassphrase(passphrase, encrypter);
@@ -159,8 +160,8 @@ class DotVaultFile {
   ///
   /// Append the Public Key to the key file
   ///
-  static void _appendPublicKey(PublicKey publicKey) {
-    final rsaPublic = publicKey as RSAPublicKey;
+  static void _appendPublicKey(pointy.PublicKey publicKey) {
+    final rsaPublic = publicKey as pointy.RSAPublicKey;
     storagePath.append(RSAConvertor.publicKeyAsText(rsaPublic));
   }
 
@@ -168,7 +169,7 @@ class DotVaultFile {
   /// Append the Private Key to the key file
   ///
   static void _appendPrivateKey(
-    RSAPrivateKey privateKey,
+    pointy.RSAPrivateKey privateKey,
     Encrypter encrypter,
     IV _iv,
   ) {
@@ -179,25 +180,25 @@ class DotVaultFile {
 
   /// Creates an AES [Encrypter] from the given [passphrase]
   /// and the salt held in the .lbox file.
-  Encrypter encryptor(String passphrase) =>
+  Encrypter encryptor(StrongKey passphrase) =>
       _encrypterFromPassphrase(passphrase, salt);
 
   /// Creates an AES encryptor from [passphrase]
   /// We use this encryptor for encrypting/decrypting the text
   /// representation of the PrivateKey.
-  static Encrypter _encrypterFromPassphrase(String passphrase, Uint8List salt) {
-    final strongKey = StrongKey.fromPassPhrase(passphrase);
-
-    // TODO(bsutton): change interation count to 100,000 and change ui to
-    // indicate the user should wait.
-    // Need advice on this as using 100,000 interations takes a
-    // long time. This means unlocking a file is going to take a long time.
-    final key = strongKey.stretch(32, iterationCount: 1000, salt: salt);
-    // padding was null but I think we resolved the issue.
+  static Encrypter _encrypterFromPassphrase(
+    StrongKey passphrase,
+    Uint8List salt,
+  ) {
+    final key = passphrase.deriveEncryptKey(
+      desiredKeyLength: 32,
+      iterationCount: 1000,
+      salt: salt,
+    );
     return Encrypter(AES(key));
   }
 
-  RSAPublicKey _loadPublicKey(List<String> lines) {
+  pointy.RSAPublicKey _loadPublicKey(List<String> lines) {
     try {
       return RSAConvertor.extractPublicKey(lines);
     } on KeyException catch (e) {

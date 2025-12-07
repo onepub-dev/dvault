@@ -41,22 +41,22 @@ class CpCommand extends Command<void> {
       // Let's allow creating if it doesn't exist.
     }
 
-    final password = await getPassword(this);
+    final password = await getPassPhrase(this);
 
     try {
-      final repo = await IOLockBox.open(
+      final lockbox = await IOLockBox.open(
         file: File(lockboxPath),
-        password: password,
+        strongKey: await password,
         create: !extract && !exists(lockboxPath),
       );
 
       if (extract) {
         // Copy OUT: src is internal, dest is local
-        if (!repo.exists(src)) {
+        if (!lockbox.exists(src)) {
           print(red('File not found in lockbox: $src'));
           exit(1);
         }
-        final data = await repo.read(src);
+        final data = await lockbox.read(src);
         File(dest).writeAsBytesSync(data);
         print(green('Extracted $src to $dest'));
       } else {
@@ -66,11 +66,11 @@ class CpCommand extends Command<void> {
           exit(1);
         }
         final data = File(src).readAsBytesSync();
-        await repo.write(dest, data);
+        await lockbox.write(dest, data);
         print(green('Added $src to $dest'));
       }
 
-      await repo.close();
+      await lockbox.close();
     } catch (e) {
       print(red('Error: $e'));
       exit(1);

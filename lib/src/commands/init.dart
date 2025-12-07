@@ -2,24 +2,23 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:dcli/dcli.dart';
+import 'package:dvault/src/dot_vault_file.dart';
+import 'package:dvault/src/rsa/rsa_generator.dart';
+import 'package:dvault/src/util/ask.dart';
+import 'package:dvault/src/util/strong_key.dart';
+import 'package:strings/strings.dart';
 
-import '../lockbox/lockbox_format.dart';
 import '../util/password_helper.dart';
-import '../vfs/io_lockbox.dart';
 
 class InitCommand extends Command<void> {
+  static const DVAULT_PASSPHRASE = 'DVAULT_PASSPHRASE';
   @override
   final String name = 'init';
   @override
-  final String description = 'Initialize a new lockbox.';
+  final String description =
+      'Initialize dvault by creating a public/private key pair.';
 
   InitCommand() {
-    argParser.addOption(
-      'page-size',
-      abbr: 'p',
-      help: 'Page size in bytes (default: 64KB)',
-      defaultsTo: LockboxFormat.defaultPageSize.toString(),
-    );
     addPasswordOptions(this);
   }
 
@@ -28,61 +27,48 @@ class InitCommand extends Command<void> {
   @override
   void run() async {
     if (argResults!.rest.isEmpty) {
-      print(
-        red(
-          'Usage: dvault init <lockbox_path> [--page-size <bytes>] [--password-file <file>]',
-        ),
-      );
+      print(red('Usage: dvault init [--passphrase-file <file>]'));
       exit(1);
     }
 
     final lockboxPath = argResults!.rest[0];
-    final pageSizeStr = argResults!['page-size'] as String;
-    final pageSize = int.tryParse(pageSizeStr);
-
-    if (pageSize == null || pageSize <= 0) {
-      print(red('Invalid page size: $pageSizeStr'));
-      exit(1);
-    }
 
     if (exists(lockboxPath)) {
       print(red('Lockbox already exists: $lockboxPath'));
       exit(1);
     }
 
+    if (argResults!.wasParsed('env')) {
+      if (Strings.isBlank(Platform.environment[DVAULT_PASSPHRASE])) {
+        printerr(red('$DVAULT_PASSPHRASE environment variable is not set'));
+        exit(1);
+      }
+    }
     // Get password using helper
     final isInteractive =
-        !argResults!.wasParsed('password-file') &&
-        !argResults!.wasParsed('password-stdin') &&
-        !Platform.environment.containsKey('DVAULT_PASSWORD');
+        !argResults!.wasParsed('passphrase-file') &&
+        !argResults!.wasParsed('passphrase-stdin') &&
+        !argResults!.wasParsed('env');
 
-    String password;
+    StrongKey strongKey;
     if (isInteractive) {
-      password = ask('Password:', hidden: true);
-      final confirm = ask('Confirm Password:', hidden: true);
+      strongKey = await askForPassword('Passphrase:');
+      final confirm = await askForPassword('Confirm Passphrase:');
 
-      if (password != confirm) {
+      if (strongKey != confirm) {
         print(red('Passwords do not match.'));
         exit(1);
       }
     } else {
-      password = await getPassword(this);
+      strongKey = await getPassPhrase(this);
     }
 
     try {
-      final repo = await IOLockBox.open(
-        file: File(lockboxPath),
-        password: password,
-        create: true,
-        pageSize: pageSize,
-      );
+      print(green('Generating key pair, be patient...'));
+      final pair = RSAGenerator().generateKeyPair();
 
-      await repo.close();
-      print(
-        green(
-          'Lockbox initialized at $lockboxPath with page size $pageSize bytes.',
-        ),
-      );
+      DotVaultFile.create(pair.privateKey, pair.publicKey, strongKey);
+      print(green('Saved keys to ${DotVaultFile.storagePath}'));
     } catch (e) {
       print(red('Error: $e'));
       exit(1);

@@ -1,8 +1,9 @@
 import 'dart:io';
-import 'package:test/test.dart';
-import 'package:path/path.dart' as p;
+
 import 'package:args/command_runner.dart';
 import 'package:dvault/src/util/password_helper.dart';
+import 'package:path/path.dart' as p;
+import 'package:test/test.dart';
 
 class TestCommand extends Command<void> {
   @override
@@ -33,7 +34,7 @@ void main() {
     try {
       tempDir.deleteSync(recursive: true);
     } catch (_) {}
-    
+
     // Clean up environment variable
     if (Platform.environment.containsKey('DVAULT_PASSWORD')) {
       // Can't actually remove it in tests, but we can verify it's handled
@@ -41,23 +42,23 @@ void main() {
   });
 
   group('addPasswordOptions', () {
-    test('adds password-file option', () {
-      expect(command.argParser.options.containsKey('password-file'), isTrue);
+    test('adds passphrase-file option', () {
+      expect(command.argParser.options.containsKey('passphrase-file'), isTrue);
     });
 
-    test('adds password-stdin flag', () {
-      expect(command.argParser.options.containsKey('password-stdin'), isTrue);
+    test('adds passphrase-stdin flag', () {
+      expect(command.argParser.options.containsKey('passphrase-stdin'), isTrue);
     });
   });
 
-  group('getPassword - password-file', () {
-    test('reads password from file', () async {
-      final passwordFile = File(p.join(tempDir.path, 'password.txt'));
+  group('getPassword - passphrase-file', () {
+    test('reads passphrase from file', () async {
+      final passwordFile = File(p.join(tempDir.path, 'passphrase.txt'));
       passwordFile.writeAsStringSync('my_secret_password');
 
-      await runner.run(['test', '--password-file', passwordFile.path]);
-      
-      final password = await getPassword(command);
+      await runner.run(['test', '--passphrase-file', passwordFile.path]);
+
+      final password = await getPassPhrase(command);
       expect(password, equals('my_secret_password'));
     });
 
@@ -65,19 +66,19 @@ void main() {
       final passwordFile = File(p.join(tempDir.path, 'password.txt'));
       passwordFile.writeAsStringSync('  my_password  \n');
 
-      await runner.run(['test', '--password-file', passwordFile.path]);
-      
-      final password = await getPassword(command);
+      await runner.run(['test', '--passphrase-file', passwordFile.path]);
+
+      final password = await getPassPhrase(command);
       expect(password, equals('my_password'));
     });
 
     test('fails if password file does not exist', () async {
       final nonexistentFile = p.join(tempDir.path, 'nonexistent.txt');
 
-      await runner.run(['test', '--password-file', nonexistentFile]);
-      
+      await runner.run(['test', '--passphrase-file', nonexistentFile]);
+
       expect(
-        () => getPassword(command),
+        () => getPassPhrase(command),
         throwsA(anything), // Will exit(1) which throws
       );
     });
@@ -86,12 +87,9 @@ void main() {
       final passwordFile = File(p.join(tempDir.path, 'empty.txt'));
       passwordFile.writeAsStringSync('');
 
-      await runner.run(['test', '--password-file', passwordFile.path]);
-      
-      expect(
-        () => getPassword(command),
-        throwsA(anything),
-      );
+      await runner.run(['test', '--passphrase-file', passwordFile.path]);
+
+      expect(() => getPassPhrase(command), throwsA(anything));
     });
   });
 
@@ -100,34 +98,34 @@ void main() {
       // Note: In actual tests, we can't easily set environment variables
       // This test demonstrates the logic but may need to run in isolation
       // or use a different test approach
-      
+
       // Mock scenario: if DVAULT_PASSWORD is set
       // final password = await getPassword(command);
       // expect(password, equals(Platform.environment['DVAULT_PASSWORD']));
     });
 
-    test('prioritizes password-file over env var', () async {
-      // If both are set, password-file should win
-      final passwordFile = File(p.join(tempDir.path, 'password.txt'));
-      passwordFile.writeAsStringSync('file_password');
+    test('prioritizes passphrase-file over env var', () async {
+      // If both are set, passphrase-file should win
+      final passwordFile = File(p.join(tempDir.path, 'passphrase.txt'));
+      passwordFile.writeAsStringSync('file_passphrase');
 
-      await runner.run(['test', '--password-file', passwordFile.path]);
-      
-      final password = await getPassword(command);
-      expect(password, equals('file_password'));
+      await runner.run(['test', '--passphrase-file', passwordFile.path]);
+
+      final password = await getPassPhrase(command);
+      expect(password, equals('file_passphrase'));
     });
   });
 
   group('Password priority order', () {
-    test('password-file has highest priority', () async {
-      final passwordFile = File(p.join(tempDir.path, 'password.txt'));
+    test('passphrase-file has highest priority', () async {
+      final passwordFile = File(p.join(tempDir.path, 'passphrase.txt'));
       passwordFile.writeAsStringSync('from_file');
 
       // Even if env var is set, file should win
-      await runner.run(['test', '--password-file', passwordFile.path]);
-      
-      final password = await getPassword(command);
-      expect(password, equals('from_file'));
+      await runner.run(['test', '--passphrase-file', passwordFile.path]);
+
+      final passphrase = await getPassPhrase(command);
+      expect(passphrase, equals('from_file'));
     });
   });
 }

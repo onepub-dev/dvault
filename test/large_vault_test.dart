@@ -1,15 +1,16 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dvault/src/util/strong_key.dart';
 import 'package:dvault/src/vfs/io_lockbox.dart';
 import 'package:path/path.dart' as LockBox;
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-void main() {
+void main() async {
   late Directory tempDir;
   late File vaultFile;
-  const password = 'test_password_large';
+  final password = await StrongKey.fromString('test_password_large');
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('dvault_large_test_');
@@ -26,7 +27,7 @@ void main() {
     test('handles 100MB file', () async {
       final repo = await IOLockBox.open(
         file: vaultFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 
@@ -62,7 +63,7 @@ void main() {
     test('handles many small files (10,000)', () async {
       final repo = await IOLockBox.open(
         file: vaultFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 
@@ -99,7 +100,7 @@ void main() {
     test('handles deep directory structure', () async {
       final repo = await IOLockBox.open(
         file: vaultFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 
@@ -129,7 +130,7 @@ void main() {
     test('vault file size is reasonable', () async {
       final repo = await IOLockBox.open(
         file: vaultFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 
@@ -164,7 +165,7 @@ void main() {
     test('list operation performance on large vault', () async {
       final repo = await IOLockBox.open(
         file: vaultFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 
@@ -189,20 +190,21 @@ void main() {
     });
 
     test('env vars work with large vault', () async {
-      final repo = await IOLockBox.open(
+      final lockbox = await IOLockBox.open(
         file: vaultFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 
       // Create a large vault
       for (int i = 0; i < 100; i++) {
-        await repo.write('file_$i.txt', Uint8List(1024));
+        await lockbox.write('file_$i.txt', Uint8List(1024));
       }
 
       // Set env var (should update Page 0 without affecting file data)
       final stopwatch = Stopwatch()..start();
-      await repo.setEnv('TEST_VAR', 'test_value');
+
+      await lockbox.setEnv('TEST_VAR', 'test_value');
       stopwatch.stop();
 
       print(
@@ -214,9 +216,9 @@ void main() {
       ); // Should be very fast
 
       // Verify env var persists
-      await repo.close();
+      await lockbox.close();
 
-      final repo2 = await IOLockBox.open(file: vaultFile, password: password);
+      final repo2 = await IOLockBox.open(file: vaultFile, strongKey: password);
 
       expect(repo2.getEnv('TEST_VAR'), equals('test_value'));
       await repo2.close();
@@ -227,7 +229,7 @@ void main() {
     test('random access pattern', () async {
       final repo = await IOLockBox.open(
         file: vaultFile,
-        password: password,
+        strongKey: password,
         create: true,
       );
 

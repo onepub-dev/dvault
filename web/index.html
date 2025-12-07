@@ -10,7 +10,7 @@
     <div class="container">
         <header>
             <h1>🔐 DVault Browser Demo</h1>
-            <p>Encrypted vault storage in your browser</p>
+            <p>Encrypted LockBox storage in your browser</p>
         </header>
 
         <div class="feature-check">
@@ -20,35 +20,35 @@
             </div>
         </div>
 
-        <div class="vault-section">
-            <h2>Create New Vault (OPFS)</h2>
+        <div class="lockbox-section">
+            <h2>Create New LockBox (OPFS)</h2>
             <div class="form-group">
-                <label for="vault-name">Vault Name:</label>
-                <input type="text" id="vault-name" value="my-vault" />
+                <label for="lockbox-name">LockBox Name:</label>
+                <input type="text" id="lockbox-name" value="my-lockbox" />
             </div>
             <div class="form-group">
-                <label for="vault-password">Password:</label>
-                <input type="password" id="vault-password" value="test123" />
+                <label for="lockbox-password">Password:</label>
+                <input type="password" id="lockbox-password" value="test123" />
             </div>
-            <button id="create-vault-btn" class="btn btn-primary">Create Vault</button>
-            <button id="open-vault-btn" class="btn btn-secondary">Open Existing Vault</button>
+            <button id="create-lockbox-btn" class="btn btn-primary">Create LockBox</button>
+            <button id="open-lockbox-btn" class="btn btn-secondary">Open Existing LockBox</button>
         </div>
 
         <div class="http-section">
-            <h2>Open Remote Vault (HTTP)</h2>
+            <h2>Open Remote LockBox (HTTP)</h2>
             <div class="form-group">
-                <label for="vault-url">Vault URL:</label>
-                <input type="text" id="vault-url" placeholder="https://example.com/vault.lockbox" />
+                <label for="lockbox-url">LockBox URL:</label>
+                <input type="text" id="lockbox-url" placeholder="https://example.com/lockbox.lockbox" />
             </div>
             <div class="form-group">
                 <label for="http-password">Password:</label>
                 <input type="password" id="http-password" />
             </div>
-            <button id="open-http-btn" class="btn btn-secondary">Open Remote Vault</button>
+            <button id="open-http-btn" class="btn btn-secondary">Open Remote LockBox</button>
         </div>
 
-        <div id="vault-controls" class="vault-controls" style="display: none;">
-            <h2>Vault Operations</h2>
+        <div id="lockbox-controls" class="lockbox-controls" style="display: none;">
+            <h2>LockBox Operations</h2>
             
             <div class="operation-group">
                 <h3>Add File</h3>
@@ -78,7 +78,7 @@
             </div>
 
             <div class="operation-group">
-                <h3>Files in Vault</h3>
+                <h3>Files in LockBox</h3>
                 <button id="list-files-btn" class="btn btn-secondary">List Files</button>
                 <div id="file-list" class="file-list"></div>
             </div>

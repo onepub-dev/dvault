@@ -31,12 +31,12 @@ class RmCommand extends Command<void> {
       exit(1);
     }
 
-    final password = await getPassword(this);
+    final password = await getPassPhrase(this);
 
     try {
       final repo = await IOLockBox.open(
         file: File(lockboxPath),
-        password: password,
+        strongKey: password,
       );
 
       if (!repo.exists(filePath)) {

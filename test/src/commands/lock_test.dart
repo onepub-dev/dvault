@@ -16,7 +16,12 @@ void main() {
       pathToTestFile.append(content);
       await core.withTempFileAsync((pathToSecuritBox) async {
         await core.withTempFileAsync((pathToResult) async {
-          await runCommand(['lock', '--box', pathToSecuritBox, pathToTestFile]);
+          await runCommand([
+            'lock',
+            '--lockbox',
+            pathToSecuritBox,
+            pathToTestFile,
+          ]);
 
           // await withEnvironment(() async {
           //   await runCommand([
