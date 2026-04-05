@@ -11,3 +11,4 @@ doc/api/
 pubspec.lock
 custom_lint.log
 logs/
+.mcp_logs/mcp_command_server.log
