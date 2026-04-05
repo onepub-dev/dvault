@@ -23,7 +23,7 @@ void main() {
       );
 
       // Write some data
-      await lockbox1.write(
+      await lockbox1.addFile(
         'test.txt',
         Uint8List.fromList('Hello World'.codeUnits),
       );

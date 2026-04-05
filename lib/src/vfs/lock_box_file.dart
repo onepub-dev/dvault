@@ -17,7 +17,7 @@ class LockBoxFile extends File {
   @override
   Future<File> create({bool recursive = false, bool exclusive = false}) async {
     // Creating a file means writing empty content
-    await _fs.lockbox.write(path, Uint8List(0));
+    await _fs.lockbox.addFile(path, Uint8List(0));
     return this;
   }
 
@@ -38,7 +38,7 @@ class LockBoxFile extends File {
   @override
   Future<File> copy(String newPath) async {
     final content = await readAsBytes();
-    await _fs.lockbox.write(newPath, content);
+    await _fs.lockbox.addFile(newPath, content);
     return LockBoxFile(_fs, newPath);
   }
 
@@ -85,7 +85,7 @@ class LockBoxFile extends File {
     FileMode mode = FileMode.write,
     bool flush = false,
   }) async {
-    await _fs.lockbox.write(path, Uint8List.fromList(bytes));
+    await _fs.lockbox.addFile(path, Uint8List.fromList(bytes));
     return this;
   }
 

@@ -66,7 +66,7 @@ class CpCommand extends Command<void> {
           exit(1);
         }
         final data = File(src).readAsBytesSync();
-        await lockbox.write(dest, data);
+        await lockbox.addFile(dest, data);
         print(green('Added $src to $dest'));
       }
 

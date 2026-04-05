@@ -90,13 +90,40 @@ Future<StrongKey> _readPassPhraseFile(ArgResults argResults) async {
     exit(1);
   }
 
-  final password = File(filePath).readAsBytesSync();
+  final password = _trim(File(filePath).readAsBytesSync());
+
   if (password.length == 0) {
     print(red('Passphrase file is empty: $filePath'));
     exit(1);
   }
 
   return StrongKey.fromPassPhrase(password);
+}
+
+Uint8List _trim(Uint8List password) {
+  int end = password.length;
+
+  // Trim trailing whitespace/newline characters
+  while (end > 0 &&
+      (password[end - 1] == 10 || // LF
+          password[end - 1] == 13 || // CR
+          password[end - 1] == 32 || // Space
+          password[end - 1] == 9)) {
+    // Tab
+    end--;
+  }
+
+  // trim leading whitespace/newline characters
+  int start = 0;
+  while (start < end &&
+      (password[start] == 10 || // LF
+          password[start] == 13 || // CR
+          password[start] == 32 || // Space
+          password[start] == 9)) {
+    // Tab
+    start++;
+  }
+  return password.sublist(start, end);
 }
 
 /// Adds passphrase-related options to a command's argument parser.

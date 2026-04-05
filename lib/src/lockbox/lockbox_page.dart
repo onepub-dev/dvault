@@ -2,6 +2,9 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:dvault/src/lockbox/lockbox_header.dart';
+import 'package:dvault/src/vfs/lock_box_reader.dart';
+import 'package:dvault/src/vfs/lock_box_writer.dart';
 
 import 'lockbox_format.dart';
 
@@ -14,6 +17,61 @@ class LockBoxPage {
   static final _algorithm = AesGcm.with256bits();
 
   static const minimumSize = 1024;
+
+  final SecretKey _key;
+  final LockBoxHeader _header;
+  final int pageIndex;
+  final Uint8List _pageContent;
+
+  LockBoxPage(this._header, this._key, this.pageIndex, this._pageContent);
+
+  static Future<LockBoxPage> readPage({
+    required SecretKey key,
+    required int pageIndex,
+    required LockBoxHeader header,
+    required LockBoxReader reader,
+  }) async {
+    final physicalPageSize = header.pageSize;
+
+    final physicalOffset =
+        (pageIndex + LockBoxFormat.firstFilePage) * physicalPageSize;
+
+    final encryptedPage = await reader.readBytesAt(
+      physicalOffset,
+      physicalPageSize,
+    );
+
+    Uint8List _data = Uint8List(0);
+
+    if (encryptedPage.isNotEmpty) {
+      //TODO: don't decrypt until someone to access the data.
+      _data = await LockBoxPage.decrypt(encryptedPage: encryptedPage, key: key);
+    }
+
+    return LockBoxPage(header, key, pageIndex, _data);
+  }
+
+  bool isNotEmpty() => _pageContent.isNotEmpty;
+
+  void writePage(LockBoxWriter writer) async {
+    final encryptedData = await LockBoxPage.encrypt(
+      data: _pageContent,
+      key: _key,
+      pageSize: _header.pageSize,
+    );
+
+    final physicalOffset = _header.headerSize + (pageIndex * _header.pageSize);
+    await writer.writeBytesAt(physicalOffset, encryptedData);
+  }
+
+  static int findPage({required int offset, required LockBoxHeader header}) {
+    final dataPageSize = header.pageContentSize;
+    final physicalPageSize = header.pageSize;
+
+    final pageIdx = offset ~/ dataPageSize;
+
+    return pageIdx;
+  }
 
   /// Encrypts a page of data.
   /// Returns the full encrypted page: [Nonce] + [Ciphertext] + [Tag]
@@ -29,6 +87,8 @@ class LockBoxPage {
       );
     }
 
+    // TODO: we only seem to be encryping the written data rather than full page?
+    // this exposes info about the data size.
     // Pad payload to full payload size for consistent layout.
     final payload = Uint8List(maxPayload);
     payload.setRange(0, data.length, data);
@@ -117,5 +177,9 @@ class LockBoxPage {
       LockBoxFormat.nonceSize,
       (_) => random.nextInt(256),
     );
+  }
+
+  void setContent(int offset, Uint8List fileContent) {
+    _pageContent.setRange(offset, offset + fileContent.length, fileContent);
   }
 }

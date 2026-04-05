@@ -200,7 +200,7 @@ Locks the passed in file or directory by adding it to a lockbox.
     final bytes = await file.readAsBytes();
     final lockboxPath = basename(filePath);
 
-    await repo.write(lockboxPath, bytes);
+    await repo.addFile(lockboxPath, bytes);
     print('Added: $filePath -> $lockboxPath');
   }
 
@@ -217,7 +217,7 @@ Locks the passed in file or directory by adding it to a lockbox.
         final bytes = await entity.readAsBytes();
         final relativePath = relative(entity.path, from: dirname(basePath));
 
-        await repo.write(relativePath, bytes);
+        await repo.addFile(relativePath, bytes);
         print('Added: ${entity.path} -> $relativePath');
       }
     }

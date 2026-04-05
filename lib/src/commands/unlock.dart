@@ -116,7 +116,7 @@ Decrypts the passed in lockbox and extracts all files.
       createDir(outputPath, recursive: true);
 
       // Extract all files
-      final files = lockbox.list('/', recursive: true);
+      final files = lockbox.listFiles('/', recursive: true);
       var count = 0;
 
       for (final filePath in files) {

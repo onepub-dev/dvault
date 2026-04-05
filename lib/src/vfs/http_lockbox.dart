@@ -2,6 +2,7 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 
 import 'package:dvault/src/util/strong_key.dart';
+import 'package:dvault/src/vfs/lock_box_reader.dart';
 import 'package:dvault/src/vfs/lock_box_writer.dart';
 import 'package:web/web.dart' as web;
 
@@ -149,7 +150,7 @@ class HTTPLockBox extends LockBox {
 
   /// Override write operations to throw UnsupportedError
   @override
-  Future<void> write(String path, Uint8List data) async {
+  Future<void> addFile(String path, Uint8List data) async {
     throw UnsupportedError('HTTP LockBoxes are read-only');
   }
 

@@ -1,40 +1,14 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dvault/src/vfs/lock_box_reader.dart';
 import 'package:dvault/src/util/strong_key.dart';
+import 'package:dvault/src/vfs/lock_box_io_reader.dart';
+import 'package:dvault/src/vfs/lock_box_io_writer.dart';
 import 'package:dvault/src/vfs/lock_box_writer.dart';
 
 import '../lockbox/lockbox.dart';
 import '../lockbox/lockbox_format.dart';
-
-class LockBoxIOReader implements LockBoxReader {
-  final RandomAccessFile _raf;
-
-  LockBoxIOReader(this._raf);
-
-  @override
-  Future<Uint8List> readBytesAt(int offset, int length) {
-    _raf.setPosition(offset);
-    return _raf.read(length);
-  }
-
-  @override
-  Future<void> close() => _raf.close();
-
-  Future<int> size() async => _raf.lengthSync();
-}
-
-class LockBoxIOWriter implements LockBoxWriter {
-  final RandomAccessFile _raf;
-
-  LockBoxIOWriter(this._raf);
-
-  @override
-  Future<void> writeBytesAt(int offset, Uint8List bytes) async {
-    _raf.setPosition(offset);
-    _raf.writeFrom(bytes);
-  }
-}
 
 /// CLI/VM implementation of DVaultRepository using dart:io
 class IOLockBox extends LockBox {

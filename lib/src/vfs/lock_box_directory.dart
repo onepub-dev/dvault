@@ -51,7 +51,7 @@ class LockBoxDirectory extends Directory {
     bool recursive = false,
     bool followLinks = true,
   }) async* {
-    final paths = _fs.lockbox.list(path, recursive: recursive);
+    final paths = _fs.lockbox.listFiles(path, recursive: recursive);
     for (final p in paths) {
       if (_fs.lockbox.isDirectory(p)) {
         yield LockBoxDirectory(_fs, p);

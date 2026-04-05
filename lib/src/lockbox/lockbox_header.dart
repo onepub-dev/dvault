@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:collection/collection.dart';
-import 'package:dvault/src/lockbox/lockbox.dart';
 import 'package:dvault/src/util/byte_data_helper.dart';
+import 'package:dvault/src/vfs/lock_box_reader.dart';
 import 'package:dvault/src/vfs/lock_box_writer.dart';
 
 import 'lockbox_format.dart';
@@ -27,7 +27,7 @@ class LockBoxHeader {
   }
 
   /// The space available for data in a page.
-  int get dataPageSize => pageSize - LockBoxFormat.pageOverhead;
+  int get pageContentSize => pageSize - LockBoxFormat.pageOverhead;
 
   int _calculateSize() {
     // Magic(6) + Version(2) + PageSize(4) + TOC Offset(8) + HeaderSize(4) + RecipientCount(2)

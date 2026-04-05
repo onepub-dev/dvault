@@ -123,7 +123,7 @@ void main() async {
 
     test('writes and reads file', () async {
       final content = Uint8List.fromList('Hello, World!'.codeUnits);
-      await lockbox.write('test.txt', content);
+      await lockbox.addFile('test.txt', content);
 
       final read = await lockbox.read('test.txt');
       expect(read, equals(content));
@@ -131,7 +131,7 @@ void main() async {
 
     test('writes and reads empty file', () async {
       final content = Uint8List(0);
-      await lockbox.write('empty.txt', content);
+      await lockbox.addFile('empty.txt', content);
 
       final read = await lockbox.read('empty.txt');
       expect(read, equals(content));
@@ -142,16 +142,25 @@ void main() async {
       final content = Uint8List.fromList(
         List.generate(1024 * 1024, (i) => i % 256),
       );
-      await lockbox.write('large.bin', content);
+      await lockbox.addFile('large.bin', content);
 
       final read = await lockbox.read('large.bin');
       expect(read, equals(content));
     });
 
     test('writes multiple files', () async {
-      await lockbox.write('file1.txt', Uint8List.fromList('File 1'.codeUnits));
-      await lockbox.write('file2.txt', Uint8List.fromList('File 2'.codeUnits));
-      await lockbox.write('file3.txt', Uint8List.fromList('File 3'.codeUnits));
+      await lockbox.addFile(
+        'file1.txt',
+        Uint8List.fromList('File 1'.codeUnits),
+      );
+      await lockbox.addFile(
+        'file2.txt',
+        Uint8List.fromList('File 2'.codeUnits),
+      );
+      await lockbox.addFile(
+        'file3.txt',
+        Uint8List.fromList('File 3'.codeUnits),
+      );
 
       expect(
         await lockbox.read('file1.txt'),
@@ -170,13 +179,13 @@ void main() async {
     test('checks file existence', () async {
       expect(lockbox.exists('nonexistent.txt'), isFalse);
 
-      await lockbox.write('exists.txt', Uint8List.fromList('data'.codeUnits));
+      await lockbox.addFile('exists.txt', Uint8List.fromList('data'.codeUnits));
       expect(lockbox.exists('exists.txt'), isTrue);
     });
 
     test('gets file stats', () async {
       final content = Uint8List.fromList('test data'.codeUnits);
-      await lockbox.write('stats.txt', content);
+      await lockbox.addFile('stats.txt', content);
 
       final stats = lockbox.stat('stats.txt');
       expect(stats, isNotNull);
@@ -187,7 +196,7 @@ void main() async {
     });
 
     test('deletes file', () async {
-      await lockbox.write(
+      await lockbox.addFile(
         'delete_me.txt',
         Uint8List.fromList('data'.codeUnits),
       );
@@ -205,7 +214,10 @@ void main() async {
     });
 
     test('renames file', () async {
-      await lockbox.write('old_name.txt', Uint8List.fromList('data'.codeUnits));
+      await lockbox.addFile(
+        'old_name.txt',
+        Uint8List.fromList('data'.codeUnits),
+      );
       await lockbox.rename('old_name.txt', 'new_name.txt');
 
       expect(lockbox.exists('old_name.txt'), isFalse);
@@ -217,8 +229,8 @@ void main() async {
     });
 
     test('fails to rename to existing file', () async {
-      await lockbox.write('file1.txt', Uint8List.fromList('data1'.codeUnits));
-      await lockbox.write('file2.txt', Uint8List.fromList('data2'.codeUnits));
+      await lockbox.addFile('file1.txt', Uint8List.fromList('data1'.codeUnits));
+      await lockbox.addFile('file2.txt', Uint8List.fromList('data2'.codeUnits));
 
       expect(
         () => lockbox.rename('file1.txt', 'file2.txt'),
@@ -247,28 +259,28 @@ void main() async {
       expect(repo.isDirectory(''), isTrue);
       expect(repo.isDirectory('nonexistent'), isFalse);
 
-      await repo.write('dir/file.txt', Uint8List.fromList('data'.codeUnits));
+      await repo.addFile('dir/file.txt', Uint8List.fromList('data'.codeUnits));
       expect(repo.isDirectory('dir'), isTrue);
       expect(repo.isDirectory('dir/file.txt'), isFalse);
     });
 
     test('lists files in root', () async {
-      await repo.write('file1.txt', Uint8List(0));
-      await repo.write('file2.txt', Uint8List(0));
-      await repo.write('dir/file3.txt', Uint8List(0));
+      await repo.addFile('file1.txt', Uint8List(0));
+      await repo.addFile('file2.txt', Uint8List(0));
+      await repo.addFile('dir/file3.txt', Uint8List(0));
 
-      final files = repo.list('/');
+      final files = repo.listFiles('/');
       expect(files, contains('file1.txt'));
       expect(files, contains('file2.txt'));
       expect(files, contains('dir'));
     });
 
     test('lists files recursively', () async {
-      await repo.write('file1.txt', Uint8List(0));
-      await repo.write('dir1/file2.txt', Uint8List(0));
-      await repo.write('dir1/dir2/file3.txt', Uint8List(0));
+      await repo.addFile('file1.txt', Uint8List(0));
+      await repo.addFile('dir1/file2.txt', Uint8List(0));
+      await repo.addFile('dir1/dir2/file3.txt', Uint8List(0));
 
-      final files = repo.list('/', recursive: true);
+      final files = repo.listFiles('/', recursive: true);
       expect(files.length, equals(3));
       expect(files, contains('file1.txt'));
       expect(files, contains('dir1/file2.txt'));
@@ -276,11 +288,11 @@ void main() async {
     });
 
     test('lists files in subdirectory', () async {
-      await repo.write('dir/file1.txt', Uint8List(0));
-      await repo.write('dir/file2.txt', Uint8List(0));
-      await repo.write('dir/subdir/file3.txt', Uint8List(0));
+      await repo.addFile('dir/file1.txt', Uint8List(0));
+      await repo.addFile('dir/file2.txt', Uint8List(0));
+      await repo.addFile('dir/subdir/file3.txt', Uint8List(0));
 
-      final files = repo.list('dir');
+      final files = repo.listFiles('dir');
       expect(files, contains('dir/file1.txt'));
       expect(files, contains('dir/file2.txt'));
       expect(files, contains('dir/subdir'));
@@ -363,7 +375,7 @@ void main() async {
         create: true,
       );
 
-      await repo1.write('persist.txt', Uint8List.fromList('data'.codeUnits));
+      await repo1.addFile('persist.txt', Uint8List.fromList('data'.codeUnits));
       await repo1.close();
 
       final repo2 = await IOLockBox.open(
@@ -387,9 +399,12 @@ void main() async {
         create: true,
       );
 
-      await repo1.write('file1.txt', Uint8List.fromList('data1'.codeUnits));
-      await repo1.write('file2.txt', Uint8List.fromList('data2'.codeUnits));
-      await repo1.write('dir/file3.txt', Uint8List.fromList('data3'.codeUnits));
+      await repo1.addFile('file1.txt', Uint8List.fromList('data1'.codeUnits));
+      await repo1.addFile('file2.txt', Uint8List.fromList('data2'.codeUnits));
+      await repo1.addFile(
+        'dir/file3.txt',
+        Uint8List.fromList('data3'.codeUnits),
+      );
       await repo1.close();
 
       final repo2 = await IOLockBox.open(
@@ -401,7 +416,7 @@ void main() async {
       expect(repo2.exists('file2.txt'), isTrue);
       expect(repo2.exists('dir/file3.txt'), isTrue);
 
-      final files = repo2.list('/', recursive: true);
+      final files = repo2.listFiles('/', recursive: true);
       expect(files.length, equals(3));
 
       await repo2.close();

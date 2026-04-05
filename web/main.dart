@@ -260,7 +260,7 @@ Future<void> addFile() async {
     log('Adding file "$path"...', 'info');
 
     final data = Uint8List.fromList(content.codeUnits);
-    await currentLockbox!.write(path, data);
+    await currentLockbox!.addFile(path, data);
 
     log('✓ File added successfully!', 'success');
     await listFiles();
@@ -331,7 +331,7 @@ Future<void> listFiles() async {
   }
 
   try {
-    final files = currentLockbox!.list('/', recursive: true);
+    final files = currentLockbox!.listFiles('/', recursive: true);
 
     final fileListDiv = web.document.getElementById('file-list')!;
     fileListDiv.innerHTML = ''.toJS;

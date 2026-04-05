@@ -1,6 +1,7 @@
 import 'dart:js_interop';
 import 'dart:typed_data';
 
+import 'package:dvault/src/vfs/lock_box_reader.dart';
 import 'package:dvault/src/lockbox/lockbox.dart';
 import 'package:dvault/src/vfs/opfs_writer.dart';
 import 'package:web/web.dart' as web;

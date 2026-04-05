@@ -7,18 +7,14 @@ import 'package:dvault/src/lockbox/lockbox_env_page.dart';
 import 'package:dvault/src/lockbox/lockbox_page_manager.dart';
 import 'package:dvault/src/lockbox/recipient.dart';
 import 'package:dvault/src/util/strong_key.dart';
+import 'package:dvault/src/vfs/lock_box_reader.dart';
 import 'package:dvault/src/vfs/lock_box_writer.dart';
+import 'package:web/web.dart';
 
 import 'lockbox_format.dart';
 import 'lockbox_header.dart';
 import 'lockbox_page.dart';
 import 'lockbox_toc.dart';
-
-abstract class LockBoxReader {
-  Future<Uint8List> readBytesAt(int offset, int length);
-  Future<void> close();
-  Future<int> size();
-}
 
 /// Abstract base class for DVault repository implementations.
 ///
@@ -128,8 +124,7 @@ abstract class LockBox {
 
     // Write Env Page (Page 0) directly after the header
     final envPage = LockBoxEnvPage.empty(
-      pageOffset: realHeaderSize,
-      pageSize: pageSize,
+      header: header,
       sessionKey: sessionKey,
       // writer: writer,
     );
@@ -139,7 +134,6 @@ abstract class LockBox {
 
     final toc = LockBoxTOC();
 
-    await toc.write(writer, tocOffset, pageSize, sessionKey);
     await lockbox.initialize(
       key: sessionKey,
       header: header,
@@ -184,9 +178,7 @@ abstract class LockBox {
 
     final envPage = await LockBoxEnvPage.read(
       reader: reader,
-      // writer: writer,
-      pageOffset: header.headerSize,
-      pageSize: physicalPageSize,
+      header: header,
       sessionKey: sessionKey,
     );
 
@@ -260,7 +252,7 @@ abstract class LockBox {
       virtualStreamSize = lastFile.offset + lastFile.length;
     }
 
-    final dataPageSize = _header.dataPageSize;
+    final dataPageSize = _header.pageContentSize;
     final physicalPageSize = _header.pageSize;
 
     final totalFilePages =
@@ -366,71 +358,54 @@ abstract class LockBox {
     return buffer.toBytes();
   }
 
-  Future<void> write(String path, Uint8List data) async {
-    int virtualStreamSize = 0;
+  // TODO: we are decrypting and encryping on every write rather than just
+  // encrypting when we need to flush.
+  Future<void> addFile(String path, Uint8List fileContent) async {
+    int startOffset = 0;
     if (_toc.isNotEmpty) {
       final lastFile = _toc.lastFile;
-      virtualStreamSize = lastFile.offset + lastFile.length;
+      startOffset = lastFile.offset + lastFile.length;
     }
 
-    final startOffset = virtualStreamSize;
-    final length = data.length;
+    final length = fileContent.length;
 
     var written = 0;
     var currentOffset = startOffset;
-
-    final dataPageSize = _header.dataPageSize;
-    final physicalPageSize = _header.pageSize;
+    final dataPageSize = _header.pageContentSize;
 
     while (written < length) {
-      final pageIdx = currentOffset ~/ dataPageSize;
-      final offsetInPage = currentOffset % dataPageSize;
-      final physicalPageIdx = pageIdx + LockBoxFormat.firstFilePage;
-
-      Uint8List pageData;
-      if (offsetInPage > 0) {
-        final physicalOffset =
-            _header.headerSize + (physicalPageIdx * physicalPageSize);
-        final encryptedBytes = await readBytesAt(
-          physicalOffset,
-          physicalPageSize,
-        );
-        if (encryptedBytes.isNotEmpty) {
-          pageData = await LockBoxPage.decrypt(
-            encryptedPage: encryptedBytes,
-            key: _key,
-            // pageIndex: physicalPageIdx,
-          );
-        } else {
-          pageData = Uint8List(dataPageSize);
-        }
-      } else {
-        pageData = Uint8List(dataPageSize);
-      }
-
-      final spaceInPage = dataPageSize - offsetInPage;
-      final toWrite =
-          (length - written) < spaceInPage ? (length - written) : spaceInPage;
-
-      pageData.setRange(
-        offsetInPage,
-        offsetInPage + toWrite,
-        data.sublist(written, written + toWrite),
+      final pageIndex = LockBoxPage.findPage(
+        offset: currentOffset,
+        header: header,
       );
-
-      final encryptedPage = await LockBoxPage.encrypt(
-        data: pageData,
+      final page = await LockBoxPage.readPage(
         key: _key,
-        // pageIndex: pageIdx + LockBoxFormat.firstFilePage,
-        pageSize: physicalPageSize,
+        pageIndex: pageIndex,
+        header: _header,
+        reader: this,
       );
 
-      final physicalOffset =
-          _header.headerSize + (physicalPageIdx * physicalPageSize);
-      await writeBytesAt(physicalOffset, encryptedPage);
+      final offsetInPage = currentOffset % dataPageSize;
+      final physicalPageIdx = pageIndex + LockBoxFormat.firstFilePage;
 
-      written += toWrite;
-      currentOffset += toWrite;
+      if (offsetInPage > 0) {
+        // Can only true for the first page of data we write
+        final physicalOffset =
+            _header.headerSize + (physicalPageIdx * _header.pageSize);
+
+        final spaceInPage = dataPageSize - offsetInPage;
+        final toWrite =
+            (length - written) < spaceInPage ? (length - written) : spaceInPage;
+
+        page.setContent(
+          offsetInPage,
+          fileContent.sublist(written, written + toWrite),
+        );
+        page.writePage(writer);
+
+        written += toWrite;
+        currentOffset += toWrite;
+      }
     }
 
     _toc.append(
@@ -450,7 +425,7 @@ abstract class LockBox {
 
   bool isDirectory(String path) => _toc.isDirectory(path);
 
-  List<String> list(String path, {bool recursive = false}) =>
+  List<String> listFiles(String path, {bool recursive = false}) =>
       _toc.list(path, recursive: recursive);
 
   // Env Operations
@@ -502,5 +477,4 @@ Future<SecretKey> _deriveKey(StrongKey strongKey, Uint8List salt) =>
 Future<SecretKey> _unwrapKey(
   Uint8List encryptedSessionKey,
   SecretKey wrappingKey,
-) =>
-    PageManager.unwrapKey(encryptedSessionKey, wrappingKey);
+) => PageManager.unwrapKey(encryptedSessionKey, wrappingKey);

@@ -47,7 +47,7 @@ class LsCommand extends Command<void> {
         strongKey: password,
       );
 
-      final files = repo.list(internalPath, recursive: recursive);
+      final files = repo.listFiles(internalPath, recursive: recursive);
       for (final file in files) {
         print(file);
       }

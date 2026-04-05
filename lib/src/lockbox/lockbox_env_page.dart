@@ -2,41 +2,42 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:dvault/src/lockbox/lockbox_format.dart';
-import 'package:dvault/src/lockbox/lockbox.dart';
+import 'package:dvault/src/lockbox/lockbox_header.dart';
 import 'package:dvault/src/lockbox/lockbox_page.dart';
+import 'package:dvault/src/vfs/lock_box_reader.dart';
 import 'package:dvault/src/vfs/lock_box_writer.dart';
 
 class LockBoxEnvPage {
   final Map<String, String> _env;
 
-  final int pageOffset;
-
-  final int pageSize;
+  final LockBoxHeader _header;
 
   final SecretKey sessionKey;
 
+  final int pageOffset;
+
   LockBoxEnvPage._(
+    this._header,
     this._env,
-    this.pageOffset,
-    this.pageSize,
     this.sessionKey,
     // this.writer,
-  );
+  ) : pageOffset = _header.headerSize;
 
   LockBoxEnvPage.empty({
-    required this.pageOffset,
-    required this.pageSize,
     required this.sessionKey,
+    required LockBoxHeader header,
     // required this.writer,
-  }) : _env = {};
+  }) : _env = {},
+       _header = header,
+       pageOffset = header.headerSize;
 
   static Future<LockBoxEnvPage> read({
-    required int pageOffset,
-    required int pageSize,
+    required LockBoxHeader header,
     required SecretKey sessionKey,
-    // required LockBoxWriter writer,
     required LockBoxReader reader,
   }) async {
+    final pageSize = header.pageSize;
+    final pageOffset = header.headerSize; // Page 0 is after header
     final encryptedEnvPage = await reader.readBytesAt(pageOffset, pageSize);
 
     assert(encryptedEnvPage.length == pageSize);
@@ -46,12 +47,7 @@ class LockBoxEnvPage {
     );
     final env = await parseEnv(envData);
 
-    return LockBoxEnvPage._(
-      env,
-      pageOffset,
-      pageSize,
-      sessionKey,
-    ); // , writer);
+    return LockBoxEnvPage._(header, env, sessionKey); // , writer);
   }
 
   String? getEnv(String key) => _env[key];
@@ -87,7 +83,7 @@ class LockBoxEnvPage {
     final jsonStr = _encodeJson(_env);
     final bytes = Uint8List.fromList(jsonStr.codeUnits);
 
-    final payloadSize = pageSize - LockBoxFormat.pageOverhead;
+    final payloadSize = _header.pageSize - LockBoxFormat.pageOverhead;
 
     if (bytes.length > payloadSize) {
       throw Exception('Environment variables too large for Page 0');
@@ -99,10 +95,10 @@ class LockBoxEnvPage {
     final encryptedPage = await LockBoxPage.encrypt(
       data: pageData,
       key: sessionKey,
-      pageSize: pageSize,
+      pageSize: _header.pageSize,
     );
 
-    await writer.writeBytesAt(pageOffset, encryptedPage);
+    await writer.writeBytesAt(_header.headerSize, encryptedPage);
   }
 
   static Map<String, dynamic> _parseJson(String json) {

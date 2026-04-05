@@ -59,7 +59,10 @@ void main() {
       await runner.run(['test', '--passphrase-file', passwordFile.path]);
 
       final password = await getPassPhrase(command);
-      expect(password, equals('my_secret_password'));
+      expect(
+        String.fromCharCodes(password.bytes),
+        equals('my_secret_password'),
+      );
     });
 
     test('trims whitespace from password file', () async {
@@ -69,7 +72,7 @@ void main() {
       await runner.run(['test', '--passphrase-file', passwordFile.path]);
 
       final password = await getPassPhrase(command);
-      expect(password, equals('my_password'));
+      expect(String.fromCharCodes(password.bytes), equals('my_password'));
     });
 
     test('fails if password file does not exist', () async {
@@ -112,7 +115,10 @@ void main() {
       await runner.run(['test', '--passphrase-file', passwordFile.path]);
 
       final password = await getPassPhrase(command);
-      expect(password, equals('file_passphrase'));
+      expect(
+        String.fromCharCodes(password.bytes),
+        equals('file_passphrase'),
+      );
     });
   });
 
