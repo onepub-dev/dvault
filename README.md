@@ -1,198 +1,279 @@
-# Lockbox - Secure File Encryption
+# Lockbox
 
-Lockbox (formerly DVault) is designed to make protecting (encrypting) files and directories simple and secure using Public Key Infrastructure (PKI).
+Lockbox is an encrypted archive format and library for storing many files in a
+single `.lbox` container while still supporting fast access to individual files.
 
-When you lock a file or directory with Lockbox, it creates a single self-contained `.lbox` file that can be:
-- **Unlocked by you** using your private key
-- **Shared with team members** by adding them as recipients
-- **Accessed in CI/CD** using machine keys
-- **Decrypted in a web browser** for on-demand access
+The current direction is a Rust core implementation that can be used from CLI,
+Dart, JavaScript/WASM, and other languages through thin bindings.
 
-Lockbox works as both an interactive command line tool and can be called by other scripts. It supports Linux, macOS, and Windows.
+> Status: the Rust implementation under `rust/lockbox_core` is an early format
+> prototype. It exercises the public API, manifest/checkpoint model, path
+> privacy, free-space reuse, and recovery behavior. The current in-repo cipher is
+> deliberately dependency-free for testability in this environment and must be
+> replaced with production AEAD crypto before release.
 
-## Quick Start
+## Goals
 
-### Installation
+- Fast range access to individual files.
+- Browser-compatible reads over HTTP range requests.
+- Private paths and metadata; paths are not stored in cleartext indexes.
+- Append-friendly writes with automatic reuse of deleted/replaced record space.
+- Checkpointed manifests for fast open.
+- Recovery APIs that can salvage valid files when headers, manifests, or records
+  are damaged.
+- Production compression and encryption through Rust crates suitable for native
+  and WASM builds.
+
+## Format Model
+
+Lockbox v2 uses a small cleartext frame plus encrypted private payloads.
+
+```text
+[ Header ]
+[ Record: file metadata + content, encrypted payload ]
+[ Record: delete/tombstone, encrypted payload ]
+[ Record: manifest checkpoint, encrypted payload ]
+...
+```
+
+Cleartext record headers contain only scanner-safe framing:
+
+```text
+magic
+record type
+sequence
+payload length
+record length
+payload checksum
+header checksum
+```
+
+Paths, file names, content, lengths-by-path, and manifest entries are inside the
+encrypted payload. This keeps the backing store and web service from seeing
+directory structure or file names.
+
+## Manifest And Recovery
+
+Normal open uses the header's latest manifest checkpoint. The manifest is the
+current filesystem view: path lookup, file metadata, and physical record
+locations.
+
+Recovery does not trust the header or manifest. It scans record frames, verifies
+payloads, decrypts metadata, and rebuilds the best available manifest. If the
+latest manifest is corrupt but file records are intact, files are still
+recoverable. If a file record is corrupt but the manifest survives, recovery
+reports that file as partial.
+
+The high-level recovery API is intentionally simple:
+
+```rust
+let report = Lockbox::recover(bytes, key);
+let clean = Lockbox::salvage(damaged_bytes, key)?;
+```
+
+## Rust API
+
+The normal API is intentionally filesystem-like:
+
+```rust
+use lockbox_core::Lockbox;
+
+let key = b"correct horse battery staple";
+let mut lockbox = Lockbox::create(key);
+
+lockbox.put_file("/docs/a.txt", b"alpha")?;
+lockbox.put_file("/docs/b.txt", b"bravo")?;
+
+let bytes = lockbox.get_file("/docs/a.txt")?;
+let slice = lockbox.read_file_range("/docs/b.txt", 1, 3)?;
+let files = lockbox.list("/docs")?;
+
+lockbox.rename("/docs/b.txt", "/docs/c.txt")?;
+lockbox.delete("/docs/a.txt")?;
+lockbox.commit()?;
+
+let stored_bytes = lockbox.to_bytes();
+let reopened = Lockbox::open(stored_bytes, key)?;
+```
+
+Current tested APIs:
+
+- `create`
+- `open`
+- `to_bytes`
+- `put_file`
+- `put_file_with_permissions`
+- `put_symlink`
+- `get_file`
+- `get_symlink_target`
+- `read_file_range`
+- `list_iter`
+- `list`
+- `list_glob`
+- `ListOptions`
+- `stat`
+- `permissions`
+- `is_symlink`
+- `set_env`
+- `get_env`
+- `remove_env`
+- `list_env`
+- `get_all_env`
+- `delete`
+- `rename`
+- `commit`
+- `extract_all`
+- `extract_all_nodes`
+- `recover`
+- `salvage`
+
+## Segment Reuse
+
+Lockbox should not rely on compaction as the normal way to manage archive
+growth. Deleted or replaced records become reusable slots. New records reuse
+available slots when they fit, while metadata updates remain checkpointed and
+crash-safe.
+
+Compaction should remain a maintenance operation for heavily fragmented
+archives, not the default write path.
+
+## Security Posture
+
+Lockbox should be safe by default when opening or expanding an untrusted
+archive. The format and APIs are designed to avoid common archive attack classes
+seen in ZIP, TAR, RAR, 7-Zip, and similar tools.
+
+Default rules:
+
+- Paths are private metadata and are never stored in cleartext indexes.
+- Lockbox paths are logical archive paths, not host filesystem paths.
+- `..` path components are banned completely. Finding one during parsing,
+  listing, extraction, recovery, or symlink validation is treated as tampering.
+- Windows drive paths and alternate data stream syntax are banned by rejecting
+  `:` in archive paths.
+- UNC-like paths are banned by rejecting `//` roots and backslash separators.
+- NUL bytes, ASCII control characters, empty path components, `.`, duplicate
+  separators, overlong paths, and excessive path depth are rejected.
+- Unicode paths are supported and canonicalized to NFC at API boundaries.
+- Stored metadata must already be canonical NFC; non-canonical paths found while
+  decoding archive metadata are rejected as tampering.
+- Unicode bidirectional controls, C1 controls, zero-width/invisible formatting
+  characters, soft hyphen, variation selectors, and other selected
+  default-ignorable controls are rejected by default to reduce visual spoofing.
+- Path limits are enforced in UTF-8 bytes, component bytes, and component depth.
+- Only regular file payloads are materialized by default.
+- Symlinks are not extracted by default. Future symlink metadata must pass the
+  same logical-path validation for both link path and target.
+- Bulk extraction is bounded by default with maximum file count, per-file bytes,
+  and total expanded bytes.
+- Existing destination files must not be overwritten by default when filesystem
+  extraction is added.
+- Compression must be per-file or per-chunk, never whole-archive solid
+  compression by default.
+- Decompression must be streaming and bounded by authenticated uncompressed
+  lengths, total output limits, and compression-ratio limits once compression is
+  implemented.
+- Nested archives are never expanded automatically.
+
+The Rust prototype currently enforces strict logical and Unicode path
+validation, symlink-path validation, private path/content storage, parser
+rejection of tampered paths in encrypted metadata, and bounded in-memory
+`extract_all`.
+Production work still needs real AEAD associated-data checks, zstd ratio-limit
+tests, filesystem extraction hardening, and fuzzing.
+
+## Browser And Web Service Access
+
+The target web flow is:
+
+```text
+1. Browser fetches the fixed header range.
+2. Browser fetches the latest checkpoint/manifest ranges.
+3. User lists a directory.
+4. Browser fetches only the manifest pages and file records needed.
+5. WASM decrypts/decompresses selected files locally.
+```
+
+The Rust core will grow a `RangeFetcher`/range-planning layer so language
+bindings can hide these details behind:
+
+```rust
+remote.get_file("/docs/a.txt").await?
+remote.list("/docs").await?
+```
+
+## Compression And Crypto Roadmap
+
+Production Lockbox should use:
+
+- XChaCha20-Poly1305 or another modern AEAD for record/chunk encryption.
+- Argon2id or a caller-supplied raw key for key derivation.
+- Zstandard as the default compression engine.
+- Independent compressed chunks for large files so random access and corruption
+  recovery remain practical.
+
+Avoid whole-archive solid compression as the default because it conflicts with
+range reads and partial recovery.
+
+## Development
+
+Run the Rust tests:
+
 ```bash
-dart pub global activate dvault
+cd rust/lockbox_core
+cargo test
 ```
 
-### Initialize Lockbox
-After installing, run the one-time initialization to create your PKI key pair:
+The Rust suite currently has 46 tests covering:
 
-```bash
-lockbox init
-  Enter passphrase: ******
-  Confirm passphrase: *****
-  Generating RSA key pair...
-  Keys saved to ~/.dvault
+- create/open/commit round trips,
+- put/get/range/list/stat behavior,
+- iterator-first listing with Rust-side filtering,
+- declarative glob filtering for binding-friendly callers,
+- list options for node type filtering and limits,
+- encrypted environment variable records with lazy loading,
+- env set/get/remove/list/get-all behavior,
+- env name/value validation and privacy smoke tests,
+- invalid path rejection,
+- Windows drive, UNC, backslash, NUL, control character, `.` and `..`
+  rejection,
+- path length and path depth limits,
+- Unicode path round trips,
+- NFC canonicalization for storage and lookup,
+- Unicode normalization collision handling,
+- bidi, C1, zero-width, and variation-selector rejection,
+- bounded extraction limits for file count, per-file bytes, and total bytes,
+- empty files, larger files, and many-file archives,
+- range reads past file boundaries,
+- non-recursive directory listing,
+- symlink round trips with safe extraction skipping symlinks by default,
+- opt-in symlink extraction through extraction policy,
+- permission metadata preservation and invalid permission rejection,
+- delete, rename, and replacement,
+- deleted record space reuse,
+- path/content privacy smoke tests,
+- tampered encrypted metadata path rejection,
+- corrupt header recovery,
+- missing manifest pointer recovery,
+- corrupt manifest recovery,
+- corrupt file record partial recovery,
+- corrupt frame-header accounting,
+- truncated-tail recovery,
+- deleted files staying deleted during manifest rebuild,
+- salvage to a clean lockbox,
+- salvage omitting corrupt file records,
+- wrong-key failure.
 
-  ⚠️  IMPORTANT: Backup ~/.dvault - it's critical for accessing your lockboxes!
-```
+Missing before production: property/fuzz tests, real AEAD test vectors, zstd
+compression tests, range-fetch tests, crash-consistency tests, and FFI/WASM
+binding tests.
 
-This creates an RSA public/private key pair in `~/.dvault`. The private key is encrypted with your passphrase.
+## Repository Notes
 
-### Lock a File
-```bash
-lockbox lock important.txt
-  Stored and locked in important.txt.lbox
-```
-
-The original file is (optionally) deleted and replaced with `important.txt.lbox`.
-
-### Unlock a File
-```bash
-lockbox unlock important.txt.lbox
-  Passphrase: ******
-  Unlocked to important.txt
-```
-
-## Advanced Features
-
-### Team Sharing
-Add team members as recipients to a lockbox so they can decrypt it with their own keys:
-
-```bash
-lockbox recipient add important.txt.lbox user@example.com
-  Fetching public key for user@example.com from OnePub...
-  Added user@example.com as recipient
-```
-
-Team members can then unlock the lockbox using their own `~/.dvault` key.
-
-### CI/CD Integration
-Generate a machine key for CI/CD environments:
-
-```bash
-lockbox ci generate
-  Machine key generated: ci-key-2024-01-15.pem
-  
-  Add this key to your lockbox:
-  lockbox recipient add secrets.lbox --key ci-key-2024-01-15.pem
-  
-  In your CI environment, set:
-  export DVAULT_KEY=$(cat ci-key-2024-01-15.pem)
-```
-
-Your CI pipeline can then decrypt lockboxes without a passphrase:
-
-```bash
-lockbox unlock secrets.lbox  # Uses DVAULT_KEY environment variable
-```
-
-### Passphrase-Based Sharing (Legacy)
-For one-time sharing with someone who doesn't have Lockbox set up:
-
-```bash
-lockbox share important.txt
-  ⚠️  DO NOT USE YOUR NORMAL LOCKBOX PASSPHRASE ⚠️
-  Enter one-time passphrase: *****
-  Confirm passphrase: *****
-  Stored and locked in important.txt.lbox
-  
-  Share the passphrase securely (phone call, Signal, etc.)
-  ⚠️  DO NOT EMAIL OR TWEET THE PASSPHRASE! ⚠️
-```
-
-Send `important.txt.lbox` to your recipient along with instructions to:
-1. Install Lockbox: `dart pub global activate dvault`
-2. Unlock with the shared passphrase: `lockbox unlock important.txt.lbox`
-
-## Technical Architecture
-
-### PKI-Based Encryption
-
-Lockbox uses a hybrid encryption approach:
-
-1. **User Keys**: Each user has an RSA-2048 public/private key pair stored in `~/.dvault`
-   - Private key is encrypted with the user's passphrase (Argon2id)
-   - Public key can be shared via OnePub for team collaboration
-
-2. **Session Keys**: Each lockbox has a unique AES-256 session key
-   - Generated randomly when the lockbox is created
-   - Encrypted separately for each recipient using their public key
-   - Stored in the lockbox header
-
-3. **File Encryption**: Files are encrypted using AES-256-GCM
-   - Each page (64KB block) uses a unique random nonce
-   - Allows partial file access without decrypting the entire lockbox
-
-### Lockbox File Format
-
-A `.lbox` file contains:
-
-```
-[Header]
-  - Magic bytes: "DVAULT"
-  - Version: 1
-  - Page size: 64KB (configurable)
-  - Recipients: List of authorized users/keys
-    - Type: PKI (RSA) or Password
-    - Key ID: Public key hash or password salt
-    - Encrypted Session Key
-
-[Environment Page]
-  - Encrypted key-value pairs
-  - Metadata about the lockbox
-
-[File Pages]
-  - Each page: [Nonce (12B)] + [Ciphertext] + [Auth Tag (16B)]
-  - Files can span multiple pages
-  - Random access without full decryption
-
-[Table of Contents]
-  - File paths, offsets, lengths
-  - Timestamps (created, modified)
-```
-
-### Security Features
-
-- **AES-256-GCM**: Authenticated encryption for all data
-- **RSA-2048**: Public key encryption for session keys
-- **Argon2id**: Memory-hard key derivation for passphrases
-- **Random Nonces**: Cryptographically secure random nonces for each page
-- **No Key Reuse**: Each lockbox has a unique session key
-
-### Multi-Recipient Support
-
-A single lockbox can have multiple recipients:
-- **Users**: Team members with their own `~/.dvault` keys
-- **Machine Keys**: CI/CD agents with standalone RSA keys
-- **Passwords**: Legacy/share mode for one-time access
-
-Each recipient has the session key encrypted with their specific key, allowing independent access without sharing private keys.
-
-## Browser Integration
-
-Lockbox files can be decrypted in a web browser:
-
-1. Upload your `~/.dvault` file (stays client-side)
-2. Enter your passphrase to decrypt your private key
-3. Browse and decrypt files on-demand
-
-All decryption happens in the browser - your private key never leaves your device.
-
-## Backup & Recovery
-
-**Critical**: Backup your `~/.dvault` file!
-
-- Without it, you cannot decrypt any lockboxes created with your key
-- Store it securely (password manager, encrypted backup, etc.)
-- Consider printing a paper backup of the private key for disaster recovery
-
-## Migration from DVault
-
-If you have existing DVault files, they will continue to work. The new PKI features are opt-in:
-
-- Old passphrase-based lockboxes: Still work with `lockbox unlock`
-- New PKI lockboxes: Use the enhanced features above
-
-## Contributing
-
-Lockbox is open source. Contributions welcome!
-
-Repository: https://github.com/onepub-dev/dvault
+The existing Dart implementation remains in place while the Rust core is
+developed. The intended end state is for Dart and web code to call the Rust core
+through FFI/WASM bindings rather than maintaining independent format logic.
 
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - see [LICENSE](LICENSE).
