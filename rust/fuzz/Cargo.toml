@@ -1,0 +1,38 @@
+[package]
+name = "lockbox-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lockbox_core = { path = "../lockbox_core" }
+
+[[bin]]
+name = "header"
+path = "fuzz_targets/header.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "key_directory"
+path = "fuzz_targets/key_directory.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "records_recovery"
+path = "fuzz_targets/records_recovery.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "paths"
+path = "fuzz_targets/paths.rs"
+test = false
+doc = false

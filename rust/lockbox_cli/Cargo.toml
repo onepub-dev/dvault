@@ -1,0 +1,29 @@
+[package]
+name = "lockbox_cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Prototype CLI for Lockbox vaults"
+
+[[bin]]
+name = "lockbox"
+path = "src/main.rs"
+
+[dependencies]
+lockbox_core = { path = "../lockbox_core" }
+rpassword = "7"
+zeroize = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }

@@ -8,9 +8,10 @@ Dart, JavaScript/WASM, and other languages through thin bindings.
 
 > Status: the Rust implementation under `rust/lockbox_core` is an early format
 > prototype. It exercises the public API, manifest/checkpoint model, path
-> privacy, free-space reuse, and recovery behavior. The current in-repo cipher is
-> deliberately dependency-free for testability in this environment and must be
-> replaced with production AEAD crypto before release.
+> privacy, free-space reuse, streaming file IO, and recovery behavior. Segment
+> bodies are compressed with zstd, encrypted with ChaCha20-Poly1305, and vault
+> keys can be derived with Argon2id or wrapped with ML-KEM-1024. Third-party
+> cryptographic review is still a release blocker.
 
 ## Goals
 
@@ -26,30 +27,33 @@ Dart, JavaScript/WASM, and other languages through thin bindings.
 
 ## Format Model
 
-Lockbox v2 uses a small cleartext frame plus encrypted private payloads.
+Lockbox v2 uses a small cleartext segment frame plus encrypted private segment
+bodies.
 
 ```text
 [ Header ]
-[ Record: file metadata + content, encrypted payload ]
-[ Record: delete/tombstone, encrypted payload ]
-[ Record: manifest checkpoint, encrypted payload ]
+[ Segment: file metadata + content, encrypted body ]
+[ Segment: delete/tombstone, encrypted body ]
+[ Segment: manifest checkpoint, encrypted body ]
 ...
 ```
 
-Cleartext record headers contain only scanner-safe framing:
+Cleartext segment headers contain only scanner-safe framing:
 
 ```text
 magic
-record type
+segment type
 sequence
-payload length
-record length
-payload checksum
+encrypted body length
+segment length
+encrypted body checksum
 header checksum
 ```
 
 Paths, file names, content, lengths-by-path, and manifest entries are inside the
-encrypted payload. This keeps the backing store and web service from seeing
+encrypted segment body. Each segment body is padded to at least 64 KiB before
+encryption so tiny files, env vars, symlinks, and manifests do not reveal their
+true size directly. This keeps the backing store and web service from seeing
 directory structure or file names.
 
 ## Manifest And Recovery
@@ -70,6 +74,45 @@ The high-level recovery API is intentionally simple:
 let report = Lockbox::recover(bytes, key);
 let clean = Lockbox::salvage(damaged_bytes, key)?;
 ```
+
+## Key Management
+
+Normal vaults use a random vault key. Users unlock that vault key through one or
+more key slots stored in a key directory block. The header points at the current
+key directory, and the directory is capped at 1 MiB to avoid unbounded metadata
+processing.
+
+Each vault also has a public random UUID in the header. The CLI uses that UUID
+to identify per-user unlock-cache entries without relying on file paths.
+
+Supported slots are password slots and ML-KEM-1024 recipient slots. Opening does
+not require labels: the library tries each matching slot type until one unwraps
+and authenticates the vault key.
+
+```rust
+let mut vault = Lockbox::create_with_password(b"shared password")?;
+vault.add_recipient_key(&recipient_public_key)?;
+
+let vault = Lockbox::open_with_password(bytes, b"shared password")?;
+let vault = Lockbox::open_with_recipient(bytes, &my_private_key)?;
+```
+
+The CLI direction is sudo-like:
+
+```bash
+lockbox open vault.lbox
+lockbox list vault.lbox
+lockbox lock vault.lbox
+```
+
+`open` unwraps the vault key and stores it in a per-user in-memory agent with a
+sliding TTL. Normal commands ask the agent for the unwrapped vault key by vault
+UUID. No password, private-key passphrase, bearer token, or vault key is written
+to a cache file.
+
+See [docs/key_management.md](docs/key_management.md) for design intent and CLI
+direction. See [docs/format.md](docs/format.md) for the current prototype
+header, key-directory, and record-frame layout.
 
 ## Rust API
 
@@ -103,6 +146,8 @@ Current tested APIs:
 - `to_bytes`
 - `put_file`
 - `put_file_with_permissions`
+- `open_path`
+- `write_to_path`
 - `put_symlink`
 - `get_file`
 - `get_symlink_target`
@@ -124,6 +169,7 @@ Current tested APIs:
 - `commit`
 - `extract_all`
 - `extract_all_nodes`
+- `extract_to_directory`
 - `recover`
 - `salvage`
 
@@ -170,17 +216,24 @@ Default rules:
   extraction is added.
 - Compression must be per-file or per-chunk, never whole-archive solid
   compression by default.
-- Decompression must be streaming and bounded by authenticated uncompressed
-  lengths, total output limits, and compression-ratio limits once compression is
-  implemented.
+- Decompression must be bounded by authenticated uncompressed lengths, total
+  output limits, and compression-ratio limits.
 - Nested archives are never expanded automatically.
 
 The Rust prototype currently enforces strict logical and Unicode path
 validation, symlink-path validation, private path/content storage, parser
-rejection of tampered paths in encrypted metadata, and bounded in-memory
-`extract_all`.
-Production work still needs real AEAD associated-data checks, zstd ratio-limit
-tests, filesystem extraction hardening, and fuzzing.
+rejection of tampered paths in encrypted metadata, 64 KiB minimum encrypted
+segment bodies, zstd segment compression, Argon2id password KDF, ML-KEM-1024 key
+wrapping, and bounded in-memory `extract_all`.
+Production work still needs published crypto test vectors, stronger zstd
+ratio-limit tests, filesystem extraction hardening, and fuzzing.
+
+Current review notes:
+
+- [Performance review](docs/performance_review.md)
+- [Security audit](docs/security_audit.md)
+- [Rust idioms review](docs/rust_idioms_review.md)
+- [Fuzzing](docs/fuzzing.md)
 
 ## Browser And Web Service Access
 
@@ -202,18 +255,52 @@ remote.get_file("/docs/a.txt").await?
 remote.list("/docs").await?
 ```
 
-## Compression And Crypto Roadmap
+## Compression And Crypto
 
-Production Lockbox should use:
+The Rust prototype now includes:
 
-- XChaCha20-Poly1305 or another modern AEAD for record/chunk encryption.
-- Argon2id or a caller-supplied raw key for key derivation.
-- Zstandard as the default compression engine.
+- ChaCha20-Poly1305 or XChaCha20-Poly1305 with 256-bit content keys for
+  segment-body encryption. The current code uses ChaCha20-Poly1305.
+- Argon2id password key derivation, or a caller-supplied raw vault key.
+- NIST ML-KEM-1024/FIPS 203 for post-quantum public-key wrapping when vault keys need
+  to be shared or stored for recipients.
+- Zstandard as the default segment compression engine.
 - Independent compressed chunks for large files so random access and corruption
   recovery remain practical.
 
 Avoid whole-archive solid compression as the default because it conflicts with
 range reads and partial recovery.
+
+Symmetric encryption is the only content-encryption layer currently implemented.
+For quantum resistance this requires high-entropy 256-bit vault keys; human
+passwords must go through a memory-hard KDF before they are used as vault keys.
+
+## Key Sharing Model
+
+The intended sharing model is deliberately narrow:
+
+- Each vault has one random 256-bit vault key used for content encryption.
+- The vault key can be unlocked from a password slot.
+- The same vault key can also be unlocked from a public-key recipient slot.
+- Public-key sharing uses the recipient's long-lived public key; the recipient
+  keeps the matching private key.
+- The normal user does not need a different public/private keypair per vault.
+
+In other words, a shared vault can support both:
+
+```text
+password -> Argon2id -> unwrap vault key
+recipient private key -> ML-KEM-1024 decapsulation -> unwrap vault key
+```
+
+This lets a vault be shared by password when that is the simplest operational
+choice, or by public key when the recipient should not know or reuse a password.
+The key-slot metadata should stay minimal: slot id, slot type, algorithm, and
+the data required to unwrap the vault key. Human-readable labels are not part of
+the default model because they can leak information.
+
+See [Key Management Design](docs/key_management.md) for the detailed design
+intent, use cases, and target CLI shape.
 
 ## Development
 
@@ -264,9 +351,9 @@ The Rust suite currently has 46 tests covering:
 - salvage omitting corrupt file records,
 - wrong-key failure.
 
-Missing before production: property/fuzz tests, real AEAD test vectors, zstd
-compression tests, range-fetch tests, crash-consistency tests, and FFI/WASM
-binding tests.
+Missing before production: property/fuzz tests, published AEAD/KDF/KEM test
+vectors, deeper zstd bomb/ratio tests, range-fetch tests, crash-consistency
+tests, and FFI/WASM binding tests.
 
 ## Repository Notes
 

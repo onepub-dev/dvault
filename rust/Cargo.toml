@@ -1,0 +1,3 @@
+[workspace]
+members = ["lockbox_core", "lockbox_cli"]
+resolver = "2"
