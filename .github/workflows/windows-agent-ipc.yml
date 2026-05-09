@@ -1,0 +1,47 @@
+name: Windows Agent IPC
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RUST_BACKTRACE: 1
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "rust/lockbox_cli/src/cache.rs"
+      - "rust/lockbox_cli/src/cache/windows.rs"
+      - "rust/lockbox_cli/src/main.rs"
+      - "rust/lockbox_cli/tests/agent_flow.rs"
+      - ".github/workflows/windows-agent-ipc.yml"
+  pull_request:
+    paths:
+      - "rust/lockbox_cli/src/cache.rs"
+      - "rust/lockbox_cli/src/cache/windows.rs"
+      - "rust/lockbox_cli/src/main.rs"
+      - "rust/lockbox_cli/tests/agent_flow.rs"
+      - ".github/workflows/windows-agent-ipc.yml"
+
+jobs:
+  agent-ipc:
+    name: Windows agent IPC smoke
+    runs-on: windows-latest
+    timeout-minutes: 8
+
+    defaults:
+      run:
+        working-directory: rust
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Run agent IPC smoke
+        run: cargo test -p lockbox_cli --test agent_flow -- --ignored --nocapture
