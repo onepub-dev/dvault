@@ -23,7 +23,42 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn available_memory_bytes() -> Option<u64> {
-    None
+    let mut stats = unsafe { std::mem::zeroed::<libc::vm_statistics64_data_t>() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    let result = unsafe {
+        libc::host_statistics64(
+            libc::mach_host_self(),
+            libc::HOST_VM_INFO64,
+            (&mut stats as *mut libc::vm_statistics64_data_t).cast(),
+            &mut count,
+        )
+    };
+    if result != libc::KERN_SUCCESS {
+        return None;
+    }
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        return None;
+    }
+    macos_reclaimable_bytes(
+        u64::from(stats.free_count),
+        u64::from(stats.inactive_count),
+        u64::from(stats.speculative_count),
+        page_size as u64,
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_reclaimable_bytes(
+    free_pages: u64,
+    inactive_pages: u64,
+    speculative_pages: u64,
+    page_size: u64,
+) -> Option<u64> {
+    free_pages
+        .saturating_add(inactive_pages)
+        .saturating_add(speculative_pages)
+        .checked_mul(page_size)
 }
 
 #[cfg(windows)]
@@ -52,4 +87,14 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn available_memory_bytes() -> Option<u64> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macos_reclaimable_bytes_counts_reclaimable_pages() {
+        assert_eq!(macos_reclaimable_bytes(10, 20, 30, 4096), Some(245_760));
+    }
 }
