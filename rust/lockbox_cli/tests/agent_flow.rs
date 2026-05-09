@@ -30,7 +30,14 @@ fn open_populates_cache_and_lock_clears_it() {
     );
 
     let output = run_output(bin, &agent_dir, &["list", vault.to_str().unwrap(), "/docs"]);
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "command failed: {bin} list {} /docs\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        vault.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(String::from_utf8_lossy(&output.stdout).contains("/docs/a.txt"));
 
     run(bin, &agent_dir, &["lock", vault.to_str().unwrap()]);
@@ -53,21 +60,22 @@ fn run(bin: &str, agent_dir: &PathBuf, args: &[&str]) {
 fn run_output(bin: &str, agent_dir: &PathBuf, args: &[&str]) -> Output {
     let mut command = command(bin, agent_dir, args);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let command_line = format!("{bin} {}", args.join(" "));
+    eprintln!("agent_flow: starting {command_line}");
     let mut child = command.spawn().unwrap();
     let deadline = Instant::now() + COMMAND_TIMEOUT;
     loop {
         if child.try_wait().unwrap().is_some() {
-            return child.wait_with_output().unwrap();
+            let output = child.wait_with_output().unwrap();
+            eprintln!("agent_flow: finished {command_line} with {}", output.status);
+            return output;
         }
         if Instant::now() >= deadline {
+            eprintln!("agent_flow: killing timed out command {command_line}");
             let _ = child.kill();
-            let output = child.wait_with_output().unwrap();
             panic!(
-                "command timed out after {:?}: {bin} {}\nstdout:\n{}\nstderr:\n{}",
+                "command timed out after {:?}: {command_line}",
                 COMMAND_TIMEOUT,
-                args.join(" "),
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
             );
         }
         thread::sleep(Duration::from_millis(25));
