@@ -205,22 +205,20 @@ impl Lockbox {
             file_offset,
             data: data.to_vec(),
         };
+        let segment_inner_offset = file_segment_inner_offsets(std::slice::from_ref(&pending))
+            .into_iter()
+            .next()
+            .ok_or(Error::CorruptRecord)?;
         let payload = encode_file_segment_payload(&[pending]);
         let record_offset =
             self.write_object_page(RecordKind::FileSegment, self.sequence, payload)?;
         let record_len = crate::segment_page::DEFAULT_SEGMENT_PAGE_BYTES as u64;
-        let decoded = self
-            .read_record(record_offset)
-            .and_then(|record| decode_file_segment_payload(&record.payload))?;
-        let Some(decoded_chunk) = decoded.into_iter().next() else {
-            return Err(Error::CorruptRecord);
-        };
         chunks.push(FileChunk {
             record_offset,
             record_len,
             file_offset,
             len: data.len() as u64,
-            segment_inner_offset: decoded_chunk.segment_inner_offset,
+            segment_inner_offset,
             segment_inner_len: data.len() as u64,
         });
         Ok(())
@@ -331,27 +329,25 @@ impl Lockbox {
     fn write_packed_file_segment(&mut self, chunks: &[PendingFileChunk]) -> Result<()> {
         self.sequence += 1;
         let payload = encode_file_segment_payload(chunks);
+        let inner_offsets = file_segment_inner_offsets(chunks);
         let record_offset =
             self.write_object_page(RecordKind::FileSegment, self.sequence, payload)?;
         let record_len = crate::segment_page::DEFAULT_SEGMENT_PAGE_BYTES as u64;
-        let decoded = self
-            .read_record(record_offset)
-            .and_then(|record| decode_file_segment_payload(&record.payload))?;
         let mut dirty_paths = Vec::new();
         let mut updated_entries = Vec::new();
-        for decoded_chunk in decoded {
-            if let Some(entry) = self.manifest.get_mut(decoded_chunk.path.as_str()) {
+        for (chunk, segment_inner_offset) in chunks.iter().zip(inner_offsets) {
+            if let Some(entry) = self.manifest.get_mut(chunk.path.as_str()) {
                 entry.record_offset = record_offset;
                 entry.record_len = record_len;
-                entry.len = decoded_chunk.total_len;
-                entry.permissions = decoded_chunk.permissions;
+                entry.len = chunk.total_len;
+                entry.permissions = chunk.permissions;
                 entry.chunks = vec![FileChunk {
                     record_offset,
                     record_len,
-                    file_offset: decoded_chunk.file_offset,
-                    len: decoded_chunk.data.len() as u64,
-                    segment_inner_offset: decoded_chunk.segment_inner_offset,
-                    segment_inner_len: decoded_chunk.data.len() as u64,
+                    file_offset: chunk.file_offset,
+                    len: chunk.data.len() as u64,
+                    segment_inner_offset,
+                    segment_inner_len: chunk.data.len() as u64,
                 }];
                 dirty_paths.push(entry.path.clone());
                 updated_entries.push(entry.clone());
@@ -363,4 +359,15 @@ impl Lockbox {
         self.mark_toc_dirty_paths(dirty_paths.iter().map(String::as_str));
         Ok(())
     }
+}
+
+fn file_segment_inner_offsets(chunks: &[PendingFileChunk]) -> Vec<u64> {
+    let mut offsets = Vec::with_capacity(chunks.len());
+    let mut offset = 4u64;
+    for chunk in chunks {
+        offset += 2 + chunk.path.len() as u64 + 4 + 8 + 8 + 8;
+        offsets.push(offset);
+        offset += chunk.data.len() as u64;
+    }
+    offsets
 }

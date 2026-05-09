@@ -17,7 +17,10 @@ use crate::manifest_entry::ManifestEntry;
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::secret_bytes::SecretBytes;
 use crate::segment_cache::SegmentManager;
-use crate::segment_page::{SegmentObjectKind, DEFAULT_SEGMENT_PAGE_BYTES, SEGMENT_PAGE_MAGIC};
+use crate::segment_page::{
+    DecodedSegmentPage, SegmentObject, SegmentObjectKind, DEFAULT_SEGMENT_PAGE_BYTES,
+    SEGMENT_PAGE_MAGIC,
+};
 use crate::storage::{Storage, StorageBackend};
 use crate::vault_id::VaultId;
 use crate::{CacheLimit, CacheStats, Error, LockboxOptions, Result};
@@ -234,19 +237,21 @@ impl Lockbox {
         payload: Vec<u8>,
     ) -> Result<u64> {
         let page_offset = self.allocate_segment_page_offset()?;
+        let object = SegmentObject {
+            kind: object_kind_from_record_kind(kind)?,
+            id: sequence,
+            payload,
+        };
         let page = crate::segment_page::encode_segment_page(
             DEFAULT_SEGMENT_PAGE_BYTES,
             self.vault_id,
             page_offset,
             sequence,
             self.key.expose(),
-            &[crate::segment_page::SegmentObject {
-                kind: object_kind_from_record_kind(kind)?,
-                id: sequence,
-                payload,
-            }],
+            std::slice::from_ref(&object),
         )?;
         self.write_segment_page_at(page_offset, &page)?;
+        self.cache_decoded_segment_page(page_offset, sequence, vec![object]);
         Ok(page_offset)
     }
 
@@ -291,6 +296,23 @@ impl Lockbox {
             )?;
         }
         Ok(())
+    }
+
+    pub(crate) fn cache_decoded_segment_page(
+        &mut self,
+        offset: u64,
+        sequence: u64,
+        objects: Vec<SegmentObject>,
+    ) {
+        self.segment_manager.borrow_mut().insert_page(
+            offset,
+            DecodedSegmentPage {
+                page_id: offset,
+                sequence,
+                objects,
+            },
+            DEFAULT_SEGMENT_PAGE_BYTES as u64,
+        );
     }
 
     pub fn set_cache_limit(&self, limit: CacheLimit) {

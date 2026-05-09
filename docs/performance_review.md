@@ -121,6 +121,10 @@ kept in memory for comparison.
 
 ## Current Baseline Observations
 
+Detailed benchmark run history is kept in
+[Benchmark History](benchmark_history.md). Append a dated entry there whenever
+benchmarks are run for a meaningful implementation or format change.
+
 Small-file overhead was the dominant problem in the first benchmark pass. The
 current write path stages small files and writes them into packed file-segment
 pages during commit, instead of writing one padded page per file and

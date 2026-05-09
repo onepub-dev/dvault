@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use crate::compression::{decode_segment_body, encode_segment_body};
-use crate::constants::DEFAULT_MAX_SEGMENT_BODY_BYTES;
 use crate::crypto::{checksum, open_with_nonce, seal_with_random_nonce};
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::scan::Scan;
@@ -10,8 +9,7 @@ use crate::{Error, Result};
 
 pub(crate) const SEGMENT_PAGE_MAGIC: &[u8; 8] = b"LBX2SEG\0";
 pub(crate) const SEGMENT_PAGE_HEADER_LEN: usize = 64;
-#[allow(dead_code)]
-pub(crate) const DEFAULT_SEGMENT_PAGE_BYTES: usize = DEFAULT_MAX_SEGMENT_BODY_BYTES;
+pub(crate) use crate::constants::DEFAULT_SEGMENT_PAGE_BYTES;
 
 const SEGMENT_PAGE_VERSION: u16 = 1;
 const SEGMENT_BODY_VERSION: u8 = 1;

@@ -351,19 +351,21 @@ impl Lockbox {
 
     fn append_toc_page(&mut self, kind: SegmentObjectKind, payload: Vec<u8>) -> Result<u64> {
         let page_offset = self.allocate_segment_page_offset()?;
+        let object = SegmentObject {
+            kind,
+            id: self.sequence,
+            payload,
+        };
         let page = encode_segment_page(
             DEFAULT_SEGMENT_PAGE_BYTES,
             self.vault_id,
             page_offset,
             self.sequence,
             self.key.expose(),
-            &[SegmentObject {
-                kind,
-                id: self.sequence,
-                payload,
-            }],
+            std::slice::from_ref(&object),
         )?;
         self.write_segment_page_at(page_offset, &page)?;
+        self.cache_decoded_segment_page(page_offset, self.sequence, vec![object]);
         Ok(page_offset)
     }
 
@@ -403,17 +405,18 @@ impl Lockbox {
 
     fn write_free_index_page(&mut self, kind: SegmentObjectKind, payload: Vec<u8>) -> Result<u64> {
         let page_offset = self.storage.len()?;
+        let object = SegmentObject {
+            kind,
+            id: self.sequence,
+            payload,
+        };
         let page = encode_segment_page(
             DEFAULT_SEGMENT_PAGE_BYTES,
             self.vault_id,
             page_offset,
             self.sequence,
             self.key.expose(),
-            &[SegmentObject {
-                kind,
-                id: self.sequence,
-                payload,
-            }],
+            std::slice::from_ref(&object),
         )?;
         let appended = self
             .segment_manager
@@ -422,22 +425,24 @@ impl Lockbox {
         if appended != page_offset {
             return Err(Error::CorruptRecord);
         }
+        self.cache_decoded_segment_page(page_offset, self.sequence, vec![object]);
         Ok(page_offset)
     }
 
     fn append_commit_root_page(&mut self, payload: Vec<u8>) -> Result<u64> {
         let page_offset = self.storage.len()?;
+        let object = SegmentObject {
+            kind: SegmentObjectKind::CommitRoot,
+            id: self.sequence,
+            payload,
+        };
         let page = encode_segment_page(
             DEFAULT_SEGMENT_PAGE_BYTES,
             self.vault_id,
             page_offset,
             self.sequence,
             self.key.expose(),
-            &[SegmentObject {
-                kind: SegmentObjectKind::CommitRoot,
-                id: self.sequence,
-                payload,
-            }],
+            std::slice::from_ref(&object),
         )?;
         let appended = self
             .segment_manager
@@ -446,6 +451,7 @@ impl Lockbox {
         if appended != page_offset {
             return Err(Error::CorruptRecord);
         }
+        self.cache_decoded_segment_page(page_offset, self.sequence, vec![object]);
         Ok(page_offset)
     }
 }
