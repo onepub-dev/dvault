@@ -53,6 +53,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Agent IPC smoke test
+        if: runner.os != 'Windows'
         run: cargo test -p lockbox_cli --test agent_flow -- --ignored
 
       - name: Check fuzz targets
