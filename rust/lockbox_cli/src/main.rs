@@ -109,6 +109,20 @@ fn run() -> CliResult<()> {
             lb.commit()?;
             fs::write(vault, lb.to_bytes())?;
         }
+        "list-keys" => {
+            let vault = require_arg(&args, 0, "vault")?;
+            let lb = open_existing(vault, &access)?;
+            for slot in lb.list_key_slots() {
+                println!("{}\t{:?}\t{}", slot.id, slot.kind, slot.algorithm);
+            }
+        }
+        "remove-key" => {
+            let vault = require_arg(&args, 0, "vault")?;
+            let slot_id = require_arg(&args, 1, "slot id")?.parse::<u64>()?;
+            let mut lb = open_existing(vault, &access)?;
+            lb.remove_key_slot_and_compact(slot_id)?;
+            fs::write(vault, lb.to_bytes())?;
+        }
         "add" => {
             let vault = require_arg(&args, 0, "vault")?;
             let source = require_arg(&args, 1, "source")?;
@@ -438,7 +452,9 @@ fn usage(verbose: bool) {
   lockbox lock --all
   lockbox keygen <private-key> <public-key>
   lockbox open-key <vault> <private-key>
-  lockbox add-recipient <vault> <public-key>"
+  lockbox add-recipient <vault> <public-key>
+  lockbox list-keys <vault>
+  lockbox remove-key <vault> <slot-id>"
     );
 
     if verbose {

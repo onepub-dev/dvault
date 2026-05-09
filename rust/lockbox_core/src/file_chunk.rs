@@ -26,3 +26,12 @@ pub(crate) struct DecodedFileChunk {
     pub(crate) segment_inner_offset: u64,
     pub(crate) data: Vec<u8>,
 }
+
+pub(crate) struct BorrowedFileChunk<'a> {
+    pub(crate) path: &'a str,
+    pub(crate) permissions: u32,
+    pub(crate) total_len: u64,
+    pub(crate) file_offset: u64,
+    pub(crate) segment_inner_offset: u64,
+    pub(crate) data: &'a [u8],
+}

@@ -1,15 +1,26 @@
-use std::collections::BTreeMap;
-
 use crate::file_chunk::FileChunk;
+use crate::logical_path::{
+    validate_stored_path as validate_path, validate_symlink_paths as validate_symlink,
+};
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
-use crate::security::{validate_path, validate_permissions, validate_symlink};
+use crate::security::validate_permissions;
 use crate::{Error, Result};
 
-pub(crate) fn encode_manifest(manifest: &BTreeMap<String, ManifestEntry>) -> Vec<u8> {
+#[cfg(test)]
+pub(crate) fn encode_manifest(
+    manifest: &std::collections::BTreeMap<String, ManifestEntry>,
+) -> Vec<u8> {
+    encode_manifest_entries(manifest.values())
+}
+
+pub(crate) fn encode_manifest_entries<'a>(
+    entries: impl IntoIterator<Item = &'a ManifestEntry>,
+) -> Vec<u8> {
+    let entries = entries.into_iter().collect::<Vec<_>>();
     let mut out = Vec::new();
-    out.extend_from_slice(&(manifest.len() as u32).to_le_bytes());
-    for entry in manifest.values() {
+    out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for entry in entries {
         out.extend_from_slice(&(entry.path.len() as u16).to_le_bytes());
         out.extend_from_slice(entry.path.as_bytes());
         out.extend_from_slice(&entry.len.to_le_bytes());
@@ -37,13 +48,23 @@ pub(crate) fn encode_manifest(manifest: &BTreeMap<String, ManifestEntry>) -> Vec
     out
 }
 
-pub(crate) fn decode_manifest(payload: &[u8]) -> Result<BTreeMap<String, ManifestEntry>> {
+#[cfg(test)]
+pub(crate) fn decode_manifest(
+    payload: &[u8],
+) -> Result<std::collections::BTreeMap<String, ManifestEntry>> {
+    Ok(decode_manifest_entries(payload)?
+        .into_iter()
+        .map(|entry| (entry.path.clone(), entry))
+        .collect())
+}
+
+pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntry>> {
     if payload.len() < 4 {
         return Err(Error::CorruptRecord);
     }
     let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let mut offset = 4;
-    let mut manifest = BTreeMap::new();
+    let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
         if offset + 2 > payload.len() {
             return Err(Error::CorruptRecord);
@@ -124,28 +145,29 @@ pub(crate) fn decode_manifest(payload: &[u8]) -> Result<BTreeMap<String, Manifes
             NodeKind::Symlink if symlink_target.is_none() => return Err(Error::CorruptRecord),
             _ => {}
         }
-        manifest.insert(
-            path.clone(),
-            ManifestEntry {
-                path,
-                len,
-                record_offset,
-                record_len,
-                deleted,
-                node_kind,
-                permissions,
-                symlink_target,
-                chunks,
-            },
-        );
+        entries.push(ManifestEntry {
+            path,
+            len,
+            record_offset,
+            record_len,
+            deleted,
+            node_kind,
+            permissions,
+            symlink_target,
+            chunks,
+        });
     }
-    Ok(manifest)
+    if offset != payload.len() {
+        return Err(Error::CorruptRecord);
+    }
+    Ok(entries)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::constants::DEFAULT_FILE_PERMISSIONS;
+    use std::collections::BTreeMap;
 
     #[test]
     fn decoded_manifest_rejects_tampered_host_paths() {

@@ -1,12 +1,12 @@
 # Fuzzing
 
-The prototype includes `cargo-fuzz` scaffolding under `rust/fuzz`.
+The Rust implementation includes `cargo-fuzz` scaffolding under `rust/fuzz`.
 
 Targets:
 
 - `header`: fixed-header and vault-id parsing.
 - `key_directory`: password-slot/key-directory open path.
-- `records_recovery`: record scanning, recovery, and salvage.
+- `pages_recovery`: segment-page scanning, recovery, and salvage.
 - `paths`: logical path, symlink, and listing API inputs.
 
 Run locally with:
@@ -15,7 +15,7 @@ Run locally with:
 cd rust/fuzz
 cargo fuzz run header
 cargo fuzz run key_directory
-cargo fuzz run records_recovery
+cargo fuzz run pages_recovery
 cargo fuzz run paths
 ```
 

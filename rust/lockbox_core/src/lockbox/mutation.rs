@@ -1,38 +1,61 @@
 use super::Lockbox;
-use crate::format::{encode_delete_payload, encode_record};
+use crate::constants::DEFAULT_MAX_SEGMENT_BODY_BYTES;
+use crate::format::encode_delete_payloads;
+use crate::logical_path::canonicalize_api_path as canonicalize_path;
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::record::RecordKind;
-use crate::security::canonicalize_path;
 use crate::{Error, Result};
 
 impl Lockbox {
     pub fn delete(&mut self, path: &str) -> Result<()> {
         let path = canonicalize_path(path, false)?;
+        self.pending_small_files.remove(&path);
         let old = self
             .manifest
-            .get(&path)
+            .get(path.as_str())
             .filter(|entry| !entry.deleted)
             .cloned()
             .ok_or_else(|| Error::NotFound(path.clone()))?;
-        self.sequence += 1;
-        let payload = encode_delete_payload(&path);
-        let record = encode_record(
-            RecordKind::Delete,
-            self.sequence,
-            &payload,
-            self.key.expose(),
-        );
-        self.write_record(record);
+        if old.record_len != 0 || !old.chunks.is_empty() {
+            self.pending_deletes.push(path.clone());
+        }
         self.free_entry_slots(old.clone());
-        self.manifest.insert(
-            path,
-            ManifestEntry {
-                deleted: true,
-                chunks: Vec::new(),
-                ..old
-            },
-        );
+        let dirty_path = old.path.clone();
+        self.manifest.remove(path.as_str());
+        self.mark_toc_dirty(&dirty_path);
+        Ok(())
+    }
+
+    pub(crate) fn flush_pending_deletes(&mut self) -> Result<()> {
+        if self.pending_deletes.is_empty() {
+            return Ok(());
+        }
+
+        let pending = std::mem::take(&mut self.pending_deletes);
+        let mut batch = Vec::new();
+        let mut batch_size = 0usize;
+        for path in pending {
+            let entry_size = 2 + path.len();
+            if !batch.is_empty() && batch_size + entry_size > DEFAULT_MAX_SEGMENT_BODY_BYTES {
+                self.write_delete_batch(&batch)?;
+                batch.clear();
+                batch_size = 0;
+            }
+            batch_size += entry_size;
+            batch.push(path);
+        }
+        if !batch.is_empty() {
+            self.write_delete_batch(&batch)?;
+        }
+        Ok(())
+    }
+
+    fn write_delete_batch(&mut self, paths: &[String]) -> Result<()> {
+        self.sequence += 1;
+        let refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
+        let payload = encode_delete_payloads(&refs);
+        self.write_object_page(RecordKind::Delete, self.sequence, payload)?;
         Ok(())
     }
 
@@ -40,7 +63,7 @@ impl Lockbox {
         if let Ok(from_path) = canonicalize_path(from, false) {
             if let Some(entry) = self
                 .manifest
-                .get(&from_path)
+                .get(from_path.as_str())
                 .filter(|entry| !entry.deleted)
                 .cloned()
             {

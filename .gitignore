@@ -14,4 +14,7 @@ logs/
 .mcp_logs/mcp_command_server.log
 rust/lockbox_core/target
 rust/target
+rust/perf.data*
 rust/fuzz/target
+.bench-baseline
+.bench-target

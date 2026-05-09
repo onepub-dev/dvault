@@ -6,12 +6,13 @@ single `.lbox` container while still supporting fast access to individual files.
 The current direction is a Rust core implementation that can be used from CLI,
 Dart, JavaScript/WASM, and other languages through thin bindings.
 
-> Status: the Rust implementation under `rust/lockbox_core` is an early format
-> prototype. It exercises the public API, manifest/checkpoint model, path
-> privacy, free-space reuse, streaming file IO, and recovery behavior. Segment
-> bodies are compressed with zstd, encrypted with ChaCha20-Poly1305, and vault
-> keys can be derived with Argon2id or wrapped with ML-KEM-1024. Third-party
-> cryptographic review is still a release blocker.
+> Status: the Rust implementation under `rust/lockbox_core` is the production
+> direction for the first Lockbox format release. The format is still pre-1.0,
+> so breaking changes are allowed while the design is finalized, but code added
+> here should be treated as the intended implementation. Segment bodies are
+> compressed with zstd, encrypted with
+> ChaCha20-Poly1305, and vault keys can be derived with Argon2id or wrapped with
+> ML-KEM-1024. Third-party cryptographic review is still a release blocker.
 
 ## Goals
 
@@ -50,11 +51,11 @@ encrypted body checksum
 header checksum
 ```
 
-Paths, file names, content, lengths-by-path, and manifest entries are inside the
-encrypted segment body. Each segment body is padded to at least 64 KiB before
-encryption so tiny files, env vars, symlinks, and manifests do not reveal their
-true size directly. This keeps the backing store and web service from seeing
-directory structure or file names.
+Paths, file names, content, lengths-by-path, and manifest entries are inside
+fixed-size encrypted segment pages. Pages are currently 8 MiB, and normal
+storage reads and writes operate on whole pages. This hides the true size of
+tiny files, env vars, symlinks, and metadata from the backing store and from a
+range-request based web service.
 
 ## Manifest And Recovery
 
@@ -62,9 +63,10 @@ Normal open uses the header's latest manifest checkpoint. The manifest is the
 current filesystem view: path lookup, file metadata, and physical record
 locations.
 
-Recovery does not trust the header or manifest. It scans record frames, verifies
-payloads, decrypts metadata, and rebuilds the best available manifest. If the
-latest manifest is corrupt but file records are intact, files are still
+Recovery does not trust the header or manifest. It scans fixed-size segment
+pages, verifies payloads, decrypts metadata, and rebuilds the best available
+manifest. If the latest manifest is corrupt but file pages are intact, files are
+still
 recoverable. If a file record is corrupt but the manifest survives, recovery
 reports that file as partial.
 
@@ -91,11 +93,16 @@ and authenticates the vault key.
 
 ```rust
 let mut vault = Lockbox::create_with_password(b"shared password")?;
-vault.add_recipient_key(&recipient_public_key)?;
+let slot_id = vault.add_recipient_key(&recipient_public_key)?;
+vault.remove_key_slot_and_compact(slot_id)?;
 
 let vault = Lockbox::open_with_password(bytes, b"shared password")?;
 let vault = Lockbox::open_with_recipient(bytes, &my_private_key)?;
 ```
+
+Removing a key slot is intentionally conservative: the library rewrites and
+compacts the live vault state so old key-directory history is not left as an
+easy recovery path for the removed credential.
 
 The CLI direction is sudo-like:
 
@@ -111,8 +118,8 @@ UUID. No password, private-key passphrase, bearer token, or vault key is written
 to a cache file.
 
 See [docs/key_management.md](docs/key_management.md) for design intent and CLI
-direction. See [docs/format.md](docs/format.md) for the current prototype
-header, key-directory, and record-frame layout.
+direction. See [docs/format.md](docs/format.md) for the current header,
+key-directory, and fixed segment-page layout.
 
 ## Rust API
 
@@ -173,10 +180,42 @@ Current tested APIs:
 - `recover`
 - `salvage`
 
+### Segment Cache
+
+The core library uses a unified decoded-segment cache for pages read from the
+vault. TOC nodes, file segments, symlinks, env objects, and free-index objects
+share one weighted LRU budget keyed by page offset. The cache is a performance
+layer only: correctness does not require the full TOC or full vault to fit in
+memory.
+
+The default cache limit is `Auto`. On native platforms this uses a
+segment-aware minimum and a best-effort memory-pressure target:
+
+- minimum useful cache: the larger of eight maximum-size segments or 64 MiB
+- target: about 3% of currently available memory
+- native cap: 512 MiB unless the caller overrides it
+- WASM default: 64 MiB, because reliable free-memory information is not
+  generally available in browser runtimes
+
+Embedders can choose a fixed budget or disable caching:
+
+```rust
+use lockbox_core::{CacheLimit, Lockbox, LockboxOptions};
+
+let options = LockboxOptions {
+    cache_limit: CacheLimit::Bytes(256 * 1024 * 1024),
+};
+let vault = Lockbox::open_with_options(bytes, key, options)?;
+
+vault.set_cache_limit(CacheLimit::Auto);
+vault.trim_cache_to(64 * 1024 * 1024);
+let stats = vault.cache_stats();
+```
+
 ## Segment Reuse
 
 Lockbox should not rely on compaction as the normal way to manage archive
-growth. Deleted or replaced records become reusable slots. New records reuse
+growth. Deleted or replaced pages become reusable slots. New pages reuse
 available slots when they fit, while metadata updates remain checkpointed and
 crash-safe.
 
@@ -220,13 +259,15 @@ Default rules:
   output limits, and compression-ratio limits.
 - Nested archives are never expanded automatically.
 
-The Rust prototype currently enforces strict logical and Unicode path
+The Rust implementation currently enforces strict logical and Unicode path
 validation, symlink-path validation, private path/content storage, parser
-rejection of tampered paths in encrypted metadata, 64 KiB minimum encrypted
-segment bodies, zstd segment compression, Argon2id password KDF, ML-KEM-1024 key
-wrapping, and bounded in-memory `extract_all`.
+rejection of tampered paths in encrypted metadata, fixed-size encrypted segment
+pages, random AEAD nonces for encrypted pages, zstd segment compression,
+Argon2id password KDF, ML-KEM-1024 key wrapping, and bounded in-memory
+`extract_all`.
 Production work still needs published crypto test vectors, stronger zstd
-ratio-limit tests, filesystem extraction hardening, and fuzzing.
+ratio-limit tests,
+filesystem extraction hardening, and fuzzing.
 
 Current review notes:
 
@@ -243,7 +284,7 @@ The target web flow is:
 1. Browser fetches the fixed header range.
 2. Browser fetches the latest checkpoint/manifest ranges.
 3. User lists a directory.
-4. Browser fetches only the manifest pages and file records needed.
+4. Browser fetches only the manifest pages and file pages needed.
 5. WASM decrypts/decompresses selected files locally.
 ```
 
@@ -257,7 +298,7 @@ remote.list("/docs").await?
 
 ## Compression And Crypto
 
-The Rust prototype now includes:
+The Rust implementation now includes:
 
 - ChaCha20-Poly1305 or XChaCha20-Poly1305 with 256-bit content keys for
   segment-body encryption. The current code uses ChaCha20-Poly1305.
@@ -311,14 +352,14 @@ cd rust/lockbox_core
 cargo test
 ```
 
-The Rust suite currently has 46 tests covering:
+The Rust core suite currently has 97 tests covering:
 
 - create/open/commit round trips,
 - put/get/range/list/stat behavior,
 - iterator-first listing with Rust-side filtering,
 - declarative glob filtering for binding-friendly callers,
 - list options for node type filtering and limits,
-- encrypted environment variable records with lazy loading,
+- encrypted environment variable pages with lazy loading,
 - env set/get/remove/list/get-all behavior,
 - env name/value validation and privacy smoke tests,
 - invalid path rejection,
@@ -337,23 +378,22 @@ The Rust suite currently has 46 tests covering:
 - opt-in symlink extraction through extraction policy,
 - permission metadata preservation and invalid permission rejection,
 - delete, rename, and replacement,
-- deleted record space reuse,
+- deleted page space reuse,
 - path/content privacy smoke tests,
 - tampered encrypted metadata path rejection,
 - corrupt header recovery,
 - missing manifest pointer recovery,
 - corrupt manifest recovery,
-- corrupt file record partial recovery,
-- corrupt frame-header accounting,
+- corrupt file page partial recovery,
+- corrupt page accounting,
 - truncated-tail recovery,
 - deleted files staying deleted during manifest rebuild,
 - salvage to a clean lockbox,
 - salvage omitting corrupt file records,
 - wrong-key failure.
 
-Missing before production: property/fuzz tests, published AEAD/KDF/KEM test
-vectors, deeper zstd bomb/ratio tests, range-fetch tests, crash-consistency
-tests, and FFI/WASM binding tests.
+Missing before production: published AEAD/KDF/KEM test vectors, range-fetch
+tests, broader fuzz corpora, and FFI/WASM binding tests.
 
 ## Repository Notes
 

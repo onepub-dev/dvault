@@ -5,7 +5,7 @@ use crate::key_slot::{next_key_slot_id, random_salt, random_vault_key, KeySlot, 
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey};
 use crate::secret_bytes::SecretBytes;
 use crate::vault_id::VaultId;
-use crate::{Error, Result};
+use crate::{EntryKind, Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlockedVaultKey {
@@ -108,6 +108,19 @@ impl Lockbox {
         Ok(())
     }
 
+    pub fn remove_key_slot_and_compact(&mut self, id: u64) -> Result<()> {
+        let mut compacted_source = self.clone();
+        compacted_source.remove_key_slot(id)?;
+        if compacted_source.key_slots.is_empty() {
+            return Err(Error::SecurityLimitExceeded(
+                "refusing to remove the last key slot".to_string(),
+            ));
+        }
+        compacted_source.compact()?;
+        *self = compacted_source;
+        Ok(())
+    }
+
     pub fn list_key_slots(&self) -> Vec<KeySlotInfo> {
         self.key_slots.iter().map(KeySlot::info).collect()
     }
@@ -125,7 +138,45 @@ impl Lockbox {
         };
         let new_id = self.add_password_slot(new_password)?;
         self.remove_key_slot(old_id)?;
+        self.compact()?;
         Ok(new_id)
+    }
+
+    pub fn compact(&mut self) -> Result<()> {
+        let entries = self
+            .manifest
+            .values()
+            .filter(|entry| !entry.deleted)
+            .cloned()
+            .collect::<Vec<_>>();
+        let env = self.get_all_env();
+        let key_slots = self.key_slots.clone();
+        let mut compacted = Lockbox::create_with_vault_id(self.key.expose(), self.vault_id);
+        compacted.key_slots = key_slots;
+
+        for (name, value) in env {
+            compacted.set_env(&name, &value)?;
+        }
+
+        for entry in entries {
+            match entry.entry_kind() {
+                EntryKind::File => {
+                    let mut data = Vec::new();
+                    self.write_file_to(&entry.path, &mut data)?;
+                    compacted.put_file_with_permissions(&entry.path, &data, entry.permissions)?;
+                }
+                EntryKind::Symlink => {
+                    let Some(target) = entry.symlink_target.as_deref() else {
+                        return Err(Error::CorruptRecord);
+                    };
+                    compacted.put_symlink(&entry.path, target)?;
+                }
+            }
+        }
+
+        compacted.commit()?;
+        *self = compacted;
+        Ok(())
     }
 }
 

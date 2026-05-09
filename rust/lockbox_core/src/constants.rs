@@ -1,14 +1,11 @@
 pub(crate) const HEADER_MAGIC: &[u8; 8] = b"LBX2HDR\0";
-pub(crate) const RECORD_MAGIC: &[u8; 8] = b"LBX2REC\0";
 pub(crate) const HEADER_LEN: usize = 64;
-pub(crate) const RECORD_HEADER_LEN: usize = 48;
 pub(crate) const MAX_PATH_BYTES: usize = 4096;
 pub(crate) const MAX_COMPONENT_BYTES: usize = 255;
 pub(crate) const MAX_PATH_DEPTH: usize = 64;
 pub(crate) const DEFAULT_MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 pub(crate) const DEFAULT_MAX_TOTAL_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 pub(crate) const DEFAULT_MAX_FILES: usize = 100_000;
-pub(crate) const DEFAULT_MIN_SEGMENT_BODY_BYTES: usize = 64 * 1024;
 pub(crate) const DEFAULT_MAX_SEGMENT_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const DEFAULT_FILE_PERMISSIONS: u32 = 0o600;
 pub(crate) const DEFAULT_SYMLINK_PERMISSIONS: u32 = 0o777;

@@ -53,3 +53,49 @@ pub(crate) fn decode_segment_body(body: &[u8]) -> Result<Vec<u8>> {
     }
     Ok(decoded)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_declared_decompression_bomb_before_allocating() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&(MAX_DECOMPRESSED_SEGMENT_BODY_BYTES + 1).to_le_bytes());
+        body.push(COMPRESSION_NONE);
+        body.extend_from_slice(&0u64.to_le_bytes());
+
+        assert!(matches!(
+            decode_segment_body(&body),
+            Err(Error::SecurityLimitExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_stored_len_past_buffer() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u64.to_le_bytes());
+        body.push(COMPRESSION_NONE);
+        body.extend_from_slice(&2u64.to_le_bytes());
+        body.push(b'x');
+
+        assert!(matches!(
+            decode_segment_body(&body),
+            Err(Error::CorruptRecord)
+        ));
+    }
+
+    #[test]
+    fn rejects_uncompressed_len_mismatch() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&2u64.to_le_bytes());
+        body.push(COMPRESSION_NONE);
+        body.extend_from_slice(&1u64.to_le_bytes());
+        body.push(b'x');
+
+        assert!(matches!(
+            decode_segment_body(&body),
+            Err(Error::CorruptRecord)
+        ));
+    }
+}

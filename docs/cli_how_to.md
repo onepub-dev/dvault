@@ -1,8 +1,8 @@
 # Lockbox CLI How-To
 
-This guide describes the intended Lockbox CLI user experience. The Rust core is
-still a prototype, so some commands may not exist yet. The examples define the
-target behavior.
+This guide describes the intended Lockbox CLI user experience for the first
+format release. Some commands are still being hardened, but the examples define
+the target behavior.
 
 ## Path Model
 
@@ -100,7 +100,7 @@ Stored path:
 
 ## Environment Variables
 
-Lockbox can store environment variables in encrypted env records. They are not
+Lockbox can store environment variables in encrypted env pages. They are not
 file entries, do not appear in `ls`, and should only be loaded when env commands
 or APIs request them.
 
@@ -314,7 +314,7 @@ Summary:
   Intact files: 128442
   Partial files: 3
   Metadata-only files: 1
-  Corrupt records: 7
+  Corrupt pages: 7
   Latest manifest: damaged
 
 Partial:
@@ -326,7 +326,7 @@ Metadata only:
     file name and size found, payload missing
 
 Corrupt:
-  record at offset 184320
+  page at offset 184320
   latest manifest
 ```
 
@@ -361,8 +361,8 @@ lockbox salvage damaged.lbox clean.lbox
 `salvage` runs recovery and writes intact files into a new valid lockbox. It
 should skip partial or corrupt files by default and include them in the report.
 
-Recovery scans record frames and encrypted metadata. It should identify intact
-files even if the latest manifest is damaged.
+Recovery scans fixed-size encrypted segment pages and encrypted metadata. It
+should identify intact files even if the latest manifest is damaged.
 
 ## Recipient Keys
 
@@ -378,13 +378,29 @@ Add a recipient public key to an unlocked vault:
 lockbox add-recipient secrets.lbox alice.pub
 ```
 
+List key slots:
+
+```bash
+lockbox list-keys secrets.lbox
+```
+
+Remove a key slot:
+
+```bash
+lockbox remove-key secrets.lbox 2
+```
+
+Removing a key is a compaction operation. The CLI rewrites the live vault state
+so stale key-directory history is not left behind as an easy way for the removed
+credential to keep opening the vault.
+
 Unlock with a private key:
 
 ```bash
 lockbox open-key secrets.lbox alice.key
 ```
 
-The current prototype stores key files as hex-encoded ML-KEM seed/public-key
+The current Rust CLI stores key files as hex-encoded ML-KEM seed/public-key
 material. Private-key file encryption is still planned.
 
 ## Safety Summary

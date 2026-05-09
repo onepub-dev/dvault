@@ -164,7 +164,7 @@ accidental disclosure and simple memory reuse; it is not a complete defense
 against malicious code running as the same OS user.
 
 The TTL is sliding. Each successful cache lookup extends the expiry. The
-prototype default is 15 minutes.
+current default is 15 minutes.
 
 Transport requirements:
 
@@ -191,10 +191,9 @@ lockbox open vault.lbox
 lockbox list vault.lbox
 lockbox lock vault.lbox
 
-lockbox keys list vault.lbox
-lockbox keys add-password vault.lbox
-lockbox keys add-recipient vault.lbox recipient.pub
-lockbox keys remove vault.lbox <slot-id>
+lockbox list-keys vault.lbox
+lockbox add-recipient vault.lbox recipient.pub
+lockbox remove-key vault.lbox <slot-id>
 ```
 
 The current Rust CLI prompts for passwords on `create` and `open`. It also
@@ -210,8 +209,8 @@ options. Normal users should not type or manage raw vault keys.
 - Passwords must never be used directly as content keys.
 - Password slots must use Argon2id with stored parameters and salt.
 - Public-key slots should use ML-KEM-1024 for post-quantum key wrapping.
-- Removing a key slot revokes that unlock method for future users who only have
-  that slot.
+- Removing a key slot must compact the vault so stale key-directory history is
+  not left behind for the removed credential.
 - Rotating the vault key should rewrite/wrap a new vault key and eventually
   re-encrypt content.
 

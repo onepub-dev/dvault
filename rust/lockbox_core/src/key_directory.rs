@@ -1,14 +1,14 @@
 use crate::key_slot::{slot_fingerprint, KeySlot};
 use crate::key_wrap::MlKemWrappedKey;
+use crate::storage::Storage;
 use crate::{Error, Result};
 
 const KEY_DIR_MAGIC: &[u8; 8] = b"LBX2KEY\0";
 const KEY_DIR_HEADER_LEN: usize = 24;
 const MAX_KEY_DIRECTORY_BYTES: usize = 1024 * 1024;
 
-pub(crate) fn write_key_directory(bytes: &mut Vec<u8>, slots: &[KeySlot]) -> Result<u64> {
+pub(crate) fn encode_key_directory(slots: &[KeySlot]) -> Result<Vec<u8>> {
     let payload = encode_key_slots(slots);
-    let offset = bytes.len() as u64;
     let total_len = KEY_DIR_HEADER_LEN + payload.len();
     if total_len > MAX_KEY_DIRECTORY_BYTES {
         return Err(Error::SecurityLimitExceeded(
@@ -22,8 +22,7 @@ pub(crate) fn write_key_directory(bytes: &mut Vec<u8>, slots: &[KeySlot]) -> Res
     let header_crc = crate::crypto::checksum(&out[0..20]);
     out[20..24].copy_from_slice(&header_crc.to_le_bytes());
     out.extend_from_slice(&payload);
-    bytes.extend_from_slice(&out);
-    Ok(offset)
+    Ok(out)
 }
 
 pub(crate) fn read_key_directory(bytes: &[u8], offset: u64) -> Result<Vec<KeySlot>> {
@@ -56,6 +55,39 @@ pub(crate) fn read_key_directory(bytes: &[u8], offset: u64) -> Result<Vec<KeySlo
         return Err(Error::CorruptHeader);
     }
     decode_key_slots(payload)
+}
+
+pub(crate) fn read_key_directory_from_storage(
+    storage: &impl Storage,
+    offset: u64,
+) -> Result<Vec<KeySlot>> {
+    if offset == 0 {
+        return Ok(Vec::new());
+    }
+    let header = storage.read_at(offset, KEY_DIR_HEADER_LEN)?;
+    if &header[0..8] != KEY_DIR_MAGIC {
+        return Err(Error::CorruptHeader);
+    }
+    let total_len = u64::from_le_bytes(header[8..16].try_into().unwrap()) as usize;
+    if total_len > MAX_KEY_DIRECTORY_BYTES {
+        return Err(Error::SecurityLimitExceeded(
+            "key directory exceeds 1 MiB".to_string(),
+        ));
+    }
+    let payload_crc = u32::from_le_bytes(header[16..20].try_into().unwrap());
+    let header_crc = u32::from_le_bytes(header[20..24].try_into().unwrap());
+    if crate::crypto::checksum(&header[0..20]) != header_crc {
+        return Err(Error::CorruptHeader);
+    }
+    if total_len < KEY_DIR_HEADER_LEN {
+        return Err(Error::Truncated);
+    }
+    let payload_len = total_len - KEY_DIR_HEADER_LEN;
+    let payload = storage.read_at(offset + KEY_DIR_HEADER_LEN as u64, payload_len)?;
+    if crate::crypto::checksum(&payload) != payload_crc {
+        return Err(Error::CorruptHeader);
+    }
+    decode_key_slots(&payload)
 }
 
 fn encode_key_slots(slots: &[KeySlot]) -> Vec<u8> {

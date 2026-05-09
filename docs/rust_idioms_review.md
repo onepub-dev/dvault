@@ -1,6 +1,6 @@
 # Rust Idioms Review
 
-This review covers the current Rust prototype shape.
+This review covers the current Rust implementation shape.
 
 ## Good Direction
 

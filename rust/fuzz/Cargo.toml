@@ -26,8 +26,8 @@ test = false
 doc = false
 
 [[bin]]
-name = "records_recovery"
-path = "fuzz_targets/records_recovery.rs"
+name = "pages_recovery"
+path = "fuzz_targets/pages_recovery.rs"
 test = false
 doc = false
 

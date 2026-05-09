@@ -1,7 +1,9 @@
 use super::Lockbox;
+use crate::logical_path::{
+    canonicalize_api_path as canonicalize_path, glob_matches, validate_glob,
+};
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
-use crate::security::{canonicalize_path, glob_matches, validate_glob};
 use crate::{Entry, ListIter, ListOptions, Result};
 
 impl Lockbox {
@@ -64,7 +66,7 @@ impl Lockbox {
     pub fn stat(&self, path: &str) -> Option<Entry> {
         let path = canonicalize_path(path, false).ok()?;
         self.manifest
-            .get(&path)
+            .get(path.as_str())
             .filter(|e| !e.deleted)
             .map(ManifestEntry::to_public_entry)
     }

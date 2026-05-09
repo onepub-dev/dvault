@@ -3,15 +3,15 @@ use std::io::{Cursor, Read, Write};
 use super::Lockbox;
 use crate::constants::{DEFAULT_FILE_PERMISSIONS, DEFAULT_MAX_SEGMENT_BODY_BYTES};
 use crate::file_chunk::{FileChunk, PendingFileChunk};
-use crate::format::{
-    decode_file_payload, decode_file_segment_payload, encode_file_segment_payload, encode_record,
-    read_record,
-};
+use crate::format::{decode_file_segment_payload, encode_file_segment_payload};
+use crate::logical_path::{canonicalize_api_path as canonicalize_path, LogicalPath};
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::record::RecordKind;
-use crate::security::{canonicalize_path, validate_permissions};
+use crate::security::validate_permissions;
 use crate::{Error, Result};
+
+const SMALL_FILE_PACKING_LIMIT: usize = 1024 * 1024;
 
 impl Lockbox {
     pub fn put_file(&mut self, path: &str, data: &[u8]) -> Result<()> {
@@ -24,6 +24,9 @@ impl Lockbox {
         data: &[u8],
         permissions: u32,
     ) -> Result<()> {
+        if data.len() <= SMALL_FILE_PACKING_LIMIT {
+            return self.stage_small_file(path, data, permissions);
+        }
         self.put_file_from_reader_with_permissions(path, Cursor::new(data), permissions)
     }
 
@@ -39,7 +42,8 @@ impl Lockbox {
     ) -> Result<()> {
         let path = canonicalize_path(path, false)?;
         let permissions = validate_permissions(permissions)?;
-        if let Some(old) = self.manifest.get(&path).cloned() {
+        self.pending_small_files.remove(&path);
+        if let Some(old) = self.manifest.get(path.as_str()).cloned() {
             self.free_entry_slots(old);
         }
 
@@ -66,20 +70,22 @@ impl Lockbox {
             file_offset += read as u64;
         }
 
-        self.manifest.insert(
-            path.clone(),
-            ManifestEntry {
-                path,
-                len: file_offset,
-                record_offset: chunks.first().map(|chunk| chunk.record_offset).unwrap_or(0),
-                record_len: chunks.first().map(|chunk| chunk.record_len).unwrap_or(0),
-                deleted: false,
-                node_kind: NodeKind::File,
-                permissions,
-                symlink_target: None,
-                chunks,
-            },
-        );
+        let dirty_path = path.clone();
+        let entry = ManifestEntry {
+            path,
+            len: file_offset,
+            record_offset: chunks.first().map(|chunk| chunk.record_offset).unwrap_or(0),
+            record_len: chunks.first().map(|chunk| chunk.record_len).unwrap_or(0),
+            deleted: false,
+            node_kind: NodeKind::File,
+            permissions,
+            symlink_target: None,
+            chunks,
+        };
+        self.add_entry_record_refs(&entry);
+        self.manifest
+            .insert(LogicalPath::from_canonical(entry.path.clone()), entry);
+        self.mark_toc_dirty(&dirty_path);
         self.needs_packing = true;
         Ok(())
     }
@@ -94,23 +100,25 @@ impl Lockbox {
         let path = canonicalize_path(path, false)?;
         let entry = self
             .manifest
-            .get(&path)
+            .get(path.as_str())
             .filter(|entry| !entry.deleted && entry.node_kind == NodeKind::File)
             .ok_or_else(|| Error::NotFound(path.clone()))?;
 
-        if entry.chunks.is_empty() {
-            let record = read_record(&self.bytes, entry.record_offset, self.key.expose())?;
-            let (_, _, data) = decode_file_payload(&record.payload)?;
+        if let Some(pending) = self.pending_small_files.get(path.as_str()) {
             writer
-                .write_all(&data)
+                .write_all(&pending.data)
                 .map_err(|err| Error::Io(err.to_string()))?;
             return Ok(());
+        }
+
+        if entry.chunks.is_empty() {
+            return Err(Error::CorruptRecord);
         }
 
         let mut chunks = entry.chunks.clone();
         chunks.sort_by_key(|chunk| chunk.file_offset);
         for chunk in chunks {
-            let record = read_record(&self.bytes, chunk.record_offset, self.key.expose())?;
+            let record = self.read_record(chunk.record_offset)?;
             let decoded = decode_file_segment_payload(&record.payload)?;
             let Some(decoded_chunk) = decoded
                 .into_iter()
@@ -128,7 +136,7 @@ impl Lockbox {
     pub fn permissions(&self, path: &str) -> Option<u32> {
         let path = canonicalize_path(path, false).ok()?;
         self.manifest
-            .get(&path)
+            .get(path.as_str())
             .filter(|entry| !entry.deleted)
             .map(|entry| entry.permissions)
     }
@@ -137,7 +145,7 @@ impl Lockbox {
         let path = canonicalize_path(path, false)?;
         let entry = self
             .manifest
-            .get(&path)
+            .get(path.as_str())
             .filter(|entry| !entry.deleted && entry.node_kind == NodeKind::File)
             .ok_or_else(|| Error::NotFound(path.clone()))?;
         if len == 0 || offset >= entry.len {
@@ -145,12 +153,14 @@ impl Lockbox {
         }
         let wanted_end = offset.saturating_add(len).min(entry.len);
 
+        if let Some(pending) = self.pending_small_files.get(path.as_str()) {
+            let start = offset.min(pending.data.len() as u64) as usize;
+            let end = wanted_end.min(pending.data.len() as u64) as usize;
+            return Ok(pending.data[start..end].to_vec());
+        }
+
         if entry.chunks.is_empty() {
-            let record = read_record(&self.bytes, entry.record_offset, self.key.expose())?;
-            let (_, _, data) = decode_file_payload(&record.payload)?;
-            let start = offset.min(data.len() as u64) as usize;
-            let end = wanted_end.min(data.len() as u64) as usize;
-            return Ok(data[start..end].to_vec());
+            return Err(Error::CorruptRecord);
         }
 
         let mut out = Vec::with_capacity((wanted_end - offset) as usize);
@@ -163,7 +173,7 @@ impl Lockbox {
                 continue;
             }
 
-            let record = read_record(&self.bytes, chunk.record_offset, self.key.expose())?;
+            let record = self.read_record(chunk.record_offset)?;
             let decoded = decode_file_segment_payload(&record.payload)?;
             let Some(decoded_chunk) = decoded
                 .into_iter()
@@ -196,15 +206,11 @@ impl Lockbox {
             data: data.to_vec(),
         };
         let payload = encode_file_segment_payload(&[pending]);
-        let record = encode_record(
-            RecordKind::FileSegment,
-            self.sequence,
-            &payload,
-            self.key.expose(),
-        );
-        let record_len = record.len() as u64;
-        let record_offset = self.write_record(record);
-        let decoded = read_record(&self.bytes, record_offset, self.key.expose())
+        let record_offset =
+            self.write_object_page(RecordKind::FileSegment, self.sequence, payload)?;
+        let record_len = crate::segment_page::DEFAULT_SEGMENT_PAGE_BYTES as u64;
+        let decoded = self
+            .read_record(record_offset)
             .and_then(|record| decode_file_segment_payload(&record.payload))?;
         let Some(decoded_chunk) = decoded.into_iter().next() else {
             return Err(Error::CorruptRecord);
@@ -217,6 +223,66 @@ impl Lockbox {
             segment_inner_offset: decoded_chunk.segment_inner_offset,
             segment_inner_len: data.len() as u64,
         });
+        Ok(())
+    }
+
+    fn stage_small_file(&mut self, path: &str, data: &[u8], permissions: u32) -> Result<()> {
+        let path = canonicalize_path(path, false)?;
+        let permissions = validate_permissions(permissions)?;
+        if let Some(old) = self.manifest.get(path.as_str()).cloned() {
+            self.free_entry_slots(old);
+        }
+
+        self.pending_small_files.insert(
+            path.clone(),
+            PendingFileChunk {
+                path: path.clone(),
+                permissions,
+                total_len: data.len() as u64,
+                file_offset: 0,
+                data: data.to_vec(),
+            },
+        );
+        let dirty_path = path.clone();
+        self.manifest.insert(
+            LogicalPath::from_canonical(path.clone()),
+            ManifestEntry {
+                path,
+                len: data.len() as u64,
+                record_offset: 0,
+                record_len: 0,
+                deleted: false,
+                node_kind: NodeKind::File,
+                permissions,
+                symlink_target: None,
+                chunks: Vec::new(),
+            },
+        );
+        self.mark_toc_dirty(&dirty_path);
+        Ok(())
+    }
+
+    pub(crate) fn flush_pending_small_files(&mut self) -> Result<()> {
+        if self.pending_small_files.is_empty() {
+            return Ok(());
+        }
+
+        let pending = std::mem::take(&mut self.pending_small_files);
+        let mut batch = Vec::new();
+        let mut batch_size = 0usize;
+        for chunk in pending.into_values() {
+            let entry_size = 2 + chunk.path.len() + 28 + chunk.data.len();
+            if !batch.is_empty() && batch_size + entry_size > DEFAULT_MAX_SEGMENT_BODY_BYTES {
+                self.write_packed_file_segment(&batch)?;
+                batch.clear();
+                batch_size = 0;
+            }
+            batch_size += entry_size;
+            batch.push(chunk);
+        }
+        if !batch.is_empty() {
+            self.write_packed_file_segment(&batch)?;
+        }
         Ok(())
     }
 
@@ -265,18 +331,16 @@ impl Lockbox {
     fn write_packed_file_segment(&mut self, chunks: &[PendingFileChunk]) -> Result<()> {
         self.sequence += 1;
         let payload = encode_file_segment_payload(chunks);
-        let record = encode_record(
-            RecordKind::FileSegment,
-            self.sequence,
-            &payload,
-            self.key.expose(),
-        );
-        let record_len = record.len() as u64;
-        let record_offset = self.write_record(record);
-        let decoded = read_record(&self.bytes, record_offset, self.key.expose())
+        let record_offset =
+            self.write_object_page(RecordKind::FileSegment, self.sequence, payload)?;
+        let record_len = crate::segment_page::DEFAULT_SEGMENT_PAGE_BYTES as u64;
+        let decoded = self
+            .read_record(record_offset)
             .and_then(|record| decode_file_segment_payload(&record.payload))?;
+        let mut dirty_paths = Vec::new();
+        let mut updated_entries = Vec::new();
         for decoded_chunk in decoded {
-            if let Some(entry) = self.manifest.get_mut(&decoded_chunk.path) {
+            if let Some(entry) = self.manifest.get_mut(decoded_chunk.path.as_str()) {
                 entry.record_offset = record_offset;
                 entry.record_len = record_len;
                 entry.len = decoded_chunk.total_len;
@@ -289,8 +353,14 @@ impl Lockbox {
                     segment_inner_offset: decoded_chunk.segment_inner_offset,
                     segment_inner_len: decoded_chunk.data.len() as u64,
                 }];
+                dirty_paths.push(entry.path.clone());
+                updated_entries.push(entry.clone());
             }
         }
+        for entry in &updated_entries {
+            self.add_entry_record_refs(entry);
+        }
+        self.mark_toc_dirty_paths(dirty_paths.iter().map(String::as_str));
         Ok(())
     }
 }

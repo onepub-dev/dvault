@@ -54,3 +54,32 @@ jobs:
 
       - name: Check fuzz targets
         run: cargo check --manifest-path fuzz/Cargo.toml
+
+  fuzz-smoke:
+    name: fuzz smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust/fuzz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run fuzz smoke targets
+        run: |
+          cargo fuzz run header -- -runs=1
+          cargo fuzz run key_directory -- -runs=1
+          cargo fuzz run pages_recovery -- -runs=1
+          cargo fuzz run paths -- -runs=1

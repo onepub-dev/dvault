@@ -1,39 +1,41 @@
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use getrandom::getrandom;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use crate::{Error, Result};
 
-pub(crate) fn seal(payload: &[u8], key: &[u8], sequence: u64, kind: u8) -> Vec<u8> {
+pub(crate) fn seal_with_random_nonce(
+    payload: &[u8],
+    key: &[u8],
+    aad: &[u8],
+) -> ([u8; 12], Vec<u8>) {
     let mut content_key = derive_content_key(key);
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&content_key));
     content_key.zeroize();
-    let nonce = segment_nonce(sequence, kind);
-    cipher
-        .encrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: payload,
-                aad: &segment_aad(sequence, kind),
-            },
-        )
-        .expect("ChaCha20-Poly1305 encryption should not fail")
+    let mut nonce = [0u8; 12];
+    getrandom(&mut nonce).expect("system random source failed");
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: payload, aad })
+        .expect("ChaCha20-Poly1305 encryption should not fail");
+    (nonce, ciphertext)
 }
 
-pub(crate) fn open(payload: &[u8], key: &[u8], sequence: u64, kind: u8) -> Result<Vec<u8>> {
+pub(crate) fn open_with_nonce(
+    payload: &[u8],
+    key: &[u8],
+    nonce: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>> {
+    if nonce.len() != 12 {
+        return Err(Error::CorruptRecord);
+    }
     let mut content_key = derive_content_key(key);
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&content_key));
     content_key.zeroize();
-    let nonce = segment_nonce(sequence, kind);
     cipher
-        .decrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: payload,
-                aad: &segment_aad(sequence, kind),
-            },
-        )
+        .decrypt(Nonce::from_slice(nonce), Payload { msg: payload, aad })
         .map_err(|_| Error::InvalidKey)
 }
 
@@ -54,16 +56,26 @@ fn derive_content_key(key: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn segment_nonce(sequence: u64, kind: u8) -> [u8; 12] {
-    let mut nonce = [0u8; 12];
-    nonce[0..8].copy_from_slice(&sequence.to_le_bytes());
-    nonce[8] = kind;
-    nonce
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn segment_aad(sequence: u64, kind: u8) -> [u8; 9] {
-    let mut aad = [0u8; 9];
-    aad[0..8].copy_from_slice(&sequence.to_le_bytes());
-    aad[8] = kind;
-    aad
+    #[test]
+    fn seal_with_random_nonce_uses_unique_nonce() {
+        let key = b"secret";
+        let aad = b"test-aad";
+        let (first_nonce, first) = seal_with_random_nonce(b"payload", key, aad);
+        let (second_nonce, second) = seal_with_random_nonce(b"payload", key, aad);
+
+        assert_ne!(first, second);
+        assert_ne!(first_nonce, second_nonce);
+        assert_eq!(
+            open_with_nonce(&first, key, &first_nonce, aad).unwrap(),
+            b"payload"
+        );
+        assert_eq!(
+            open_with_nonce(&second, key, &second_nonce, aad).unwrap(),
+            b"payload"
+        );
+    }
 }
