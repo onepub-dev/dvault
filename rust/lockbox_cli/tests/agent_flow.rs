@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,7 +15,10 @@ fn open_populates_cache_and_lock_clears_it() {
     let vault = dir.join("test.lbox");
     let source = dir.join("source.txt");
     let agent_dir = dir.join("agent");
+    fs::create_dir_all(&agent_dir).unwrap();
     fs::write(&source, "alpha").unwrap();
+    eprintln!("agent_flow: work dir {}", dir.display());
+    eprintln!("agent_flow: agent log {}", agent_log(&agent_dir).display());
 
     run(bin, &agent_dir, &["create", vault.to_str().unwrap()]);
     run(
@@ -63,6 +66,7 @@ fn run_output(bin: &str, agent_dir: &PathBuf, args: &[&str]) -> Output {
     let command_line = format!("{bin} {}", args.join(" "));
     eprintln!("agent_flow: starting {command_line}");
     let mut child = command.spawn().unwrap();
+    eprintln!("agent_flow: spawned {command_line} pid={}", child.id());
     let deadline = Instant::now() + COMMAND_TIMEOUT;
     loop {
         if child.try_wait().unwrap().is_some() {
@@ -74,8 +78,9 @@ fn run_output(bin: &str, agent_dir: &PathBuf, args: &[&str]) -> Output {
             eprintln!("agent_flow: killing timed out command {command_line}");
             let _ = child.kill();
             panic!(
-                "command timed out after {:?}: {command_line}",
+                "command timed out after {:?}: {command_line}\nagent log:\n{}",
                 COMMAND_TIMEOUT,
+                read_agent_log(agent_dir),
             );
         }
         thread::sleep(Duration::from_millis(25));
@@ -87,8 +92,18 @@ fn command(bin: &str, agent_dir: &PathBuf, args: &[&str]) -> Command {
     command
         .args(args)
         .env("LOCKBOX_PASSWORD", "test-password")
-        .env("LOCKBOX_AGENT_DIR", agent_dir);
+        .env("LOCKBOX_AGENT_DIR", agent_dir)
+        .env("LOCKBOX_AGENT_TRACE", agent_log(agent_dir));
     command
+}
+
+fn agent_log(agent_dir: &Path) -> PathBuf {
+    agent_dir.join("agent.log")
+}
+
+fn read_agent_log(agent_dir: &Path) -> String {
+    fs::read_to_string(agent_log(agent_dir))
+        .unwrap_or_else(|err| format!("<unable to read {}: {err}>", agent_log(agent_dir).display()))
 }
 
 fn unique_dir() -> PathBuf {

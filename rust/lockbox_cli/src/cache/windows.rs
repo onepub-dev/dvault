@@ -6,7 +6,8 @@ use lockbox_core::VaultId;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::c_void;
-use std::io;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use std::ptr::{null, null_mut};
 use std::thread;
@@ -40,30 +41,40 @@ struct CacheEntry {
 
 pub(crate) fn serve_agent() -> io::Result<()> {
     let current_user_sid = current_process_user_sid()?;
+    trace("agent serve start");
     let mut cache = BTreeMap::<String, CacheEntry>::new();
     let mut last_activity = Instant::now();
 
     loop {
         prune_expired(&mut cache);
         if cache.is_empty() && last_activity.elapsed() > Duration::from_secs(IDLE_EXIT_SECONDS) {
+            trace("agent idle exit");
             return Ok(());
         }
 
+        trace("agent creating pipe");
         let pipe = create_pipe()?;
+        trace("agent connecting pipe");
         let connected = connect_pipe(pipe);
         if let Err(err) = connected {
+            trace(format!("agent connect failed: {err}"));
             unsafe {
                 CloseHandle(pipe);
             }
             return Err(err);
         }
 
+        trace("agent client connected");
         last_activity = Instant::now();
-        let _ = handle_client(pipe, &current_user_sid, &mut cache);
+        match handle_client(pipe, &current_user_sid, &mut cache) {
+            Ok(()) => trace("agent handled client"),
+            Err(err) => trace(format!("agent handle client failed: {err}")),
+        }
         unsafe {
             DisconnectNamedPipe(pipe);
             CloseHandle(pipe);
         }
+        trace("agent disconnected client");
     }
 }
 
@@ -97,30 +108,45 @@ pub(crate) fn forget_all() -> io::Result<()> {
 }
 
 fn request(message: &str) -> io::Result<String> {
+    trace(format!("client request start op={}", request_op(message)));
     let pipe_name = wide_pipe_name();
     let handle = match open_pipe(&pipe_name) {
-        Ok(handle) => handle,
-        Err(_) => {
+        Ok(handle) => {
+            trace("client opened existing pipe");
+            handle
+        }
+        Err(err) => {
+            trace(format!("client open pipe failed before start: {err}"));
             start_agent()?;
+            trace("client started agent");
             open_pipe(&pipe_name)?
         }
     };
+    trace("client writing request");
     write_all(handle, message.as_bytes())?;
+    trace("client reading response");
     let response = read_to_string(handle)?;
     unsafe {
         CloseHandle(handle);
     }
+    trace(format!(
+        "client request done op={} response={}",
+        request_op(message),
+        response_op(&response)
+    ));
     Ok(response.trim_end_matches(['\r', '\n']).to_string())
 }
 
 fn start_agent() -> io::Result<()> {
     let exe = env::current_exe()?;
-    Command::new(exe)
+    trace(format!("client spawning agent {}", exe.display()));
+    let child = Command::new(exe)
         .arg("__agent")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
+    trace(format!("client spawned agent pid={}", child.id()));
 
     Ok(())
 }
@@ -140,8 +166,11 @@ fn create_pipe() -> io::Result<HANDLE> {
         )
     };
     if handle == INVALID_HANDLE_VALUE {
-        Err(io::Error::last_os_error())
+        let err = io::Error::last_os_error();
+        trace(format!("agent create pipe failed: {err}"));
+        Err(err)
     } else {
+        trace("agent created pipe");
         Ok(handle)
     }
 }
@@ -149,17 +178,21 @@ fn create_pipe() -> io::Result<HANDLE> {
 fn connect_pipe(pipe: HANDLE) -> io::Result<()> {
     let ok = unsafe { ConnectNamedPipe(pipe, null_mut()) };
     if ok != 0 {
+        trace("agent connect pipe ok");
         return Ok(());
     }
     let err = unsafe { GetLastError() };
     if err == ERROR_PIPE_CONNECTED {
+        trace("agent pipe already connected");
         Ok(())
     } else {
+        trace(format!("agent connect pipe error={err}"));
         Err(io::Error::from_raw_os_error(err as i32))
     }
 }
 
 fn open_pipe(pipe_name: &[u16]) -> io::Result<HANDLE> {
+    trace("client opening pipe");
     let deadline = Instant::now() + PIPE_OPEN_TIMEOUT;
     loop {
         let handle = unsafe {
@@ -174,22 +207,29 @@ fn open_pipe(pipe_name: &[u16]) -> io::Result<HANDLE> {
             )
         };
         if handle != INVALID_HANDLE_VALUE {
+            trace("client open pipe ok");
             return Ok(handle);
         }
         let err = unsafe { GetLastError() };
         if err == ERROR_FILE_NOT_FOUND {
             if Instant::now() >= deadline {
+                trace("client open pipe timed out waiting for pipe");
                 return Err(io::Error::from_raw_os_error(err as i32));
             }
+            trace("client open pipe not found; retrying");
             thread::sleep(Duration::from_millis(25));
             continue;
         }
         if err != ERROR_PIPE_BUSY {
+            trace(format!("client open pipe error={err}"));
             return Err(io::Error::from_raw_os_error(err as i32));
         }
+        trace("client open pipe busy; waiting");
         let waited = unsafe { WaitNamedPipeW(pipe_name.as_ptr(), 3000) };
         if waited == 0 {
-            return Err(io::Error::last_os_error());
+            let err = io::Error::last_os_error();
+            trace(format!("client wait pipe failed: {err}"));
+            return Err(err);
         }
     }
 }
@@ -199,10 +239,18 @@ fn handle_client(
     current_user_sid: &[u8],
     cache: &mut BTreeMap<String, CacheEntry>,
 ) -> io::Result<()> {
+    trace("agent reading request");
     let request = read_to_string(pipe)?;
-    if request.trim().is_empty() || !client_matches_current_user(pipe, current_user_sid)? {
+    trace(format!("agent read request op={}", request_op(&request)));
+    if request.trim().is_empty() {
+        trace("agent empty request");
         return Ok(());
     }
+    if !client_matches_current_user(pipe, current_user_sid)? {
+        trace("agent rejected client sid");
+        return Ok(());
+    }
+    trace("agent accepted client sid");
     let response = match parse_request(&request) {
         Ok(AgentRequest::Get(vault_id)) => {
             let now = Instant::now();
@@ -235,13 +283,17 @@ fn handle_client(
         }
         Err(_) => "ERR invalid request".to_string(),
     };
+    trace(format!("agent writing response {}", response_op(&response)));
     write_all(pipe, format!("{response}\n").as_bytes())
 }
 
 fn client_matches_current_user(pipe: HANDLE, current_user_sid: &[u8]) -> io::Result<bool> {
+    trace("agent impersonating client");
     let impersonated = unsafe { ImpersonateNamedPipeClient(pipe) };
     if impersonated == 0 {
-        return Err(io::Error::last_os_error());
+        let err = io::Error::last_os_error();
+        trace(format!("agent impersonation failed: {err}"));
+        return Err(err);
     }
 
     let result = (|| {
@@ -250,8 +302,10 @@ fn client_matches_current_user(pipe: HANDLE, current_user_sid: &[u8]) -> io::Res
         if opened == 0 {
             let err = unsafe { GetLastError() };
             if err == ERROR_NO_TOKEN {
+                trace("agent open thread token found no token");
                 return Ok(false);
             }
+            trace(format!("agent open thread token error={err}"));
             return Err(io::Error::from_raw_os_error(err as i32));
         }
         let client_sid = token_user_sid(token);
@@ -259,7 +313,9 @@ fn client_matches_current_user(pipe: HANDLE, current_user_sid: &[u8]) -> io::Res
             CloseHandle(token);
         }
         let client_sid = client_sid?;
-        Ok(equal_sid(&client_sid, current_user_sid))
+        let matches = equal_sid(&client_sid, current_user_sid);
+        trace(format!("agent sid match={matches}"));
+        Ok(matches)
     })();
 
     unsafe {
@@ -326,19 +382,25 @@ fn equal_sid(left: &[u8], right: &[u8]) -> bool {
 }
 
 fn write_all(handle: HANDLE, mut bytes: &[u8]) -> io::Result<()> {
+    trace(format!("write_all start bytes={}", bytes.len()));
     while !bytes.is_empty() {
         let mut written = 0u32;
         let chunk_len = bytes.len().min(PIPE_BUFFER_BYTES as usize) as u32;
         let ok = unsafe { WriteFile(handle, bytes.as_ptr(), chunk_len, &mut written, null_mut()) };
         if ok == 0 {
-            return Err(io::Error::last_os_error());
+            let err = io::Error::last_os_error();
+            trace(format!("write_all failed: {err}"));
+            return Err(err);
         }
+        trace(format!("write_all wrote {written} bytes"));
         bytes = &bytes[written as usize..];
     }
+    trace("write_all done");
     Ok(())
 }
 
 fn read_to_string(handle: HANDLE) -> io::Result<String> {
+    trace("read_to_string start");
     let mut out = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
@@ -355,19 +417,29 @@ fn read_to_string(handle: HANDLE) -> io::Result<String> {
         if ok == 0 {
             let err = io::Error::last_os_error();
             if !out.is_empty() {
+                trace(format!("read_to_string ended after partial read: {err}"));
                 break;
             }
+            trace(format!("read_to_string failed: {err}"));
             return Err(err);
         }
         if read == 0 {
+            trace("read_to_string read zero bytes");
             break;
         }
+        trace(format!("read_to_string read {read} bytes"));
         out.extend_from_slice(&buffer[..read as usize]);
         if out.ends_with(b"\n") {
+            trace("read_to_string saw newline");
             break;
         }
     }
-    String::from_utf8(out).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "utf8"))
+    let result =
+        String::from_utf8(out).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "utf8"));
+    if let Ok(text) = &result {
+        trace(format!("read_to_string done bytes={}", text.len()));
+    }
+    result
 }
 
 fn prune_expired(cache: &mut BTreeMap<String, CacheEntry>) {
@@ -413,4 +485,22 @@ fn sanitize_name(name: &str) -> String {
 
 fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn request_op(message: &str) -> &str {
+    message.split_whitespace().nth(1).unwrap_or("<unknown>")
+}
+
+fn response_op(response: &str) -> &str {
+    response.split_whitespace().next().unwrap_or("<empty>")
+}
+
+fn trace(message: impl AsRef<str>) {
+    let Ok(path) = env::var("LOCKBOX_AGENT_TRACE") else {
+        return;
+    };
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(file, "pid={} {}", std::process::id(), message.as_ref());
 }
