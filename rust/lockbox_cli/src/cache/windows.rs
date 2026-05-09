@@ -59,12 +59,7 @@ pub(crate) fn serve_agent() -> io::Result<()> {
         }
 
         last_activity = Instant::now();
-        if matches!(
-            client_matches_current_user(pipe, &current_user_sid),
-            Ok(true)
-        ) {
-            let _ = handle_client(pipe, &mut cache);
-        }
+        let _ = handle_client(pipe, &current_user_sid, &mut cache);
         unsafe {
             DisconnectNamedPipe(pipe);
             CloseHandle(pipe);
@@ -215,8 +210,15 @@ fn open_pipe(pipe_name: &[u16]) -> io::Result<HANDLE> {
     }
 }
 
-fn handle_client(pipe: HANDLE, cache: &mut BTreeMap<String, CacheEntry>) -> io::Result<()> {
+fn handle_client(
+    pipe: HANDLE,
+    current_user_sid: &[u8],
+    cache: &mut BTreeMap<String, CacheEntry>,
+) -> io::Result<()> {
     let request = read_to_string(pipe)?;
+    if request.trim().is_empty() || !client_matches_current_user(pipe, current_user_sid)? {
+        return Ok(());
+    }
     let response = match parse_request(&request) {
         Ok(AgentRequest::Get(vault_id)) => {
             let now = Instant::now();
