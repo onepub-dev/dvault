@@ -105,6 +105,48 @@ The public API should not expose many compression modes. Normal callers get the
 default policy. Maintenance commands such as compaction may choose the archival
 profile internally.
 
+## Compressed File Extents
+
+The intended production file-data layout is page-packed compressed extents, not
+one compressed object per physical page. A fixed 8 MiB physical page is a
+container. Its encrypted body may contain:
+
+- many complete compressed small files
+- many compressed chunks from one or more files
+- one fragment of a large compressed chunk
+- a mix of complete chunks and fragments, as long as the page body fits
+
+Large files should be compressed as independent bounded frames rather than one
+whole-file solid stream. A frame may span multiple physical pages, but it must
+remain independently decompressible once its page fragments have been fetched
+and decrypted. TOC chunk entries identify the logical file offset, logical
+length, compressed length, uncompressed length, frame id, and ordered physical
+page ranges needed to reassemble that frame.
+
+This gives browser and web-service clients fast random access at frame
+granularity:
+
+1. fetch the TOC pages
+2. decrypt the TOC
+3. locate the compressed frame or frames for the requested file/range
+4. request only the physical pages containing those frame fragments
+5. decrypt the pages, reassemble the compressed frame bytes, and decompress
+
+Recovery must not depend solely on the TOC. Page fragment metadata should be
+inside encrypted page bodies and should include a stable anonymous file/content
+id, frame id, fragment index, fragment count or compressed byte range, logical
+offset, compressed length, uncompressed length, and checksums. These fields let
+recovery rebuild intact anonymous blobs or partial blobs even when path metadata
+is unavailable. Paths remain private and are restored only when the TOC is
+intact.
+
+The current implementation still stores file-data as segment-page objects. It
+allows compressible large-file chunks to represent more logical bytes per fixed
+page, which provides real page-count savings, but it does not yet implement the
+full page-packed compressed-extent model above. Because every physical page is
+still written at 8 MiB, this interim model has a compression floor that normal
+zstd archives do not have.
+
 ## Objects
 
 The object stream contains typed objects. Object headers are encrypted because

@@ -275,3 +275,102 @@ Conclusion:
   compression-level interaction.
 - Keep level 1 as the default unless production-size vault benchmarks show a
   meaningful space regression.
+
+## 2026-05-09 - Production-Scale File-Backed Compression Check
+
+Description: ran the file-backed performance example against production-sized
+inputs after profiling. The initial 1 GiB check showed that compression was not
+reducing vault size for large files because chunks were sized by uncompressed
+payload and every physical segment page is fixed at 8 MiB. Added a stronger
+test that compares fixed-page usage for compressible and high-entropy large
+files, then changed large-file chunking so a compressed segment page can
+represent up to 64 MiB of logical file data. High-entropy data and known
+already-compressed extensions still use normal page-sized chunks.
+
+Commands:
+
+```bash
+cd rust
+LOCKBOX_PERF_SCENARIO=large \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_LARGE_BYTES=1073741824 \
+LOCKBOX_PERF_PATTERN=zero \
+LOCKBOX_PERF_EXTRACT=memory \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_SCENARIO=large \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_LARGE_BYTES=1073741824 \
+LOCKBOX_PERF_PATTERN=randomish \
+LOCKBOX_PERF_EXTRACT=memory \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_SCENARIO=small \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_FILES=100000 \
+LOCKBOX_PERF_FILE_BYTES=1024 \
+LOCKBOX_PERF_EXTRACT=memory \
+LOCKBOX_PERF_EXTRACT_REPEAT=5 \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_SCENARIO=append-delete \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_INITIAL_FILES=50000 \
+LOCKBOX_PERF_APPEND_FILES=10000 \
+LOCKBOX_PERF_FILE_BYTES=2048 \
+cargo run -p lockbox_core --example perf --release
+```
+
+Environment:
+
+- Host: `Linux slayer4 6.11.0-26-generic x86_64`
+- CPU: `AMD Ryzen 7 3700X 8-Core Processor`, 8 cores / 16 threads
+- Rust: `rustc 1.94.1 (e408947bf 2026-03-25)`
+- Backend: file-backed vault storage
+- Profile artifact: `rust/target/flamegraph-file-small-50k.svg`
+
+Results after compressed logical chunking:
+
+| Scenario | Logical bytes | Vault bytes | Add | Commit | Extract/Delete | Range read | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 GiB zero large file | 1,073,741,824 | 159,383,616 | 2.770s | 15.158ms | 2.454s | 112.452ms | 0.148 |
+| 1 GiB randomish large file | 1,073,741,824 | 1,098,907,712 | 6.412s | 17.466ms | 1.787s | 6.749ms | 1.023 |
+| 100k x 1 KiB files, 5 memory extracts | 102,400,000 | 142,606,400 | 205.323ms | 1.299s | 612.156ms | n/a | 1.393 |
+| 50k initial + 10k append/delete/replace | 122,880,000 | 184,549,440 | 21.900ms | 516.788ms | 25.625ms | n/a | 1.502 |
+
+Conclusion:
+
+- The old large-file behavior failed a meaningful compression standard:
+  1 GiB zero and 1 GiB randomish files both used the same vault size.
+- The new behavior gives real page-count savings for compressible large files,
+  but the fixed 8 MiB physical page design creates a compression floor. With
+  the current 64 MiB logical cap, the best possible ratio for a huge perfectly
+  compressible file is about 12.5% before metadata.
+- The measured 14.8% ratio is close to that fixed-page floor, but it is not
+  competitive with conventional zstd archives for highly compressible data.
+- Range reads from very compressible large files are slower because one fixed
+  page can now decode to 64 MiB of logical data.
+- A true best-compression design needs variable physical compressed extents or
+  a higher-level compressed-extent mode; tuning zstd alone cannot overcome the
+  fixed-page floor.
+
+Criterion comparison after the compressed logical chunking change:
+
+| Benchmark | Previous mean | New mean | Change |
+| --- | ---: | ---: | ---: |
+| `small_files/add_commit_1000x1k` | 27.902 ms | 27.676 ms | -0.8% |
+| `small_files/extract_memory_1000x1k` | 0.299 ms | 0.297 ms | -0.8% |
+| `small_files/extract_directory_1000x1k` | 23.203 ms | 23.132 ms | -0.3% |
+| `mixed_tree/add_commit_mixed` | 63.150 ms | 62.639 ms | -0.8% |
+| `mixed_tree/list_recursive_mixed` | 0.0072 ms | 0.0073 ms | +0.4% |
+| `mixed_tree/extract_directory_mixed` | 8.987 ms | 8.875 ms | -1.2% |
+| `large_file/add_commit_16m_randomish` | 112.213 ms | 118.024 ms | +5.2% |
+| `large_file/range_read_1m_middle` | 1.559 ms | 1.787 ms | +14.6% |
+| `append_delete/append_delete_replace_commit` | 61.914 ms | 64.028 ms | +3.4% |
+| `toc_structure/separator_update_5000` | 67.447 ms | 56.630 ms | -16.0% |
+| `toc_structure/leaf_split_append_5000` | 56.694 ms | 58.248 ms | +2.7% |
+| `toc_structure/leaf_merge_delete_5000` | 54.955 ms | 56.379 ms | +2.6% |
+
+The earlier TOC separator regression did not reproduce in this run. The
+remaining large-file regressions are the expected cost of testing and adapting
+larger logical chunks before falling back for high-entropy data.

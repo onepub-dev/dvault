@@ -1,7 +1,9 @@
 use std::io::{Cursor, Read, Write};
 
 use super::Lockbox;
-use crate::constants::{DEFAULT_FILE_PERMISSIONS, DEFAULT_MAX_SEGMENT_BODY_BYTES};
+use crate::constants::{
+    DEFAULT_FILE_PERMISSIONS, DEFAULT_MAX_SEGMENT_BODY_BYTES, DEFAULT_MAX_SEGMENT_LOGICAL_BYTES,
+};
 use crate::file_chunk::{FileChunk, PendingFileChunk};
 use crate::format::{decode_file_segment_payload, encode_file_segment_payload};
 use crate::logical_path::{canonicalize_api_path as canonicalize_path, LogicalPath};
@@ -49,18 +51,21 @@ impl Lockbox {
 
         let mut chunks = Vec::new();
         let mut file_offset = 0u64;
-        let mut buffer = vec![0; DEFAULT_MAX_SEGMENT_BODY_BYTES];
+        let chunk_target = if likely_incompressible_path(&path) {
+            DEFAULT_MAX_SEGMENT_BODY_BYTES
+        } else {
+            DEFAULT_MAX_SEGMENT_LOGICAL_BYTES
+        };
+        let mut buffer = vec![0; chunk_target];
         loop {
-            let read = reader
-                .read(&mut buffer)
-                .map_err(|err| Error::Io(err.to_string()))?;
+            let read = read_next_chunk(&mut reader, &mut buffer)?;
             if read == 0 {
                 if file_offset == 0 {
                     self.write_file_chunk(&path, permissions, 0, &[], &mut chunks)?;
                 }
                 break;
             }
-            self.write_file_chunk(
+            self.write_file_chunk_adaptive(
                 &path,
                 permissions,
                 file_offset,
@@ -88,6 +93,63 @@ impl Lockbox {
         self.mark_toc_dirty(&dirty_path);
         self.needs_packing = true;
         Ok(())
+    }
+
+    fn write_file_chunk_adaptive(
+        &mut self,
+        path: &str,
+        permissions: u32,
+        file_offset: u64,
+        data: &[u8],
+        chunks: &mut Vec<FileChunk>,
+    ) -> Result<()> {
+        if !likely_incompressible_path(path)
+            && data.len() > DEFAULT_MAX_SEGMENT_BODY_BYTES
+            && crate::compression::looks_incompressible(data)
+        {
+            return self.write_split_file_chunks(
+                path,
+                permissions,
+                file_offset,
+                data,
+                chunks,
+                SplitStrategy::SegmentBody,
+            );
+        }
+
+        match self.write_file_chunk(path, permissions, file_offset, data, chunks) {
+            Ok(()) => Ok(()),
+            Err(err) if is_segment_page_too_large(&err) && data.len() > 1 => self
+                .write_split_file_chunks(
+                    path,
+                    permissions,
+                    file_offset,
+                    data,
+                    chunks,
+                    SplitStrategy::Halve,
+                ),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn write_split_file_chunks(
+        &mut self,
+        path: &str,
+        permissions: u32,
+        file_offset: u64,
+        data: &[u8],
+        chunks: &mut Vec<FileChunk>,
+        strategy: SplitStrategy,
+    ) -> Result<()> {
+        let midpoint = split_at(data.len(), strategy);
+        self.write_file_chunk_adaptive(path, permissions, file_offset, &data[..midpoint], chunks)?;
+        self.write_file_chunk_adaptive(
+            path,
+            permissions,
+            file_offset + midpoint as u64,
+            &data[midpoint..],
+            chunks,
+        )
     }
 
     pub fn get_file(&self, path: &str) -> Result<Vec<u8>> {
@@ -370,4 +432,83 @@ fn file_segment_inner_offsets(chunks: &[PendingFileChunk]) -> Vec<u64> {
         offset += chunk.data.len() as u64;
     }
     offsets
+}
+
+#[derive(Clone, Copy)]
+enum SplitStrategy {
+    Halve,
+    SegmentBody,
+}
+
+fn read_next_chunk(reader: &mut impl Read, buffer: &mut [u8]) -> Result<usize> {
+    let mut read_total = 0usize;
+    while read_total < buffer.len() {
+        let read = reader
+            .read(&mut buffer[read_total..])
+            .map_err(|err| Error::Io(err.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        read_total += read;
+    }
+    Ok(read_total)
+}
+
+fn split_at(len: usize, strategy: SplitStrategy) -> usize {
+    match strategy {
+        SplitStrategy::Halve => (len / 2).clamp(1, len - 1),
+        SplitStrategy::SegmentBody => DEFAULT_MAX_SEGMENT_BODY_BYTES.min(len - 1).max(1),
+    }
+}
+
+fn is_segment_page_too_large(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::SecurityLimitExceeded(message)
+            if message.contains("segment page body exceeds fixed page size")
+                || message.contains("segment page body is too large")
+    )
+}
+
+fn likely_incompressible_path(path: &str) -> bool {
+    let Some(extension) = path.rsplit_once('.').map(|(_, extension)| extension) else {
+        return false;
+    };
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "7z" | "apk"
+            | "avi"
+            | "br"
+            | "bz2"
+            | "cab"
+            | "cr2"
+            | "deb"
+            | "dmg"
+            | "docx"
+            | "flac"
+            | "gif"
+            | "gz"
+            | "heic"
+            | "iso"
+            | "jar"
+            | "jpeg"
+            | "jpg"
+            | "m4a"
+            | "mkv"
+            | "mov"
+            | "mp3"
+            | "mp4"
+            | "ogg"
+            | "pdf"
+            | "png"
+            | "pptx"
+            | "rar"
+            | "rpm"
+            | "webm"
+            | "webp"
+            | "xlsx"
+            | "xz"
+            | "zip"
+            | "zst"
+    )
 }

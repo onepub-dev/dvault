@@ -398,6 +398,40 @@ fn compressible_segment_content_uses_less_space_than_raw_chunks() {
 }
 
 #[test]
+fn compressible_large_file_uses_fewer_pages_than_incompressible_large_file() {
+    let compressible = vec![0u8; 16 * 1024 * 1024];
+    let mut incompressible = vec![0u8; compressible.len()];
+    fill_randomish(&mut incompressible);
+
+    let mut compressible_box = Lockbox::create(KEY);
+    compressible_box
+        .put_file("/compressible.bin", &compressible)
+        .unwrap();
+    compressible_box.commit().unwrap();
+
+    let mut incompressible_box = Lockbox::create(KEY);
+    incompressible_box
+        .put_file("/incompressible.bin", &incompressible)
+        .unwrap();
+    incompressible_box.commit().unwrap();
+
+    let compressible_len = compressible_box.to_bytes().len();
+    let incompressible_len = incompressible_box.to_bytes().len();
+    assert!(
+        compressible_len + SEGMENT_PAGE_BYTES <= incompressible_len,
+        "compressible vault should save at least one fixed page: {compressible_len} vs {incompressible_len}"
+    );
+    assert_eq!(
+        compressible_box.get_file("/compressible.bin").unwrap(),
+        compressible
+    );
+    assert_eq!(
+        incompressible_box.get_file("/incompressible.bin").unwrap(),
+        incompressible
+    );
+}
+
+#[test]
 fn many_small_files_are_packed_into_shared_segments_after_commit() {
     let mut lb = Lockbox::create(KEY);
     let initial_len = lb.to_bytes().len();
@@ -424,6 +458,16 @@ fn many_small_files_are_packed_into_shared_segments_after_commit() {
     damaged[0..8].fill(0);
     let report = Lockbox::recover(damaged, KEY);
     assert_eq!(report.intact_file_count, 20);
+}
+
+fn fill_randomish(buf: &mut [u8]) {
+    for (i, byte) in buf.iter_mut().enumerate() {
+        let mut value = i as u64;
+        value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        *byte = (value ^ (value >> 31)) as u8;
+    }
 }
 
 #[test]

@@ -1,9 +1,9 @@
-use crate::constants::DEFAULT_MAX_SEGMENT_BODY_BYTES;
+use crate::constants::DEFAULT_MAX_SEGMENT_LOGICAL_BYTES;
 use crate::{Error, Result};
 
 const COMPRESSION_NONE: u8 = 0;
 const COMPRESSION_ZSTD: u8 = 1;
-const MAX_DECOMPRESSED_SEGMENT_BODY_BYTES: u64 = (DEFAULT_MAX_SEGMENT_BODY_BYTES as u64) * 8;
+const MAX_DECOMPRESSED_SEGMENT_BODY_BYTES: u64 = DEFAULT_MAX_SEGMENT_LOGICAL_BYTES as u64;
 const MIN_INCOMPRESSIBLE_CHECK_BYTES: usize = 64 * 1024;
 const INCOMPRESSIBLE_SAMPLE_BYTES: usize = 16 * 1024;
 const HIGH_ENTROPY_BITS_PER_BYTE: f64 = 7.80;
@@ -66,7 +66,7 @@ fn zstd_decode(stored: &[u8]) -> Result<Vec<u8>> {
     oxiarc_zstd::decode_all(stored).map_err(|_| Error::CorruptRecord)
 }
 
-fn looks_incompressible(payload: &[u8]) -> bool {
+pub(crate) fn looks_incompressible(payload: &[u8]) -> bool {
     if payload.len() < MIN_INCOMPRESSIBLE_CHECK_BYTES {
         return false;
     }
