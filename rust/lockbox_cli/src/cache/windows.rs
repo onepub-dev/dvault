@@ -97,9 +97,14 @@ pub(crate) fn forget_all() -> io::Result<()> {
 }
 
 fn request(message: &str) -> io::Result<String> {
-    ensure_agent()?;
     let pipe_name = wide_pipe_name();
-    let handle = open_pipe(&pipe_name)?;
+    let handle = match open_pipe(&pipe_name) {
+        Ok(handle) => handle,
+        Err(_) => {
+            start_agent()?;
+            open_pipe(&pipe_name)?
+        }
+    };
     write_all(handle, message.as_bytes())?;
     let response = read_to_string(handle)?;
     unsafe {
@@ -108,15 +113,7 @@ fn request(message: &str) -> io::Result<String> {
     Ok(response.trim_end_matches(['\r', '\n']).to_string())
 }
 
-fn ensure_agent() -> io::Result<()> {
-    let pipe_name = wide_pipe_name();
-    if open_pipe(&pipe_name)
-        .map(|handle| unsafe { CloseHandle(handle) })
-        .is_ok()
-    {
-        return Ok(());
-    }
-
+fn start_agent() -> io::Result<()> {
     let exe = env::current_exe()?;
     Command::new(exe)
         .arg("__agent")
@@ -125,20 +122,7 @@ fn ensure_agent() -> io::Result<()> {
         .stderr(Stdio::null())
         .spawn()?;
 
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        if open_pipe(&pipe_name)
-            .map(|handle| unsafe { CloseHandle(handle) })
-            .is_ok()
-        {
-            return Ok(());
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-    Err(io::Error::new(
-        io::ErrorKind::TimedOut,
-        "lockbox agent did not start",
-    ))
+    Ok(())
 }
 
 fn create_pipe() -> io::Result<HANDLE> {
