@@ -1,6 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -67,15 +71,36 @@ fn run_output(bin: &str, agent_dir: &PathBuf, args: &[&str]) -> Output {
     eprintln!("agent_flow: starting {command_line}");
     let mut child = command.spawn().unwrap();
     eprintln!("agent_flow: spawned {command_line} pid={}", child.id());
+    let done = Arc::new(AtomicBool::new(false));
+    let watchdog_done = Arc::clone(&done);
+    let watchdog_agent_dir = agent_dir.to_path_buf();
+    let watchdog_command_line = command_line.clone();
+    thread::spawn(move || {
+        thread::sleep(COMMAND_TIMEOUT);
+        if watchdog_done.load(Ordering::SeqCst) {
+            return;
+        }
+        eprintln!(
+            "agent_flow: watchdog timeout after {:?}: {}",
+            COMMAND_TIMEOUT, watchdog_command_line
+        );
+        eprintln!(
+            "agent_flow: watchdog agent log:\n{}",
+            read_agent_log(&watchdog_agent_dir)
+        );
+        std::process::exit(101);
+    });
     let deadline = Instant::now() + COMMAND_TIMEOUT;
     loop {
         if child.try_wait().unwrap().is_some() {
             let output = child.wait_with_output().unwrap();
+            done.store(true, Ordering::SeqCst);
             eprintln!("agent_flow: finished {command_line} with {}", output.status);
             return output;
         }
         if Instant::now() >= deadline {
             eprintln!("agent_flow: killing timed out command {command_line}");
+            done.store(true, Ordering::SeqCst);
             let _ = child.kill();
             panic!(
                 "command timed out after {:?}: {command_line}\nagent log:\n{}",
