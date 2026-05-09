@@ -58,7 +58,10 @@ pub(crate) fn serve_agent() -> io::Result<()> {
         }
 
         last_activity = Instant::now();
-        if client_matches_current_user(pipe, &current_user_sid)? {
+        if matches!(
+            client_matches_current_user(pipe, &current_user_sid),
+            Ok(true)
+        ) {
             let _ = handle_client(pipe, &mut cache);
         }
         unsafe {
