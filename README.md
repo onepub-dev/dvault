@@ -192,8 +192,8 @@ The default cache limit is `Auto`. On native platforms this uses a
 segment-aware minimum and a best-effort memory-pressure target:
 
 - minimum useful cache: the larger of eight maximum-size segments or 64 MiB
-- target: about 3% of currently available memory
-- native cap: 512 MiB unless the caller overrides it
+- target: about 15% of currently available/reclaimable memory
+- native cap: 4 GiB unless the caller overrides it
 - WASM default: 64 MiB, because reliable free-memory information is not
   generally available in browser runtimes
 

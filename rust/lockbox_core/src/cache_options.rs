@@ -1,9 +1,10 @@
 use crate::constants::DEFAULT_MAX_SEGMENT_BODY_BYTES;
 
 const MIB: u64 = 1024 * 1024;
-const DEFAULT_NATIVE_MAX_CACHE_BYTES: u64 = 512 * MIB;
+const DEFAULT_NATIVE_MAX_CACHE_BYTES: u64 = 4 * 1024 * MIB;
 const DEFAULT_WASM_CACHE_BYTES: u64 = 64 * MIB;
 const DEFAULT_FALLBACK_CACHE_BYTES: u64 = 128 * MIB;
+const DEFAULT_NATIVE_AVAILABLE_MEMORY_PERCENT: u64 = 15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheLimit {
@@ -51,7 +52,7 @@ pub(crate) fn auto_cache_limit_bytes() -> u64 {
     let Some(available) = crate::memory_pressure::available_memory_bytes() else {
         return DEFAULT_FALLBACK_CACHE_BYTES.max(min_cache);
     };
-    let target = available.saturating_mul(3) / 100;
+    let target = available.saturating_mul(DEFAULT_NATIVE_AVAILABLE_MEMORY_PERCENT) / 100;
     target.clamp(min_cache, DEFAULT_NATIVE_MAX_CACHE_BYTES)
 }
 

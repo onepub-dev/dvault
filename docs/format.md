@@ -257,8 +257,8 @@ readers until `commit()` writes them and publishes a new commit root.
 `CacheLimit::Auto` is segment-aware:
 
 - minimum native cache: max of eight segment pages or 64 MiB
-- native target: about 3% of currently available memory
-- native cap: 512 MiB by default
+- native target: about 15% of currently available/reclaimable memory
+- native cap: 4 GiB by default
 - WASM default: 64 MiB unless the embedder supplies an explicit limit
 
 The cache is a performance mechanism, not a correctness requirement. TOC
