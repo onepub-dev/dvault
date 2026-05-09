@@ -23,7 +23,7 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
 
 #[cfg(windows)]
 pub(crate) fn available_memory_bytes() -> Option<u64> {
-    use windows_sys::Win32::System::Memory::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
     let mut status = MEMORYSTATUSEX {
         dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
