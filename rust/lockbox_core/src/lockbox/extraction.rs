@@ -149,20 +149,24 @@ impl Lockbox {
         let parent = parent
             .canonicalize()
             .map_err(|err| Error::Io(err.to_string()))?;
+        let Some(file_name) = destination.file_name() else {
+            return Err(Error::Io("destination must name a directory".to_string()));
+        };
+        let final_destination = parent.join(file_name);
         let (temp_path, temp_root) = create_temp_directory(&parent)?;
         let extract_result = self.extract_entries_to_directory(&temp_root, policy);
         if let Err(err) = extract_result {
             let _ = fs::remove_dir_all(&temp_path);
             return Err(err);
         }
-        if destination.exists() && !policy.overwrite {
+        if final_destination.exists() && !policy.overwrite {
             let _ = fs::remove_dir_all(&temp_path);
             return Err(Error::SecurityLimitExceeded(format!(
                 "destination exists: {}",
-                destination.display()
+                final_destination.display()
             )));
         }
-        if let Err(err) = fs::rename(&temp_path, destination) {
+        if let Err(err) = move_directory(&temp_path, &final_destination) {
             let _ = fs::remove_dir_all(&temp_path);
             return Err(Error::Io(err.to_string()));
         }
@@ -429,7 +433,7 @@ impl Lockbox {
                 return Err(Error::Io(err.to_string()));
             }
         }
-        if let Err(err) = fs::rename(&temp_path, out_path) {
+        if let Err(err) = move_file(&temp_path, out_path) {
             let _ = fs::remove_file(&temp_path);
             return Err(Error::Io(err.to_string()));
         }
@@ -653,6 +657,85 @@ fn create_temp_directory(parent: &Path) -> Result<(PathBuf, PathBuf)> {
     ))
 }
 
+fn move_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    match fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(err) if is_cross_device_error(&err) => {
+            fs::copy(source, destination)?;
+            fs::remove_file(source)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn move_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
+    match fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(err) if is_cross_device_error(&err) => {
+            copy_directory_recursive(source, destination)?;
+            fs::remove_dir_all(source)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn copy_directory_recursive(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::create_dir(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_directory_recursive(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &destination_path)?;
+        } else if file_type.is_symlink() {
+            copy_symlink(&source_path, &destination_path)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn is_cross_device_error(err: &std::io::Error) -> bool {
+    err.raw_os_error() == Some(libc::EXDEV)
+}
+
+#[cfg(windows)]
+fn is_cross_device_error(err: &std::io::Error) -> bool {
+    const ERROR_NOT_SAME_DEVICE: i32 = 17;
+    err.raw_os_error() == Some(ERROR_NOT_SAME_DEVICE)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn is_cross_device_error(_err: &std::io::Error) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn copy_symlink(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(fs::read_link(source)?, destination)
+}
+
+#[cfg(windows)]
+fn copy_symlink(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let target = fs::read_link(source)?;
+    if source.is_dir() {
+        std::os::windows::fs::symlink_dir(target, destination)
+    } else {
+        std::os::windows::fs::symlink_file(target, destination)
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn copy_symlink(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "copying symlinks is not supported on this platform",
+    ))
+}
+
 #[cfg(unix)]
 fn restore_permissions(path: &Path, permissions: u32, policy: &ExtractPolicy) -> Result<()> {
     if policy.restore_permissions {
@@ -691,4 +774,28 @@ fn create_symlink(_target: &str, _path: &Path, _overwrite: bool) -> Result<()> {
     Err(Error::SecurityLimitExceeded(
         "symlink extraction is not supported on this platform".to_string(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_directory_recursive_copies_nested_files() {
+        let root =
+            std::env::temp_dir().join(format!("lockbox-copy-dir-test-{}", std::process::id()));
+        let source = root.join("source");
+        let destination = root.join("destination");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested/file.txt"), b"content").unwrap();
+
+        copy_directory_recursive(&source, &destination).unwrap();
+
+        assert_eq!(
+            fs::read(destination.join("nested/file.txt")).unwrap(),
+            b"content"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
 }
