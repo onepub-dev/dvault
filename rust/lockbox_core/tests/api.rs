@@ -3,9 +3,12 @@ use lockbox_core::{
     KeySlotKind, ListOptions, Lockbox, LockboxOptions, MlKemKeyPair, MlKemRecipientKey,
     RecoveryReportOptions,
 };
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 
 const KEY: &[u8] = b"correct horse battery staple";
+const HEADER_LEN: usize = 96;
+const HEADER_CHECKSUM_START: usize = 64;
 const SEGMENT_PAGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[test]
@@ -1199,8 +1202,7 @@ fn recovery_survives_corrupt_header() {
 fn recovery_survives_header_manifest_pointer_zeroed() {
     let mut damaged = sample_lockbox();
     damaged[16..24].fill(0);
-    let crc = test_checksum(&damaged[0..60]);
-    damaged[60..64].copy_from_slice(&crc.to_le_bytes());
+    update_test_header_checksum(&mut damaged);
 
     let opened = Lockbox::open(damaged.clone(), KEY).unwrap();
     assert_eq!(opened.get_file("/docs/a.txt").unwrap(), b"alpha");
@@ -1248,7 +1250,7 @@ fn stale_header_after_interrupted_commit_opens_last_published_state() {
     lb.put_file("/docs/new.txt", b"new").unwrap();
     lb.commit().unwrap();
     let mut interrupted = lb.to_bytes();
-    interrupted[0..64].copy_from_slice(&previous[0..64]);
+    interrupted[0..HEADER_LEN].copy_from_slice(&previous[0..HEADER_LEN]);
 
     let opened = Lockbox::open(interrupted, KEY).unwrap();
     assert_eq!(opened.get_file("/docs/old.txt").unwrap(), b"old");
@@ -1446,11 +1448,11 @@ fn sample_lockbox() -> Vec<u8> {
     lb.to_bytes()
 }
 
-fn test_checksum(data: &[u8]) -> u32 {
-    let mut hash = 0x811c9dc5u32;
-    for byte in data {
-        hash ^= *byte as u32;
-        hash = hash.wrapping_mul(0x01000193);
-    }
-    hash
+fn update_test_header_checksum(bytes: &mut [u8]) {
+    let mut hasher = Sha256::new();
+    hasher.update(b"lockbox-v2-public-checksum/sha256");
+    hasher.update((HEADER_CHECKSUM_START as u64).to_le_bytes());
+    hasher.update(&bytes[0..HEADER_CHECKSUM_START]);
+    let digest = hasher.finalize();
+    bytes[HEADER_CHECKSUM_START..HEADER_LEN].copy_from_slice(&digest);
 }

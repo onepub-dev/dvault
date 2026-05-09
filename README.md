@@ -58,12 +58,10 @@ Cleartext segment headers contain only scanner-safe framing:
 
 ```text
 magic
-segment type
+segment page version
 sequence
 encrypted body length
-segment length
-encrypted body checksum
-header checksum
+SHA-256 public header checksum
 ```
 
 Paths, file names, content, lengths-by-path, and manifest entries are inside

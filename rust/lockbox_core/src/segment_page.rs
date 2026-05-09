@@ -1,20 +1,21 @@
 #![allow(dead_code)]
 
 use crate::compression::{decode_segment_body, encode_segment_body};
-use crate::crypto::{checksum, open_with_nonce, seal_with_random_nonce};
+use crate::crypto::{open_with_nonce, seal_with_random_nonce, strong_checksum};
 use crate::lockbox_id::LockboxId;
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::scan::Scan;
 use crate::{Error, Result};
 
 pub(crate) const SEGMENT_PAGE_MAGIC: &[u8; 8] = b"LBX2SEG\0";
-pub(crate) const SEGMENT_PAGE_HEADER_LEN: usize = 64;
+pub(crate) const SEGMENT_PAGE_HEADER_LEN: usize = 96;
 pub(crate) use crate::constants::DEFAULT_SEGMENT_PAGE_BYTES;
 
-const SEGMENT_PAGE_VERSION: u16 = 1;
+const SEGMENT_PAGE_VERSION: u16 = 2;
 const SEGMENT_BODY_VERSION: u8 = 1;
 const COMPRESSION_NORMAL: u8 = 1;
 const SEGMENT_PAGE_UNCOMPRESSED_BODY_OVERHEAD: usize = 16 + 17 + 16;
+const SEGMENT_PAGE_CHECKSUM_START: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SegmentObjectKind {
@@ -125,8 +126,8 @@ pub(crate) fn encode_segment_page(
     page[24..32].copy_from_slice(&sequence.to_le_bytes());
     page[32..44].copy_from_slice(&nonce);
     page[44..48].copy_from_slice(&(encrypted_body.len() as u32).to_le_bytes());
-    let header_crc = checksum(&page[0..48]);
-    page[48..52].copy_from_slice(&header_crc.to_le_bytes());
+    let header_digest = strong_checksum(&page[0..SEGMENT_PAGE_CHECKSUM_START]);
+    page[SEGMENT_PAGE_CHECKSUM_START..SEGMENT_PAGE_HEADER_LEN].copy_from_slice(&header_digest);
     page[SEGMENT_PAGE_HEADER_LEN..SEGMENT_PAGE_HEADER_LEN + encrypted_body.len()]
         .copy_from_slice(&encrypted_body);
     Ok(page)
@@ -154,11 +155,14 @@ pub(crate) fn decode_segment_page(
     if header_len != SEGMENT_PAGE_HEADER_LEN || header_len > page.len() {
         return Err(Error::CorruptRecord);
     }
-    let header_crc = u32::from_le_bytes(page[48..52].try_into().unwrap());
-    if checksum(&page[0..48]) != header_crc {
+    if page[48..SEGMENT_PAGE_CHECKSUM_START]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
         return Err(Error::CorruptRecord);
     }
-    if page[52..header_len].iter().any(|byte| *byte != 0) {
+    let expected_digest = strong_checksum(&page[0..SEGMENT_PAGE_CHECKSUM_START]);
+    if page[SEGMENT_PAGE_CHECKSUM_START..SEGMENT_PAGE_HEADER_LEN] != expected_digest {
         return Err(Error::CorruptRecord);
     }
 
@@ -387,6 +391,22 @@ mod tests {
 
         let mut page = encode_segment_page(128 * 1024, lockbox_id, 3, 7, key, &objects).unwrap();
         page[SEGMENT_PAGE_HEADER_LEN + 8] ^= 0x01;
+
+        assert!(decode_segment_page(&page, lockbox_id, key).is_err());
+    }
+
+    #[test]
+    fn segment_page_rejects_public_header_checksum_tampering() {
+        let lockbox_id = LockboxId::new_random().unwrap();
+        let key = b"secret";
+        let objects = vec![SegmentObject {
+            kind: SegmentObjectKind::TocLeaf,
+            id: 10,
+            payload: b"toc".to_vec(),
+        }];
+
+        let mut page = encode_segment_page(128 * 1024, lockbox_id, 3, 7, key, &objects).unwrap();
+        page[16] ^= 0x01;
 
         assert!(decode_segment_page(&page, lockbox_id, key).is_err());
     }

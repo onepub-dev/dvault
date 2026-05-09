@@ -39,13 +39,12 @@ pub(crate) fn open_with_nonce(
         .map_err(|_| Error::InvalidKey)
 }
 
-pub(crate) fn checksum(data: &[u8]) -> u32 {
-    let mut hash = 0x811c9dc5u32;
-    for byte in data {
-        hash ^= *byte as u32;
-        hash = hash.wrapping_mul(0x01000193);
-    }
-    hash
+pub(crate) fn strong_checksum(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"lockbox-v2-public-checksum/sha256");
+    hasher.update((data.len() as u64).to_le_bytes());
+    hasher.update(data);
+    hasher.finalize().into()
 }
 
 fn derive_content_key(key: &[u8]) -> [u8; 32] {

@@ -108,12 +108,12 @@ file names, environment variable names, or file contents. It contains only:
 Password salts and ML-KEM ciphertexts are visible metadata. The content key
 itself is never stored in cleartext.
 
-The key-directory header includes the lockbox UUID, generation, copy index,
-payload checksum, and header checksum. If the fixed header or primary
-key-directory copy is damaged, the library can scan the lockbox for mirror
-copies, try the password or recipient key against those slots, recover the
-lockbox UUID and content key, and then scan encrypted segment pages for the
-latest valid commit root.
+The key-directory header includes the lockbox UUID, generation, copy index, a
+SHA-256 payload checksum, and a SHA-256 public-header checksum. If the fixed
+header or primary key-directory copy is damaged, the library can scan the
+lockbox for mirror copies, try the password or recipient key against those
+slots, recover the lockbox UUID and content key, and then scan encrypted segment
+pages for the latest valid commit root.
 
 The Rust implementation caps the encoded key directory at 1 MiB. That is enough
 for thousands of slots, while preventing a corrupt or hostile lockbox from

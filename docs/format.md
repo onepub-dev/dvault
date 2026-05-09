@@ -21,30 +21,30 @@ segment pages. Public APIs must not expose segment-page management.
 
 ## Fixed Header
 
-The fixed header is 64 bytes and is the only mutable fixed-location structure in
+The fixed header is 96 bytes and is the only mutable fixed-location structure in
 the file.
 
 ```text
 offset  size  field
 0       8     magic: "LBX2HDR\0"
-8       2     version: 2
+8       2     version: 3
 10      2     header flags
-12      4     header length: 64
+12      4     header length: 96
 16      8     latest commit-root segment page offset, or 0
 24      8     latest commit sequence
 32      8     latest public key-directory offset, or 0
 40      16    public lockbox UUID
-56      4     reserved
-60      4     checksum over bytes 0..60
+56      8     reserved
+64      32    SHA-256 checksum over bytes 0..64
 ```
 
 The lockbox UUID is public metadata. It exists so tools can identify a lockbox
 even if the file is renamed or moved. It must not be derived from file names,
 content, recipients, or passwords.
 
-The header checksum detects torn or malformed header updates. It is not a
-security boundary. Security decisions must be based on authenticated segment
-pages and authenticated commit roots.
+The header checksum is a domain-separated SHA-256 digest. It detects torn or
+malformed header updates. It is not a security boundary. Security decisions must
+be based on authenticated segment pages and authenticated commit roots.
 
 The key-directory pointer remains in the fixed header because users need the key
 directory before the content key is unlocked. The key directory stores only
@@ -60,15 +60,15 @@ still authenticates a whole page.
 ```text
 offset  size  field
 0       8     magic: "LBX2SEG\0"
-8       2     segment header version: 1
+8       2     segment header version: 2
 10      2     public flags
 12      4     header length
 16      8     page id
 24      8     commit sequence that wrote this page
 32      12    AEAD nonce
 44      4     encrypted body length
-48      4     header checksum
-52      n     reserved header extension
+48      16    reserved header extension
+64      32    SHA-256 checksum over bytes 0..64
 H       m     encrypted body
 H+m     p     zero padding to the fixed page size
 ```
@@ -79,6 +79,10 @@ must not be derived only from record kind, object kind, or commit sequence.
 Only the segment page header is public. Object kinds, object lengths, logical
 paths, symlink targets, environment variable names, permissions, compression
 selection, and file contents are inside the encrypted body.
+
+Segment page public-header checksums are generated and verified at the segment
+cache/page-codec boundary. Higher-level TOC, file, recovery, and extraction code
+must not bypass the segment cache for normal page reads or writes.
 
 Segment page AEAD associated data includes:
 
@@ -313,25 +317,26 @@ contents.
 
 The key directory is intentionally readable before the content key is available.
 Its wrapped content-key values are authenticated by their wrapping algorithms; its
-outer structure is length-limited and checksummed so tools can reject malformed
-metadata early.
+outer structure is length-limited and protected by SHA-256 checksums so tools
+can reject malformed metadata early.
 
 Every key-directory block has its own public recovery header:
 
 ```text
 offset  size  field
 0       8     magic: "LBX2KEY\0"
-8       2     key-directory version
+8       2     key-directory version: 3
 10      2     flags
-12      4     header length
+12      4     header length: 128
 16      8     total key-directory length
 24      8     key-directory generation
 32      16    lockbox UUID
 48      4     copy index
-52      4     payload checksum
-56      4     reserved
-60      4     header checksum
-64      n     key-slot payload
+52      4     reserved
+56      32    SHA-256 checksum over key-slot payload
+88      8     reserved
+96      32    SHA-256 checksum over bytes 0..96
+128     n     key-slot payload
 ```
 
 The lockbox writes three copies of the key directory for every key-directory
