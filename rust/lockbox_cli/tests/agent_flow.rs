@@ -39,8 +39,15 @@ fn open_populates_cache_and_lock_clears_it() {
 }
 
 fn run(bin: &str, agent_dir: &PathBuf, args: &[&str]) {
-    let status = command(bin, agent_dir, args).status().unwrap();
-    assert!(status.success());
+    let output = command(bin, agent_dir, args).output().unwrap();
+    assert!(
+        output.status.success(),
+        "command failed: {bin} {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn command(bin: &str, agent_dir: &PathBuf, args: &[&str]) -> Command {
