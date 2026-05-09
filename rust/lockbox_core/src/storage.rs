@@ -74,11 +74,55 @@ impl Storage for StorageBackend {
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryStore {
     bytes: Vec<u8>,
+    #[cfg(test)]
+    fail_append_after_successes: Option<usize>,
+    #[cfg(test)]
+    fail_next_write_at: Option<u64>,
 }
 
 impl MemoryStore {
     fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            #[cfg(test)]
+            fail_append_after_successes: None,
+            #[cfg(test)]
+            fail_next_write_at: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn fail_append_after_successes(&mut self, successes: usize) {
+        self.fail_append_after_successes = Some(successes);
+    }
+
+    #[cfg(test)]
+    fn fail_next_write_at(&mut self, offset: u64) {
+        self.fail_next_write_at = Some(offset);
+    }
+
+    #[cfg(test)]
+    fn should_fail_append(&mut self) -> bool {
+        let Some(remaining) = self.fail_append_after_successes.as_mut() else {
+            return false;
+        };
+        if *remaining == 0 {
+            self.fail_append_after_successes = None;
+            true
+        } else {
+            *remaining -= 1;
+            false
+        }
+    }
+
+    #[cfg(test)]
+    fn should_fail_write_at(&mut self, offset: u64) -> bool {
+        if self.fail_next_write_at == Some(offset) {
+            self.fail_next_write_at = None;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -99,12 +143,20 @@ impl Storage for MemoryStore {
     }
 
     fn append(&mut self, bytes: &[u8]) -> Result<u64> {
+        #[cfg(test)]
+        if self.should_fail_append() {
+            return Err(Error::Io("injected storage append failure".to_string()));
+        }
         let offset = self.bytes.len() as u64;
         self.bytes.extend_from_slice(bytes);
         Ok(offset)
     }
 
     fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
+        #[cfg(test)]
+        if self.should_fail_write_at(offset) {
+            return Err(Error::Io("injected storage write failure".to_string()));
+        }
         let start = offset as usize;
         let end = start
             .checked_add(bytes.len())
@@ -114,6 +166,23 @@ impl Storage for MemoryStore {
         }
         self.bytes[start..end].copy_from_slice(bytes);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl StorageBackend {
+    pub(crate) fn fail_memory_append_after_successes(&mut self, successes: usize) {
+        match self {
+            Self::Memory(store) => store.fail_append_after_successes(successes),
+            Self::File(_) => panic!("failure injection is only available for memory storage"),
+        }
+    }
+
+    pub(crate) fn fail_memory_next_write_at(&mut self, offset: u64) {
+        match self {
+            Self::Memory(store) => store.fail_next_write_at(offset),
+            Self::File(_) => panic!("failure injection is only available for memory storage"),
+        }
     }
 }
 

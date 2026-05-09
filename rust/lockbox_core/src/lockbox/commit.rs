@@ -64,6 +64,17 @@ impl Lockbox {
     }
 
     pub fn commit(&mut self) -> Result<()> {
+        let rollback = CommitRollback::capture(self);
+        match self.commit_inner() {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                rollback.restore(self);
+                Err(err)
+            }
+        }
+    }
+
+    fn commit_inner(&mut self) -> Result<()> {
         self.flush_pending_small_files()?;
         self.flush_pending_deletes()?;
         if self.needs_packing {
@@ -439,6 +450,71 @@ impl Lockbox {
     }
 }
 
+struct CommitRollback {
+    sequence: u64,
+    commit_root_offset: u64,
+    manifest_offset: u64,
+    free_index_offset: u64,
+    key_directory_offset: u64,
+    key_slots: Vec<crate::key_slot::KeySlot>,
+    manifest: std::collections::BTreeMap<
+        crate::logical_path::LogicalPath,
+        crate::manifest_entry::ManifestEntry,
+    >,
+    toc_root: Option<TocTreeNode>,
+    toc_leaves: Vec<TocLeaf>,
+    dirty_toc_paths: std::collections::BTreeSet<crate::logical_path::LogicalPath>,
+    env_vars: Option<std::collections::BTreeMap<String, String>>,
+    free_space: crate::free_slot::FreeSpace,
+    record_ref_counts: std::collections::HashMap<u64, usize, crate::fast_hash::FastBuildHasher>,
+    pending_small_files: std::collections::BTreeMap<String, crate::file_chunk::PendingFileChunk>,
+    pending_deletes: Vec<String>,
+    needs_packing: bool,
+}
+
+impl CommitRollback {
+    fn capture(lockbox: &Lockbox) -> Self {
+        Self {
+            sequence: lockbox.sequence,
+            commit_root_offset: lockbox.commit_root_offset,
+            manifest_offset: lockbox.manifest_offset,
+            free_index_offset: lockbox.free_index_offset,
+            key_directory_offset: lockbox.key_directory_offset,
+            key_slots: lockbox.key_slots.clone(),
+            manifest: lockbox.manifest.clone(),
+            toc_root: lockbox.toc_root.clone(),
+            toc_leaves: lockbox.toc_leaves.clone(),
+            dirty_toc_paths: lockbox.dirty_toc_paths.clone(),
+            env_vars: lockbox.env_vars.borrow().clone(),
+            free_space: lockbox.free_space.clone(),
+            record_ref_counts: lockbox.record_ref_counts.clone(),
+            pending_small_files: lockbox.pending_small_files.clone(),
+            pending_deletes: lockbox.pending_deletes.clone(),
+            needs_packing: lockbox.needs_packing,
+        }
+    }
+
+    fn restore(self, lockbox: &mut Lockbox) {
+        lockbox.sequence = self.sequence;
+        lockbox.commit_root_offset = self.commit_root_offset;
+        lockbox.manifest_offset = self.manifest_offset;
+        lockbox.free_index_offset = self.free_index_offset;
+        lockbox.key_directory_offset = self.key_directory_offset;
+        lockbox.key_slots = self.key_slots;
+        lockbox.manifest = self.manifest;
+        lockbox.toc_root = self.toc_root;
+        lockbox.toc_leaves = self.toc_leaves;
+        lockbox.dirty_toc_paths = self.dirty_toc_paths;
+        lockbox.env_vars.replace(self.env_vars);
+        lockbox.free_space = self.free_space;
+        lockbox.record_ref_counts = self.record_ref_counts;
+        lockbox.pending_small_files = self.pending_small_files;
+        lockbox.pending_deletes = self.pending_deletes;
+        lockbox.needs_packing = self.needs_packing;
+        lockbox.segment_manager.borrow_mut().clear();
+    }
+}
+
 fn same_leaf_entries(
     old: &[crate::manifest_entry::ManifestEntry],
     new: &[crate::manifest_entry::ManifestEntry],
@@ -645,6 +721,52 @@ mod tests {
             reopened.free_space.slots_by_offset().len()
                 > crate::free_index::FREE_INDEX_LEAF_SLOT_CAPACITY
         );
+    }
+
+    #[test]
+    fn failed_commit_after_partial_appends_reopens_previous_commit() {
+        let mut lb = Lockbox::create("secret");
+        lb.put_file("/docs/old.txt", b"old").unwrap();
+        lb.commit().unwrap();
+
+        lb.put_file("/docs/new.txt", b"new").unwrap();
+        lb.storage.fail_memory_append_after_successes(1);
+        assert!(matches!(lb.commit(), Err(Error::Io(_))));
+
+        assert_eq!(lb.get_file("/docs/new.txt").unwrap(), b"new");
+        let reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
+        assert_eq!(reopened.get_file("/docs/old.txt").unwrap(), b"old");
+        assert!(matches!(
+            reopened.get_file("/docs/new.txt"),
+            Err(Error::NotFound(_))
+        ));
+
+        lb.commit().unwrap();
+        let reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
+        assert_eq!(reopened.get_file("/docs/new.txt").unwrap(), b"new");
+    }
+
+    #[test]
+    fn failed_commit_header_publish_reopens_previous_commit() {
+        let mut lb = Lockbox::create("secret");
+        lb.put_file("/docs/old.txt", b"old").unwrap();
+        lb.commit().unwrap();
+
+        lb.put_file("/docs/new.txt", b"new").unwrap();
+        lb.storage.fail_memory_next_write_at(0);
+        assert!(matches!(lb.commit(), Err(Error::Io(_))));
+
+        assert_eq!(lb.get_file("/docs/new.txt").unwrap(), b"new");
+        let reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
+        assert_eq!(reopened.get_file("/docs/old.txt").unwrap(), b"old");
+        assert!(matches!(
+            reopened.get_file("/docs/new.txt"),
+            Err(Error::NotFound(_))
+        ));
+
+        lb.commit().unwrap();
+        let reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
+        assert_eq!(reopened.get_file("/docs/new.txt").unwrap(), b"new");
     }
 
     fn synthetic_manifest_entries(count: usize) -> Vec<ManifestEntry> {
