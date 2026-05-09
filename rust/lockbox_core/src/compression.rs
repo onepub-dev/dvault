@@ -1,5 +1,3 @@
-use std::io::Cursor;
-
 use crate::constants::DEFAULT_MAX_SEGMENT_BODY_BYTES;
 use crate::{Error, Result};
 
@@ -8,8 +6,7 @@ const COMPRESSION_ZSTD: u8 = 1;
 const MAX_DECOMPRESSED_SEGMENT_BODY_BYTES: u64 = (DEFAULT_MAX_SEGMENT_BODY_BYTES as u64) * 8;
 
 pub(crate) fn encode_segment_body(payload: &[u8]) -> Vec<u8> {
-    let compressed = zstd::stream::encode_all(Cursor::new(payload), 3)
-        .expect("zstd compression should not fail for an in-memory buffer");
+    let compressed = zstd_encode(payload);
     let (algorithm, stored) = if compressed.len() < payload.len() {
         (COMPRESSION_ZSTD, compressed)
     } else {
@@ -43,15 +40,22 @@ pub(crate) fn decode_segment_body(body: &[u8]) -> Result<Vec<u8>> {
     let stored = &body[17..17 + stored_len];
     let decoded = match algorithm {
         COMPRESSION_NONE => stored.to_vec(),
-        COMPRESSION_ZSTD => {
-            zstd::stream::decode_all(Cursor::new(stored)).map_err(|_| Error::CorruptRecord)?
-        }
+        COMPRESSION_ZSTD => zstd_decode(stored)?,
         _ => return Err(Error::CorruptRecord),
     };
     if decoded.len() as u64 != real_len {
         return Err(Error::CorruptRecord);
     }
     Ok(decoded)
+}
+
+fn zstd_encode(payload: &[u8]) -> Vec<u8> {
+    oxiarc_zstd::encode_all(payload, 3)
+        .expect("zstd compression should not fail for an in-memory buffer")
+}
+
+fn zstd_decode(stored: &[u8]) -> Result<Vec<u8>> {
+    oxiarc_zstd::decode_all(stored).map_err(|_| Error::CorruptRecord)
 }
 
 #[cfg(test)]

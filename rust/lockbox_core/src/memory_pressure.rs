@@ -11,7 +11,10 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
     None
 }
 
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "macos", target_os = "ios"))
+))]
 pub(crate) fn available_memory_bytes() -> Option<u64> {
     let pages = unsafe { libc::sysconf(libc::_SC_AVPHYS_PAGES) };
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -19,6 +22,11 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
         return None;
     }
     (pages as u64).checked_mul(page_size as u64)
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) fn available_memory_bytes() -> Option<u64> {
+    None
 }
 
 #[cfg(target_os = "macos")]

@@ -57,3 +57,41 @@ jobs:
 
       - name: Check fuzz targets
         run: cargo check --manifest-path fuzz/Cargo.toml
+
+  portable-core:
+    name: core ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+          - os: ubuntu-latest
+            target: wasm32-unknown-unknown
+          - os: ubuntu-latest
+            target: wasm32-wasip2
+          - os: macos-latest
+            target: aarch64-apple-ios
+
+    defaults:
+      run:
+        working-directory: rust
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: portable-core-${{ matrix.target }}
+
+      - name: Check core
+        run: cargo check -p lockbox_core --target ${{ matrix.target }}

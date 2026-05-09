@@ -17,7 +17,11 @@ ml-kem = { version = "0.3", features = ["getrandom"] }
 sha2 = "0.10"
 unicode-normalization = "0.1"
 zeroize = "1"
-zstd = "0.13"
+oxiarc-zstd = "0.2"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 criterion = "0.5"

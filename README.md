@@ -6,6 +6,11 @@ single `.lbox` container while still supporting fast access to individual files.
 The current direction is a Rust core implementation that can be used from CLI,
 Dart, JavaScript/WASM, and other languages through thin bindings.
 
+The `lockbox_core` crate is checked for Linux, macOS, Windows, Android,
+iOS, WASI, and browser-style `wasm32-unknown-unknown` builds. The Rust CLI and
+its unlock-cache agent are native desktop/server components; mobile and WASM
+applications should embed the core crate through platform bindings.
+
 > Status: the Rust implementation under `rust/lockbox_core` is the production
 > direction for the first Lockbox format release. The format is still pre-1.0,
 > so breaking changes are allowed while the design is finalized, but code added
@@ -306,6 +311,8 @@ The Rust implementation now includes:
 - NIST ML-KEM-1024/FIPS 203 for post-quantum public-key wrapping when vault keys need
   to be shared or stored for recipients.
 - Zstandard as the default segment compression engine.
+- The core uses a pure-Rust zstd backend so embedders do not need a C zstd
+  toolchain on desktop, mobile, or WASM targets.
 - Independent compressed chunks for large files so random access and corruption
   recovery remain practical.
 
@@ -352,7 +359,17 @@ cd rust/lockbox_core
 cargo test
 ```
 
-The Rust core suite currently has 97 tests covering:
+Check the supported portable core targets:
+
+```bash
+cd rust
+cargo check -p lockbox_core --target aarch64-linux-android
+cargo check -p lockbox_core --target aarch64-apple-ios
+cargo check -p lockbox_core --target wasm32-unknown-unknown
+cargo check -p lockbox_core --target wasm32-wasip2
+```
+
+The Rust workspace suite currently has over 100 tests covering:
 
 - create/open/commit round trips,
 - put/get/range/list/stat behavior,
