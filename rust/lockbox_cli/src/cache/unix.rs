@@ -37,7 +37,7 @@ pub(crate) fn serve_agent() -> io::Result<()> {
         match listener.accept() {
             Ok((stream, _)) => {
                 last_activity = Instant::now();
-                handle_client(stream, &mut cache)?;
+                let _ = handle_client(stream, &mut cache);
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                 if cache.is_empty()
@@ -126,6 +126,9 @@ fn handle_client(
     BufReader::new(stream.try_clone()?)
         .take((max_request_bytes() + 1) as u64)
         .read_line(&mut request)?;
+    if request.is_empty() {
+        return Ok(());
+    }
     let response = match parse_request(&request) {
         Ok(AgentRequest::Get(vault_id)) => {
             let now = Instant::now();
