@@ -170,7 +170,11 @@ jobs:
     name: verify x64 fixture on s390x and create s390x fixture
     runs-on: ubuntu-latest
     needs: create-x64
-    timeout-minutes: 45
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: rust
 
     steps:
       - name: Checkout
@@ -189,37 +193,39 @@ jobs:
           path: interop/lockbox-s390x.lbx
           key: lockbox-endian-s390x-${{ env.LOCKBOX_INTEROP_FIXTURE_VERSION }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          platforms: s390x
+          targets: s390x-unknown-linux-gnu
+
+      - name: Install s390x runtime
+        run: sudo apt-get update && sudo apt-get install -y gcc-s390x-linux-gnu qemu-user
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: endian-s390x
+
+      - name: Build s390x endian test
+        run: cargo test --release -p lockbox_core --test endian_interop --target s390x-unknown-linux-gnu --no-run
 
       - name: Verify x64 fixture and create s390x fixture
         if: steps.s390x-fixture-cache.outputs.cache-hit != 'true'
-        run: >
-          docker run --rm --platform linux/s390x
-          -u "$(id -u):$(id -g)"
-          -v "${{ github.workspace }}:/work"
-          -w /work/rust
-          -e CARGO_HOME=/tmp/cargo
-          -e CARGO_TARGET_DIR=/tmp/target
-          -e LOCKBOX_INTEROP_VERIFY_PATH=/work/interop/lockbox-x64.lbx
-          -e LOCKBOX_INTEROP_CREATE_PATH=/work/interop/lockbox-s390x.lbx
-          rust:1-bookworm
-          bash -lc "export PATH=/usr/local/cargo/bin:/usr/local/rustup/bin:$PATH; cargo test --release -p lockbox_core --test endian_interop -- --ignored --nocapture"
+        env:
+          LOCKBOX_INTEROP_VERIFY_PATH: ${{ github.workspace }}/interop/lockbox-x64.lbx
+          LOCKBOX_INTEROP_CREATE_PATH: ${{ github.workspace }}/interop/lockbox-s390x.lbx
+        run: |
+          test_bin="$(find target/s390x-unknown-linux-gnu/release/deps -maxdepth 1 -type f -executable -name 'endian_interop-*' | head -n 1)"
+          QEMU_LD_PREFIX=/usr/s390x-linux-gnu qemu-s390x "$test_bin" --ignored --nocapture
 
       - name: Verify x64 fixture on s390x
         if: steps.s390x-fixture-cache.outputs.cache-hit == 'true'
-        run: >
-          docker run --rm --platform linux/s390x
-          -u "$(id -u):$(id -g)"
-          -v "${{ github.workspace }}:/work"
-          -w /work/rust
-          -e CARGO_HOME=/tmp/cargo
-          -e CARGO_TARGET_DIR=/tmp/target
-          -e LOCKBOX_INTEROP_VERIFY_PATH=/work/interop/lockbox-x64.lbx
-          rust:1-bookworm
-          bash -lc "export PATH=/usr/local/cargo/bin:/usr/local/rustup/bin:$PATH; cargo test --release -p lockbox_core --test endian_interop -- --ignored --nocapture"
+        env:
+          LOCKBOX_INTEROP_VERIFY_PATH: ${{ github.workspace }}/interop/lockbox-x64.lbx
+        run: |
+          test_bin="$(find target/s390x-unknown-linux-gnu/release/deps -maxdepth 1 -type f -executable -name 'endian_interop-*' | head -n 1)"
+          QEMU_LD_PREFIX=/usr/s390x-linux-gnu qemu-s390x "$test_bin" --ignored --nocapture
 
       - name: Upload s390x fixture
         uses: actions/upload-artifact@v4
