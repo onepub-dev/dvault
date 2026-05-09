@@ -176,7 +176,11 @@ fn manifest_entry_encoded_len(entry: &ManifestEntry) -> usize {
         + 2
         + entry.symlink_target.as_ref().map_or(0, String::len)
         + 4
-        + entry.chunks.len() * 48
+        + entry
+            .chunks
+            .iter()
+            .map(|chunk| 40 + chunk.fragments.len() * 40)
+            .sum::<usize>()
 }
 
 fn toc_child_encoded_len(child: &TocChild) -> usize {
@@ -348,6 +352,30 @@ mod tests {
             decode_toc_node(&payload),
             Err(Error::CorruptRecord)
         ));
+    }
+
+    #[test]
+    fn toc_internal_numeric_fields_are_little_endian() {
+        let children = vec![TocChild {
+            first_path: "/a".to_string(),
+            offset: 0x0102_0304_0506_0708,
+        }];
+        let encoded = encode_toc_internal(&children).unwrap();
+
+        assert_eq!(&encoded[0..2], &[TOC_NODE_VERSION, TOC_INTERNAL]);
+        assert_eq!(&encoded[2..6], &[0x01, 0x00, 0x00, 0x00]);
+        assert_eq!(&encoded[6..8], &[0x02, 0x00]);
+        assert_eq!(&encoded[8..10], b"/a");
+        assert_eq!(
+            &encoded[10..18],
+            &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
+        );
+
+        let TocNode::Internal(decoded) = decode_toc_node(&encoded).unwrap() else {
+            panic!("expected internal node");
+        };
+        assert_eq!(decoded[0].offset, 0x0102_0304_0506_0708);
+        assert_eq!(decoded[0].first_path, "/a");
     }
 
     #[test]

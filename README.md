@@ -3,6 +3,16 @@
 Lockbox is an encrypted archive format and library for storing many files in a
 single `.lbox` container while still supporting fast access to individual files.
 
+Terminology is explicit:
+
+- A **lockbox** is the portable `.lbox` container file that stores compressed
+  and encrypted data.
+- A **vault** is the user's local private store on their own computer. It may
+  contain the user's private key, trusted keys, local key-directory backups, and
+  other user-local state.
+
+See [docs/terminology.md](docs/terminology.md) for the canonical definitions.
+
 The current direction is a Rust core implementation that can be used from CLI,
 Dart, JavaScript/WASM, and other languages through thin bindings.
 
@@ -14,10 +24,10 @@ applications should embed the core crate through platform bindings.
 > Status: the Rust implementation under `rust/lockbox_core` is the production
 > direction for the first Lockbox format release. The format is still pre-1.0,
 > so breaking changes are allowed while the design is finalized, but code added
-> here should be treated as the intended implementation. Segment bodies are
-> compressed with zstd, encrypted with
-> ChaCha20-Poly1305, and vault keys can be derived with Argon2id or wrapped with
-> ML-KEM-1024. Third-party cryptographic review is still a release blocker.
+> here should be treated as the intended implementation. we  bodies are
+> compressed with zstd, encrypted with ChaCha20-Poly1305, and lockbox content
+> keys can be derived with Argon2id or wrapped with ML-KEM-1024. Third-party
+> cryptographic review is still a release blocker.
 
 ## Goals
 
@@ -84,43 +94,44 @@ let clean = Lockbox::salvage(damaged_bytes, key)?;
 
 ## Key Management
 
-Normal vaults use a random vault key. Users unlock that vault key through one or
-more key slots stored in a key directory block. The header points at the current
-key directory, and the directory is capped at 1 MiB to avoid unbounded metadata
-processing.
+Normal lockboxes use a random content key. Users unlock that content key through
+one or more key slots stored in a key directory block. The header points at the
+current key directory, and the directory is capped at 1 MiB to avoid unbounded
+metadata processing.
 
-Each vault also has a public random UUID in the header. The CLI uses that UUID
-to identify per-user unlock-cache entries without relying on file paths.
+Each lockbox also has a public random UUID in the header. The CLI uses that UUID
+to identify per-user unlock-cache entries and local vault records without
+relying on file paths.
 
 Supported slots are password slots and ML-KEM-1024 recipient slots. Opening does
 not require labels: the library tries each matching slot type until one unwraps
-and authenticates the vault key.
+and authenticates the content key.
 
 ```rust
-let mut vault = Lockbox::create_with_password(b"shared password")?;
-let slot_id = vault.add_recipient_key(&recipient_public_key)?;
-vault.remove_key_slot_and_compact(slot_id)?;
+let mut lockbox = Lockbox::create_with_password(b"shared password")?;
+let slot_id = lockbox.add_recipient_key(&recipient_public_key)?;
+lockbox.remove_key_slot_and_compact(slot_id)?;
 
-let vault = Lockbox::open_with_password(bytes, b"shared password")?;
-let vault = Lockbox::open_with_recipient(bytes, &my_private_key)?;
+let lockbox = Lockbox::open_with_password(bytes, b"shared password")?;
+let lockbox = Lockbox::open_with_recipient(bytes, &my_private_key)?;
 ```
 
 Removing a key slot is intentionally conservative: the library rewrites and
-compacts the live vault state so old key-directory history is not left as an
+compacts the live lockbox state so old key-directory history is not left as an
 easy recovery path for the removed credential.
 
 The CLI direction is sudo-like:
 
 ```bash
-lockbox open vault.lbox
-lockbox list vault.lbox
-lockbox lock vault.lbox
+lockbox open secrets.lbox
+lockbox list secrets.lbox
+lockbox lock secrets.lbox
 ```
 
-`open` unwraps the vault key and stores it in a per-user in-memory agent with a
-sliding TTL. Normal commands ask the agent for the unwrapped vault key by vault
-UUID. No password, private-key passphrase, bearer token, or vault key is written
-to a cache file.
+`open` unwraps the content key and stores it in a per-user in-memory agent with a
+sliding TTL. Normal commands ask the agent for the unwrapped content key by
+lockbox UUID. No password, private-key passphrase, bearer token, or content key
+is written to a cache file.
 
 See [docs/key_management.md](docs/key_management.md) for design intent and CLI
 direction. See [docs/format.md](docs/format.md) for the current header,
@@ -188,9 +199,9 @@ Current tested APIs:
 ### Segment Cache
 
 The core library uses a unified decoded-segment cache for pages read from the
-vault. TOC nodes, file segments, symlinks, env objects, and free-index objects
+lockbox. TOC nodes, file segments, symlinks, env objects, and free-index objects
 share one weighted LRU budget keyed by page offset. The cache is a performance
-layer only: correctness does not require the full TOC or full vault to fit in
+layer only: correctness does not require the full TOC or full lockbox to fit in
 memory.
 
 The default cache limit is `Auto`. On native platforms this uses a
@@ -210,11 +221,11 @@ use lockbox_core::{CacheLimit, Lockbox, LockboxOptions};
 let options = LockboxOptions {
     cache_limit: CacheLimit::Bytes(256 * 1024 * 1024),
 };
-let vault = Lockbox::open_with_options(bytes, key, options)?;
+let lockbox = Lockbox::open_with_options(bytes, key, options)?;
 
-vault.set_cache_limit(CacheLimit::Auto);
-vault.trim_cache_to(64 * 1024 * 1024);
-let stats = vault.cache_stats();
+lockbox.set_cache_limit(CacheLimit::Auto);
+lockbox.trim_cache_to(64 * 1024 * 1024);
+let stats = lockbox.cache_stats();
 ```
 
 ## Segment Reuse
@@ -307,9 +318,9 @@ The Rust implementation now includes:
 
 - ChaCha20-Poly1305 or XChaCha20-Poly1305 with 256-bit content keys for
   segment-body encryption. The current code uses ChaCha20-Poly1305.
-- Argon2id password key derivation, or a caller-supplied raw vault key.
-- NIST ML-KEM-1024/FIPS 203 for post-quantum public-key wrapping when vault keys need
-  to be shared or stored for recipients.
+- Argon2id password key derivation, or a caller-supplied raw content key.
+- NIST ML-KEM-1024/FIPS 203 for post-quantum public-key wrapping when content
+  keys need to be shared or stored for recipients.
 - Zstandard as the default segment compression engine.
 - The core uses a pure-Rust zstd backend so embedders do not need a C zstd
   toolchain on desktop, mobile, or WASM targets.
@@ -320,31 +331,31 @@ Avoid whole-archive solid compression as the default because it conflicts with
 range reads and partial recovery.
 
 Symmetric encryption is the only content-encryption layer currently implemented.
-For quantum resistance this requires high-entropy 256-bit vault keys; human
-passwords must go through a memory-hard KDF before they are used as vault keys.
+For quantum resistance this requires high-entropy 256-bit content keys; human
+passwords must go through a memory-hard KDF before they wrap content keys.
 
 ## Key Sharing Model
 
 The intended sharing model is deliberately narrow:
 
-- Each vault has one random 256-bit vault key used for content encryption.
-- The vault key can be unlocked from a password slot.
-- The same vault key can also be unlocked from a public-key recipient slot.
+- Each lockbox has one random 256-bit content key used for content encryption.
+- The content key can be unlocked from a password slot.
+- The same content key can also be unlocked from a public-key recipient slot.
 - Public-key sharing uses the recipient's long-lived public key; the recipient
   keeps the matching private key.
-- The normal user does not need a different public/private keypair per vault.
+- The normal user does not need a different public/private keypair per lockbox.
 
-In other words, a shared vault can support both:
+In other words, a shared lockbox can support both:
 
 ```text
-password -> Argon2id -> unwrap vault key
-recipient private key -> ML-KEM-1024 decapsulation -> unwrap vault key
+password -> Argon2id -> unwrap content key
+recipient private key -> ML-KEM-1024 decapsulation -> unwrap content key
 ```
 
-This lets a vault be shared by password when that is the simplest operational
+This lets a lockbox be shared by password when that is the simplest operational
 choice, or by public key when the recipient should not know or reuse a password.
 The key-slot metadata should stay minimal: slot id, slot type, algorithm, and
-the data required to unwrap the vault key. Human-readable labels are not part of
+the data required to unwrap the content key. Human-readable labels are not part of
 the default model because they can leak information.
 
 See [Key Management Design](docs/key_management.md) for the detailed design

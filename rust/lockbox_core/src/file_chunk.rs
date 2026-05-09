@@ -1,11 +1,20 @@
 #[derive(Debug, Clone)]
+pub(crate) struct FileFragment {
+    pub(crate) page_offset: u64,
+    pub(crate) page_len: u64,
+    pub(crate) object_id: u64,
+    pub(crate) fragment_offset: u64,
+    pub(crate) fragment_len: u64,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct FileChunk {
-    pub(crate) record_offset: u64,
-    pub(crate) record_len: u64,
     pub(crate) file_offset: u64,
     pub(crate) len: u64,
-    pub(crate) segment_inner_offset: u64,
-    pub(crate) segment_inner_len: u64,
+    pub(crate) compressed_len: u64,
+    pub(crate) compression: u8,
+    pub(crate) frame_id: u64,
+    pub(crate) fragments: Vec<FileFragment>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,15 +32,10 @@ pub(crate) struct DecodedFileChunk {
     pub(crate) permissions: u32,
     pub(crate) total_len: u64,
     pub(crate) file_offset: u64,
-    pub(crate) segment_inner_offset: u64,
+    pub(crate) len: u64,
+    pub(crate) compressed_len: u64,
+    pub(crate) compression: u8,
+    pub(crate) frame_id: u64,
+    pub(crate) fragment_offset: u64,
     pub(crate) data: Vec<u8>,
-}
-
-pub(crate) struct BorrowedFileChunk<'a> {
-    pub(crate) path: &'a str,
-    pub(crate) permissions: u32,
-    pub(crate) total_len: u64,
-    pub(crate) file_offset: u64,
-    pub(crate) segment_inner_offset: u64,
-    pub(crate) data: &'a [u8],
 }

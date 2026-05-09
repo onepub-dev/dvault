@@ -4,7 +4,7 @@ The Rust implementation includes `cargo-fuzz` scaffolding under `rust/fuzz`.
 
 Targets:
 
-- `header`: fixed-header and vault-id parsing.
+- `header`: fixed-header and lockbox-id parsing.
 - `key_directory`: password-slot/key-directory open path.
 - `pages_recovery`: segment-page scanning, recovery, and salvage.
 - `paths`: logical path, symlink, and listing API inputs.

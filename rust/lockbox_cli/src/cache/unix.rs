@@ -2,7 +2,7 @@ use super::{
     decode_hex, encode_forget, encode_forget_all, encode_get, encode_hex, encode_put,
     max_request_bytes, parse_request, AgentRequest, SecretBytes, DEFAULT_TTL_SECONDS,
 };
-use lockbox_core::VaultId;
+use lockbox_core::LockboxId;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -53,8 +53,8 @@ pub(crate) fn serve_agent() -> io::Result<()> {
     }
 }
 
-pub(crate) fn get(vault_id: VaultId) -> io::Result<Option<Vec<u8>>> {
-    let response = request(&encode_get(vault_id))?;
+pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
+    let response = request(&encode_get(lockbox_id))?;
     if response == "MISS" {
         return Ok(None);
     }
@@ -67,13 +67,13 @@ pub(crate) fn get(vault_id: VaultId) -> io::Result<Option<Vec<u8>>> {
     decode_hex(hex).map(Some)
 }
 
-pub(crate) fn put(vault_id: VaultId, key: &[u8]) -> io::Result<()> {
-    let response = request(&encode_put(vault_id, key))?;
+pub(crate) fn put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<()> {
+    let response = request(&encode_put(lockbox_id, key))?;
     expect_ok(&response)
 }
 
-pub(crate) fn forget(vault_id: VaultId) -> io::Result<()> {
-    let response = request(&encode_forget(vault_id))?;
+pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
+    let response = request(&encode_forget(lockbox_id))?;
     expect_ok(&response)
 }
 
@@ -130,9 +130,9 @@ fn handle_client(
         return Ok(());
     }
     let response = match parse_request(&request) {
-        Ok(AgentRequest::Get(vault_id)) => {
+        Ok(AgentRequest::Get(lockbox_id)) => {
             let now = Instant::now();
-            match cache.get_mut(&vault_id) {
+            match cache.get_mut(&lockbox_id) {
                 Some(entry) if entry.expires_at > now => {
                     entry.expires_at = now + Duration::from_secs(DEFAULT_TTL_SECONDS);
                     format!("KEY {}", encode_hex(entry.key.expose()))
@@ -140,10 +140,10 @@ fn handle_client(
                 _ => "MISS".to_string(),
             }
         }
-        Ok(AgentRequest::Put(vault_id, key)) => {
+        Ok(AgentRequest::Put(lockbox_id, key)) => {
             let key = SecretBytes::new(key);
             cache.insert(
-                vault_id,
+                lockbox_id,
                 CacheEntry {
                     key,
                     expires_at: Instant::now() + Duration::from_secs(DEFAULT_TTL_SECONDS),
@@ -151,8 +151,8 @@ fn handle_client(
             );
             "OK".to_string()
         }
-        Ok(AgentRequest::Forget(vault_id)) => {
-            cache.remove(&vault_id);
+        Ok(AgentRequest::Forget(lockbox_id)) => {
+            cache.remove(&lockbox_id);
             "OK".to_string()
         }
         Ok(AgentRequest::ForgetAll) => {

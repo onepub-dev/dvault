@@ -16,7 +16,7 @@ cryptographic review.
 - Password slots use Argon2id with per-slot salts.
 - Recipient slots use ML-KEM-1024 wrapping.
 - Key directories are capped at 1 MiB.
-- Unlock caching stores unwrapped vault keys only in a per-user agent process,
+- Unlock caching stores unwrapped content keys only in a per-user agent process,
   not on disk.
 - Core and agent key buffers zeroize on drop and try to lock memory.
 - TOC decode rejects unsorted or duplicate leaf paths, unsorted or duplicate

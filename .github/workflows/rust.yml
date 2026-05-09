@@ -2,6 +2,7 @@ name: Rust
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  LOCKBOX_COMPRESSION_CORPUS_VERSION: v1
 
 on:
   push:
@@ -95,3 +96,41 @@ jobs:
 
       - name: Check core
         run: cargo check -p lockbox_core --target ${{ matrix.target }}
+
+  compression-regression:
+    name: compression regression corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: rust
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore compression corpus
+        id: compression-corpus-cache
+        uses: actions/cache@v4
+        with:
+          path: rust/.ci-compression-corpus
+          key: lockbox-compression-corpus-${{ env.LOCKBOX_COMPRESSION_CORPUS_VERSION }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: compression-regression
+
+      - name: Generate compression corpus
+        if: steps.compression-corpus-cache.outputs.cache-hit != 'true'
+        run: cargo run --release -p lockbox_core --example compression_corpus -- .ci-compression-corpus
+
+      - name: Run compression regression corpus
+        env:
+          LOCKBOX_COMPRESSION_CORPUS_DIR: ${{ github.workspace }}/rust/.ci-compression-corpus
+        run: cargo test --release -p lockbox_core --test compression_regression -- --ignored --nocapture

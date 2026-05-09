@@ -71,7 +71,7 @@ fn small_files() -> Result<(), Box<dyn std::error::Error>> {
         files: file_count,
         listed,
         logical_bytes: total_bytes,
-        vault_bytes: bench.vault_bytes()?,
+        lockbox_bytes: bench.lockbox_bytes()?,
         add,
         commit,
         list,
@@ -120,7 +120,7 @@ fn large_file() -> Result<(), Box<dyn std::error::Error>> {
         files: 1,
         listed: 1,
         logical_bytes: bytes as u64,
-        vault_bytes: bench.vault_bytes()?,
+        lockbox_bytes: bench.lockbox_bytes()?,
         add,
         commit,
         list: Duration::ZERO,
@@ -187,7 +187,7 @@ fn append_delete() -> Result<(), Box<dyn std::error::Error>> {
         files: initial_files + appended_files,
         listed,
         logical_bytes: ((initial_files + appended_files) * file_size) as u64,
-        vault_bytes: bench.vault_bytes()?,
+        lockbox_bytes: bench.lockbox_bytes()?,
         add,
         commit,
         list,
@@ -214,7 +214,7 @@ fn run_extract(
                 let _ = lockbox.extract_all(policy)?;
             }
             "directory" => {
-                let out_dir = std::env::temp_dir()
+                let out_dir = perf_scratch_dir()?
                     .join(format!("lockbox-{name}-perf-{}-{i}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&out_dir);
                 lockbox.extract_to_directory(&out_dir, policy)?;
@@ -239,8 +239,8 @@ impl BenchLockbox {
         let backend =
             std::env::var("LOCKBOX_PERF_BACKEND").unwrap_or_else(|_| "memory".to_string());
         if backend == "file" {
-            let path = std::env::temp_dir()
-                .join(format!("lockbox-perf-{name}-{}.lbx", std::process::id()));
+            let path =
+                perf_scratch_dir()?.join(format!("lockbox-perf-{name}-{}.lbx", std::process::id()));
             let _ = std::fs::remove_file(&path);
             Ok(Self {
                 lockbox: Lockbox::create_path(&path, KEY)?,
@@ -256,13 +256,21 @@ impl BenchLockbox {
         }
     }
 
-    fn vault_bytes(&self) -> Result<u64, Box<dyn std::error::Error>> {
+    fn lockbox_bytes(&self) -> Result<u64, Box<dyn std::error::Error>> {
         if let Some(path) = &self.path {
             Ok(std::fs::metadata(path)?.len())
         } else {
             Ok(self.lockbox.to_bytes().len() as u64)
         }
     }
+}
+
+fn perf_scratch_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let dir = std::env::var_os("LOCKBOX_PERF_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 impl Drop for BenchLockbox {
@@ -328,7 +336,7 @@ struct Report {
     files: usize,
     listed: usize,
     logical_bytes: u64,
-    vault_bytes: u64,
+    lockbox_bytes: u64,
     add: Duration,
     commit: Duration,
     list: Duration,
@@ -342,7 +350,7 @@ fn print_report(report: Report) {
     println!("files: {}", report.files);
     println!("listed: {}", report.listed);
     println!("logical bytes: {}", report.logical_bytes);
-    println!("vault bytes: {}", report.vault_bytes);
+    println!("lockbox bytes: {}", report.lockbox_bytes);
     println!("add: {:?}", report.add);
     println!("commit: {:?}", report.commit);
     println!("list: {:?}", report.list);
@@ -350,8 +358,8 @@ fn print_report(report: Report) {
     println!("read range: {:?}", report.read_range);
     if report.logical_bytes > 0 {
         println!(
-            "vault/logical ratio: {:.3}",
-            report.vault_bytes as f64 / report.logical_bytes as f64
+            "lockbox/logical ratio: {:.3}",
+            report.lockbox_bytes as f64 / report.logical_bytes as f64
         );
     }
 }

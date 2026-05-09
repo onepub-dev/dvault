@@ -3,9 +3,9 @@ use std::fmt;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct VaultId([u8; 16]);
+pub struct LockboxId([u8; 16]);
 
-impl VaultId {
+impl LockboxId {
     pub fn new_random() -> Result<Self> {
         let mut bytes = [0u8; 16];
         getrandom::getrandom(&mut bytes).map_err(|err| Error::Io(err.to_string()))?;
@@ -23,7 +23,7 @@ impl VaultId {
     }
 }
 
-impl fmt::Display for VaultId {
+impl fmt::Display for LockboxId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let b = self.0;
         write!(

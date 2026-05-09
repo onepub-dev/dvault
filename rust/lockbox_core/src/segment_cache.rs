@@ -1,8 +1,10 @@
 use crate::cache_options::{cache_limit_bytes, CacheLimit, CacheStats};
 use crate::fast_hash::FastBuildHasher;
-use crate::segment_page::{decode_segment_page, DecodedSegmentPage};
+use crate::lockbox_id::LockboxId;
+use crate::segment_page::{
+    decode_segment_page, encode_segment_page, DecodedSegmentPage, SegmentObject,
+};
 use crate::storage::Storage;
-use crate::vault_id::VaultId;
 use crate::Result;
 use std::collections::{HashMap, VecDeque};
 
@@ -23,6 +25,7 @@ pub(crate) struct SegmentManager {
 #[derive(Debug, Clone)]
 struct CachedPage {
     page: DecodedSegmentPage,
+    object_positions: HashMap<u64, usize, FastBuildHasher>,
     weight: u64,
     generation: u64,
 }
@@ -46,36 +49,68 @@ impl SegmentManager {
         storage: &impl Storage,
         offset: u64,
         page_size: usize,
-        vault_id: VaultId,
+        lockbox_id: LockboxId,
         key: &[u8],
     ) -> Result<DecodedSegmentPage> {
         if let Some(page) = self.get_page(offset) {
             return Ok(page);
         }
         let bytes = storage.read_at(offset, page_size)?;
-        let page = decode_segment_page(&bytes, vault_id, key)?;
+        let page = decode_segment_page(&bytes, lockbox_id, key)?;
         self.insert_page(offset, page.clone(), page_size as u64);
         Ok(page)
     }
 
-    pub(crate) fn append_segment_page(
+    pub(crate) fn read_segment_object(
         &mut self,
-        storage: &mut impl Storage,
-        page: &[u8],
-    ) -> Result<u64> {
-        let offset = storage.append(page)?;
-        self.remove(offset);
-        Ok(offset)
+        storage: &impl Storage,
+        offset: u64,
+        object_id: u64,
+        page_size: usize,
+        lockbox_id: LockboxId,
+        key: &[u8],
+    ) -> Result<SegmentObject> {
+        if let Some(object) = self.get_page_object(offset, object_id) {
+            return Ok(object);
+        }
+        let bytes = storage.read_at(offset, page_size)?;
+        let page = decode_segment_page(&bytes, lockbox_id, key)?;
+        let object = page
+            .objects
+            .iter()
+            .find(|object| object.id == object_id)
+            .cloned()
+            .ok_or(crate::Error::CorruptRecord)?;
+        self.insert_page(offset, page, page_size as u64);
+        Ok(object)
     }
 
-    pub(crate) fn write_segment_page(
+    pub(crate) fn write_decoded_segment_page(
         &mut self,
         storage: &mut impl Storage,
         offset: u64,
-        page: &[u8],
+        page_size: usize,
+        lockbox_id: LockboxId,
+        key: &[u8],
+        page: DecodedSegmentPage,
     ) -> Result<()> {
-        storage.write_at(offset, page)?;
-        self.remove(offset);
+        let encoded = encode_segment_page(
+            page_size,
+            lockbox_id,
+            page.page_id,
+            page.sequence,
+            key,
+            &page.objects,
+        )?;
+        if offset == storage.len()? {
+            let appended = storage.append(&encoded)?;
+            if appended != offset {
+                return Err(crate::Error::CorruptRecord);
+            }
+        } else {
+            storage.write_at(offset, &encoded)?;
+        }
+        self.insert_page(offset, page, page_size as u64);
         Ok(())
     }
 
@@ -91,6 +126,19 @@ impl SegmentManager {
         Some(entry.page.clone())
     }
 
+    pub(crate) fn get_page_object(&mut self, offset: u64, object_id: u64) -> Option<SegmentObject> {
+        self.refresh_limit_if_needed();
+        let Some(entry) = self.pages.get_mut(&offset) else {
+            self.misses = self.misses.saturating_add(1);
+            return None;
+        };
+        self.hits = self.hits.saturating_add(1);
+        entry.generation = entry.generation.saturating_add(1);
+        self.recent.push_back(offset);
+        let index = *entry.object_positions.get(&object_id)?;
+        entry.page.objects.get(index).cloned()
+    }
+
     pub(crate) fn insert_page(&mut self, offset: u64, page: DecodedSegmentPage, weight: u64) {
         self.refresh_limit_if_needed();
         if self.limit_bytes == 0 || weight > self.limit_bytes {
@@ -100,22 +148,23 @@ impl SegmentManager {
             self.used_bytes = self.used_bytes.saturating_sub(old.weight);
         }
         self.used_bytes = self.used_bytes.saturating_add(weight);
+        let object_positions = page
+            .objects
+            .iter()
+            .enumerate()
+            .map(|(index, object)| (object.id, index))
+            .collect::<HashMap<_, _, FastBuildHasher>>();
         self.pages.insert(
             offset,
             CachedPage {
                 page,
+                object_positions,
                 weight,
                 generation: 0,
             },
         );
         self.recent.push_back(offset);
         self.trim_to_limit();
-    }
-
-    pub(crate) fn remove(&mut self, offset: u64) {
-        if let Some(old) = self.pages.remove(&offset) {
-            self.used_bytes = self.used_bytes.saturating_sub(old.weight);
-        }
     }
 
     pub(crate) fn clear(&mut self) {

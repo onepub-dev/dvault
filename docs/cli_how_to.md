@@ -22,7 +22,7 @@ are rejected as unsafe archive entries.
 
 ## Add Files
 
-Unlock a vault before normal operations:
+Unlock a lockbox before normal operations:
 
 ```bash
 lockbox open secrets.lbox
@@ -35,7 +35,7 @@ Clear the cached unlock explicitly when done:
 lockbox lock secrets.lbox
 ```
 
-Create a vault and cache its unlock:
+Create a lockbox and cache its unlock:
 
 ```bash
 lockbox create secrets.lbox
@@ -372,7 +372,7 @@ Generate a recipient keypair:
 lockbox keygen alice.key alice.pub
 ```
 
-Add a recipient public key to an unlocked vault:
+Add a recipient public key to an unlocked lockbox:
 
 ```bash
 lockbox add-recipient secrets.lbox alice.pub
@@ -390,9 +390,9 @@ Remove a key slot:
 lockbox remove-key secrets.lbox 2
 ```
 
-Removing a key is a compaction operation. The CLI rewrites the live vault state
+Removing a key is a compaction operation. The CLI rewrites the live lockbox state
 so stale key-directory history is not left behind as an easy way for the removed
-credential to keep opening the vault.
+credential to keep opening the lockbox.
 
 Unlock with a private key:
 

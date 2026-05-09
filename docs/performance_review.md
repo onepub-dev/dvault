@@ -1,7 +1,7 @@
 # Performance Review
 
 This pass focuses on the two high-pressure paths: full recursive add and full
-vault expansion/extraction.
+lockbox expansion/extraction.
 
 ## Current Strengths
 
@@ -11,13 +11,13 @@ vault expansion/extraction.
 - The CLI can recursively add a source directory without requiring callers to
   enumerate files themselves.
 - Content is segmented at bounded sizes instead of solid-compressing the whole
-  vault.
+  lockbox.
 - Records are independently compressed/encrypted, which keeps random access and
   partial recovery practical.
 - Listing can stream through `list_iter` rather than materializing every entry.
 - Small-file packing reduces pathological overhead for many tiny files.
-- File-backed vault storage can read records by byte range and append records
-  directly to disk, which avoids materializing the whole vault for normal CLI
+- File-backed lockbox storage can read records by byte range and append records
+  directly to disk, which avoids materializing the whole lockbox for normal CLI
   access.
 - Full extraction caches decoded packed-file records per extraction pass, so a
   packed segment is not decrypted/decompressed once per contained file.
@@ -103,21 +103,21 @@ LOCKBOX_PERF_SCENARIO=all cargo run -p lockbox_core --example perf --release
 
 This is not a replacement for Criterion or production profiling, but it gives a
 repeatable smoke signal before storage-format changes. It reports file count,
-logical bytes, vault bytes, add time, commit time, list time, extraction or
-delete/replace time, large-file range-read latency, and vault/logical size
+logical bytes, lockbox bytes, add time, commit time, list time, extraction or
+delete/replace time, large-file range-read latency, and lockbox/logical size
 ratio.
 
 The large-file scenario is intended for GB-class baselines. It uses a streaming
 reader so the generated input does not need a separate GB fixture on disk. With
-`LOCKBOX_PERF_BACKEND=file`, pages are written to and read from the vault file by
-range; with `LOCKBOX_PERF_BACKEND=memory`, the vault bytes are intentionally
+`LOCKBOX_PERF_BACKEND=file`, pages are written to and read from the lockbox file by
+range; with `LOCKBOX_PERF_BACKEND=memory`, the lockbox bytes are intentionally
 kept in memory for comparison.
 
 `LOCKBOX_PERF_BACKEND` accepts:
 
 - `memory`: the historical in-memory store.
 - `file`: the file-backed store that reads pages by range and writes pages
-  directly to a vault file.
+  directly to a lockbox file.
 
 ## Current Baseline Observations
 
@@ -133,21 +133,21 @@ repacking later.
 Representative current results from the latest local pass:
 
 - 10,000 x 1 KiB files, file backend, directory extract: add ~24ms, commit
-  ~47ms, list ~0.6ms, extract ~195ms, vault/logical ratio ~0.019.
+  ~47ms, list ~0.6ms, extract ~195ms, lockbox/logical ratio ~0.019.
 - 50,000 x 1 KiB files, file backend, 20 repeated memory extraction passes:
-  add ~128ms, commit ~196ms, list ~6ms, extract ~1.37s, vault/logical ratio
+  add ~128ms, commit ~196ms, list ~6ms, extract ~1.37s, lockbox/logical ratio
   ~0.014.
 - Append/delete workload with 5,000 initial files, 1,000 appended files, 1,000
-  deletes, and 1,000 replacements: commit ~12ms, vault/logical ratio ~0.032.
+  deletes, and 1,000 replacements: commit ~12ms, lockbox/logical ratio ~0.032.
 - 100,000 x 1 KiB files, file backend, 5 repeated memory extraction passes:
-  add ~202ms, commit ~294ms, list ~9ms, extract ~546ms, vault/logical ratio
+  add ~202ms, commit ~294ms, list ~9ms, extract ~546ms, lockbox/logical ratio
   ~0.014.
 - 256 MiB low-compressibility file, file backend: add ~1.95s, commit <1ms,
-  full memory extract ~666ms, 1 MiB range read ~23ms, vault/logical ratio
+  full memory extract ~666ms, 1 MiB range read ~23ms, lockbox/logical ratio
   ~1.000.
 - Larger append/delete workload with 50,000 initial files, 10,000 appended
   files, 10,000 deletes, and 10,000 replacements: commit ~117ms, list ~7ms,
-  vault/logical ratio ~0.015.
+  lockbox/logical ratio ~0.015.
 
 Deletes are also staged and written as batched delete pages during commit.
 Without this, delete-heavy workloads paid one padded page per deleted path.
@@ -193,7 +193,7 @@ allocation/copying for memory extraction and filesystem output for directory
 extraction. The next useful optimization is reducing per-file filesystem calls
 and testing bounded parallel writes for large directory expansions.
 
-On a 1 GiB low-compressibility file-backed run, the vault/logical ratio was
+On a 1 GiB low-compressibility file-backed run, the lockbox/logical ratio was
 about 1.000, add time was about 10.3s, full extraction was about 3.8s, and a
 1 MiB range read from the middle of the file was about 21ms. That validates the
 range-read path for large files, while still leaving room for direct IO and

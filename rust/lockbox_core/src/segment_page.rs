@@ -2,9 +2,9 @@
 
 use crate::compression::{decode_segment_body, encode_segment_body};
 use crate::crypto::{checksum, open_with_nonce, seal_with_random_nonce};
+use crate::lockbox_id::LockboxId;
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::scan::Scan;
-use crate::vault_id::VaultId;
 use crate::{Error, Result};
 
 pub(crate) const SEGMENT_PAGE_MAGIC: &[u8; 8] = b"LBX2SEG\0";
@@ -14,6 +14,7 @@ pub(crate) use crate::constants::DEFAULT_SEGMENT_PAGE_BYTES;
 const SEGMENT_PAGE_VERSION: u16 = 1;
 const SEGMENT_BODY_VERSION: u8 = 1;
 const COMPRESSION_NORMAL: u8 = 1;
+const SEGMENT_PAGE_UNCOMPRESSED_BODY_OVERHEAD: usize = 16 + 17 + 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SegmentObjectKind {
@@ -58,6 +59,29 @@ pub(crate) struct SegmentObject {
     pub(crate) payload: Vec<u8>,
 }
 
+pub(crate) fn encoded_object_stream_len(objects: &[SegmentObject]) -> Result<usize> {
+    let mut len = 4usize;
+    for object in objects {
+        len = len
+            .checked_add(encoded_object_len(object)?)
+            .ok_or_else(|| Error::SecurityLimitExceeded("segment page is too large".to_string()))?;
+    }
+    Ok(len)
+}
+
+pub(crate) fn encoded_object_len(object: &SegmentObject) -> Result<usize> {
+    20usize
+        .checked_add(object.payload.len())
+        .ok_or_else(|| Error::SecurityLimitExceeded("segment object is too large".to_string()))
+}
+
+pub(crate) fn uncompressed_objects_fit(page_size: usize, object_stream_len: usize) -> bool {
+    SEGMENT_PAGE_HEADER_LEN
+        .checked_add(SEGMENT_PAGE_UNCOMPRESSED_BODY_OVERHEAD)
+        .and_then(|overhead| overhead.checked_add(object_stream_len))
+        .is_some_and(|encoded_len| encoded_len <= page_size)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct DecodedSegmentPage {
     pub(crate) page_id: u64,
@@ -67,7 +91,7 @@ pub(crate) struct DecodedSegmentPage {
 
 pub(crate) fn encode_segment_page(
     page_size: usize,
-    vault_id: VaultId,
+    lockbox_id: LockboxId,
     page_id: u64,
     sequence: u64,
     key: &[u8],
@@ -85,7 +109,7 @@ pub(crate) fn encode_segment_page(
     })?;
     let encrypted_len = u32::try_from(encrypted_len)
         .map_err(|_| Error::SecurityLimitExceeded("segment page body is too large".to_string()))?;
-    let aad = segment_page_aad(vault_id, page_id, sequence, 0, encrypted_len);
+    let aad = segment_page_aad(lockbox_id, page_id, sequence, 0, encrypted_len);
     let (nonce, encrypted_body) = seal_with_random_nonce(&body, key, &aad);
     if SEGMENT_PAGE_HEADER_LEN + encrypted_body.len() > page_size {
         return Err(Error::SecurityLimitExceeded(
@@ -110,7 +134,7 @@ pub(crate) fn encode_segment_page(
 
 pub(crate) fn decode_segment_page(
     page: &[u8],
-    vault_id: VaultId,
+    lockbox_id: LockboxId,
     key: &[u8],
 ) -> Result<DecodedSegmentPage> {
     if page.len() < SEGMENT_PAGE_HEADER_LEN {
@@ -145,7 +169,7 @@ pub(crate) fn decode_segment_page(
     if header_len + encrypted_len > page.len() {
         return Err(Error::Truncated);
     }
-    let aad = segment_page_aad(vault_id, page_id, sequence, flags, encrypted_len as u32);
+    let aad = segment_page_aad(lockbox_id, page_id, sequence, flags, encrypted_len as u32);
     let body = open_with_nonce(
         &page[header_len..header_len + encrypted_len],
         key,
@@ -161,7 +185,7 @@ pub(crate) fn decode_segment_page(
     })
 }
 
-pub(crate) fn scan_segment_page_records(bytes: &[u8], vault_id: VaultId, key: &[u8]) -> Scan {
+pub(crate) fn scan_segment_page_records(bytes: &[u8], lockbox_id: LockboxId, key: &[u8]) -> Scan {
     let mut records = Vec::new();
     let mut corrupt_records = 0usize;
     let mut i = crate::constants::HEADER_LEN;
@@ -171,7 +195,7 @@ pub(crate) fn scan_segment_page_records(bytes: &[u8], vault_id: VaultId, key: &[
                 corrupt_records += 1;
                 break;
             }
-            match decode_segment_page(&bytes[i..i + DEFAULT_SEGMENT_PAGE_BYTES], vault_id, key) {
+            match decode_segment_page(&bytes[i..i + DEFAULT_SEGMENT_PAGE_BYTES], lockbox_id, key) {
                 Ok(page) => {
                     for object in page.objects {
                         if let Some(kind) = record_kind_from_object_kind(object.kind) {
@@ -182,6 +206,7 @@ pub(crate) fn scan_segment_page_records(bytes: &[u8], vault_id: VaultId, key: &[
                                     total_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
                                 },
                                 offset: i as u64,
+                                object_id: object.id,
                                 payload: object.payload,
                             });
                         }
@@ -302,7 +327,7 @@ fn decode_object_stream(bytes: &[u8]) -> Result<Vec<SegmentObject>> {
 }
 
 fn segment_page_aad(
-    vault_id: VaultId,
+    lockbox_id: LockboxId,
     page_id: u64,
     sequence: u64,
     flags: u16,
@@ -311,7 +336,7 @@ fn segment_page_aad(
     let mut aad = Vec::with_capacity(8 + 2 + 16 + 8 + 8 + 2 + 4);
     aad.extend_from_slice(b"LBX2PAGE");
     aad.extend_from_slice(&SEGMENT_PAGE_VERSION.to_le_bytes());
-    aad.extend_from_slice(vault_id.as_bytes());
+    aad.extend_from_slice(lockbox_id.as_bytes());
     aad.extend_from_slice(&page_id.to_le_bytes());
     aad.extend_from_slice(&sequence.to_le_bytes());
     aad.extend_from_slice(&flags.to_le_bytes());
@@ -325,7 +350,7 @@ mod tests {
 
     #[test]
     fn segment_page_round_trips_objects_and_has_fixed_size() {
-        let vault_id = VaultId::new_random().unwrap();
+        let lockbox_id = LockboxId::new_random().unwrap();
         let key = b"secret";
         let objects = vec![
             SegmentObject {
@@ -340,11 +365,11 @@ mod tests {
             },
         ];
 
-        let page = encode_segment_page(128 * 1024, vault_id, 3, 7, key, &objects).unwrap();
+        let page = encode_segment_page(128 * 1024, lockbox_id, 3, 7, key, &objects).unwrap();
         assert_eq!(page.len(), 128 * 1024);
         assert_eq!(&page[0..8], SEGMENT_PAGE_MAGIC);
 
-        let decoded = decode_segment_page(&page, vault_id, key).unwrap();
+        let decoded = decode_segment_page(&page, lockbox_id, key).unwrap();
         assert_eq!(decoded.page_id, 3);
         assert_eq!(decoded.sequence, 7);
         assert_eq!(decoded.objects, objects);
@@ -352,7 +377,7 @@ mod tests {
 
     #[test]
     fn segment_page_rejects_tampering() {
-        let vault_id = VaultId::new_random().unwrap();
+        let lockbox_id = LockboxId::new_random().unwrap();
         let key = b"secret";
         let objects = vec![SegmentObject {
             kind: SegmentObjectKind::TocLeaf,
@@ -360,9 +385,9 @@ mod tests {
             payload: b"toc".to_vec(),
         }];
 
-        let mut page = encode_segment_page(128 * 1024, vault_id, 3, 7, key, &objects).unwrap();
+        let mut page = encode_segment_page(128 * 1024, lockbox_id, 3, 7, key, &objects).unwrap();
         page[SEGMENT_PAGE_HEADER_LEN + 8] ^= 0x01;
 
-        assert!(decode_segment_page(&page, vault_id, key).is_err());
+        assert!(decode_segment_page(&page, lockbox_id, key).is_err());
     }
 }

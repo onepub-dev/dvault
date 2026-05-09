@@ -15,7 +15,7 @@ This review covers the current Rust implementation shape.
 ## Cleanup Needed
 
 - `Lockbox::create` currently panics if the system random source fails while
-  generating a vault UUID. Prefer `try_create` or make `create` return
+  generating a lockbox UUID. Prefer `try_create` or make `create` return
   `Result<Self>` before stabilizing the public API.
 - Some CLI behavior still lives in a single `main.rs`. Move commands into
   separate modules once the command set settles.
@@ -24,7 +24,7 @@ This review covers the current Rust implementation shape.
 - The core has raw-key APIs for test/developer use. Consider naming them
   `create_with_raw_key`/`open_with_raw_key` and making the password/recipient
   APIs the obvious default.
-- `to_bytes()` clones the whole vault. That is fine for tests but should not be
+- `to_bytes()` clones the whole lockbox. That is fine for tests but should not be
   the main production persistence API.
 - Several APIs still return `Vec<u8>` for convenience. Keep them, but add
   stream-first alternatives as the primary path in language bindings.

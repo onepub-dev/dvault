@@ -1,4 +1,4 @@
-use crate::file_chunk::{BorrowedFileChunk, DecodedFileChunk, PendingFileChunk};
+use crate::file_chunk::{DecodedFileChunk, PendingFileChunk};
 use crate::logical_path::{
     validate_stored_path as validate_path, validate_symlink_paths as validate_symlink,
 };
@@ -54,118 +54,80 @@ fn decode_file_payload(payload: &[u8]) -> Result<(String, u32, Vec<u8>)> {
     ))
 }
 
-pub(crate) fn encode_file_segment_payload(chunks: &[PendingFileChunk]) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(&(chunks.len() as u32).to_le_bytes());
-    for chunk in chunks {
-        let path_bytes = chunk.path.as_bytes();
-        out.extend_from_slice(&(path_bytes.len() as u16).to_le_bytes());
-        out.extend_from_slice(path_bytes);
-        out.extend_from_slice(&chunk.permissions.to_le_bytes());
-        out.extend_from_slice(&chunk.total_len.to_le_bytes());
-        out.extend_from_slice(&chunk.file_offset.to_le_bytes());
-        out.extend_from_slice(&(chunk.data.len() as u64).to_le_bytes());
-        out.extend_from_slice(&chunk.data);
-    }
+pub(crate) fn encode_file_fragment_payload(
+    chunk: &PendingFileChunk,
+    compression: u8,
+    frame_id: u64,
+    frame_len: u64,
+    compressed_len: u64,
+    fragment_offset: u64,
+) -> Vec<u8> {
+    let path_bytes = chunk.path.as_bytes();
+    let mut out = Vec::with_capacity(2 + path_bytes.len() + 4 + 8 * 5 + 2 + chunk.data.len());
+    out.extend_from_slice(&(path_bytes.len() as u16).to_le_bytes());
+    out.extend_from_slice(path_bytes);
+    out.extend_from_slice(&chunk.permissions.to_le_bytes());
+    out.extend_from_slice(&chunk.total_len.to_le_bytes());
+    out.extend_from_slice(&chunk.file_offset.to_le_bytes());
+    out.extend_from_slice(&frame_len.to_le_bytes());
+    out.push(compression);
+    out.push(0);
+    out.extend_from_slice(&frame_id.to_le_bytes());
+    out.extend_from_slice(&compressed_len.to_le_bytes());
+    out.extend_from_slice(&fragment_offset.to_le_bytes());
+    out.extend_from_slice(&(chunk.data.len() as u64).to_le_bytes());
+    out.extend_from_slice(&chunk.data);
     out
 }
 
-pub(crate) fn decode_file_segment_payload(payload: &[u8]) -> Result<Vec<DecodedFileChunk>> {
-    let count = file_segment_chunk_count(payload)?;
-    let mut chunks = Vec::with_capacity(count);
-    for_each_file_segment_chunk(payload, |chunk| {
-        chunks.push(DecodedFileChunk {
-            path: chunk.path.to_string(),
-            permissions: chunk.permissions,
-            total_len: chunk.total_len,
-            file_offset: chunk.file_offset,
-            segment_inner_offset: chunk.segment_inner_offset,
-            data: chunk.data.to_vec(),
-        });
-        Ok(())
-    })?;
-    Ok(chunks)
-}
-
-pub(crate) fn for_each_file_segment_chunk<'a>(
-    payload: &'a [u8],
-    mut visit: impl FnMut(BorrowedFileChunk<'a>) -> Result<()>,
-) -> Result<()> {
-    for_each_file_segment_chunk_inner(payload, true, &mut visit)
-}
-
-pub(crate) fn for_each_file_segment_chunk_trusted_toc<'a>(
-    payload: &'a [u8],
-    mut visit: impl FnMut(BorrowedFileChunk<'a>) -> Result<()>,
-) -> Result<()> {
-    for_each_file_segment_chunk_inner(payload, false, &mut visit)
-}
-
-fn for_each_file_segment_chunk_inner<'a>(
-    payload: &'a [u8],
-    validate_metadata: bool,
-    visit: &mut impl FnMut(BorrowedFileChunk<'a>) -> Result<()>,
-) -> Result<()> {
-    if payload.len() < 4 {
+pub(crate) fn decode_file_fragment_payload(payload: &[u8]) -> Result<DecodedFileChunk> {
+    if payload.len() < 2 {
         return Err(Error::CorruptRecord);
     }
-    let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-    let mut offset = 4usize;
-    for _ in 0..count {
-        if offset + 2 > payload.len() {
-            return Err(Error::CorruptRecord);
-        }
-        let path_len = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap()) as usize;
-        offset += 2;
-        if offset + path_len + 28 > payload.len() {
-            return Err(Error::CorruptRecord);
-        }
-        let path = std::str::from_utf8(&payload[offset..offset + path_len])
-            .map_err(|_| Error::CorruptRecord)?;
-        if validate_metadata {
-            validate_path(path)?;
-        }
-        offset += path_len;
-        let permissions = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
-        let permissions = if validate_metadata {
-            validate_permissions(permissions)?
-        } else {
-            permissions
-        };
-        offset += 4;
-        let total_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-        let file_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-        let data_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-        let data_len = usize::try_from(data_len).map_err(|_| Error::CorruptRecord)?;
-        if offset + data_len > payload.len() {
-            return Err(Error::CorruptRecord);
-        }
-        let segment_inner_offset = offset as u64;
-        let data = &payload[offset..offset + data_len];
-        offset += data_len;
-        visit(BorrowedFileChunk {
-            path,
-            permissions,
-            total_len,
-            file_offset,
-            segment_inner_offset,
-            data,
-        })?;
-    }
-    if offset != payload.len() {
+    let path_len = u16::from_le_bytes(payload[0..2].try_into().unwrap()) as usize;
+    if payload.len() < 2 + path_len + 4 + 8 * 6 + 2 {
         return Err(Error::CorruptRecord);
     }
-    Ok(())
-}
-
-pub(crate) fn file_segment_chunk_count(payload: &[u8]) -> Result<usize> {
-    if payload.len() < 4 {
+    let mut offset = 2;
+    let path = std::str::from_utf8(&payload[offset..offset + path_len])
+        .map_err(|_| Error::CorruptRecord)?;
+    validate_path(path)?;
+    offset += path_len;
+    let permissions = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+    let permissions = validate_permissions(permissions)?;
+    offset += 4;
+    let total_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+    let file_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+    let len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+    let compression = payload[offset];
+    offset += 2;
+    let frame_id = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+    let compressed_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+    let fragment_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+    let data_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+    let data_len = usize::try_from(data_len).map_err(|_| Error::CorruptRecord)?;
+    if offset + data_len != payload.len() {
         return Err(Error::CorruptRecord);
     }
-    Ok(u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize)
+    Ok(DecodedFileChunk {
+        path: path.to_string(),
+        permissions,
+        total_len,
+        file_offset,
+        len,
+        compressed_len,
+        compression,
+        frame_id,
+        fragment_offset,
+        data: payload[offset..].to_vec(),
+    })
 }
 
 pub(crate) fn encode_symlink_payload(path: &str, target: &str) -> Vec<u8> {

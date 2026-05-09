@@ -1,8 +1,8 @@
 use crate::constants::DEFAULT_MAX_SEGMENT_LOGICAL_BYTES;
 use crate::{Error, Result};
 
-const COMPRESSION_NONE: u8 = 0;
-const COMPRESSION_ZSTD: u8 = 1;
+pub(crate) const COMPRESSION_NONE: u8 = 0;
+pub(crate) const COMPRESSION_ZSTD: u8 = 1;
 const MAX_DECOMPRESSED_SEGMENT_BODY_BYTES: u64 = DEFAULT_MAX_SEGMENT_LOGICAL_BYTES as u64;
 const MIN_INCOMPRESSIBLE_CHECK_BYTES: usize = 64 * 1024;
 const INCOMPRESSIBLE_SAMPLE_BYTES: usize = 16 * 1024;
@@ -64,6 +64,34 @@ fn zstd_encode(payload: &[u8]) -> Vec<u8> {
 
 fn zstd_decode(stored: &[u8]) -> Result<Vec<u8>> {
     oxiarc_zstd::decode_all(stored).map_err(|_| Error::CorruptRecord)
+}
+
+pub(crate) fn encode_file_frame(payload: &[u8], skip_compression: bool) -> (u8, Vec<u8>) {
+    if skip_compression || looks_incompressible(payload) {
+        return (COMPRESSION_NONE, payload.to_vec());
+    }
+    let compressed = zstd_encode(payload);
+    if compressed.len() < payload.len() {
+        (COMPRESSION_ZSTD, compressed)
+    } else {
+        (COMPRESSION_NONE, payload.to_vec())
+    }
+}
+
+pub(crate) fn decode_file_frame(
+    algorithm: u8,
+    stored: &[u8],
+    expected_len: u64,
+) -> Result<Vec<u8>> {
+    let decoded = match algorithm {
+        COMPRESSION_NONE => stored.to_vec(),
+        COMPRESSION_ZSTD => zstd_decode(stored)?,
+        _ => return Err(Error::CorruptRecord),
+    };
+    if decoded.len() as u64 != expected_len {
+        return Err(Error::CorruptRecord);
+    }
+    Ok(decoded)
 }
 
 pub(crate) fn looks_incompressible(payload: &[u8]) -> bool {

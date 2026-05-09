@@ -273,14 +273,14 @@ Conclusion:
 - `toc_structure/separator_update_5000` regressed in this run, so future TOC
   profiling should verify whether that is noise, cache state, or a real
   compression-level interaction.
-- Keep level 1 as the default unless production-size vault benchmarks show a
+- Keep level 1 as the default unless production-size lockbox benchmarks show a
   meaningful space regression.
 
 ## 2026-05-09 - Production-Scale File-Backed Compression Check
 
 Description: ran the file-backed performance example against production-sized
 inputs after profiling. The initial 1 GiB check showed that compression was not
-reducing vault size for large files because chunks were sized by uncompressed
+reducing lockbox size for large files because chunks were sized by uncompressed
 payload and every physical segment page is fixed at 8 MiB. Added a stronger
 test that compares fixed-page usage for compressible and high-entropy large
 files, then changed large-file chunking so a compressed segment page can
@@ -326,12 +326,12 @@ Environment:
 - Host: `Linux slayer4 6.11.0-26-generic x86_64`
 - CPU: `AMD Ryzen 7 3700X 8-Core Processor`, 8 cores / 16 threads
 - Rust: `rustc 1.94.1 (e408947bf 2026-03-25)`
-- Backend: file-backed vault storage
+- Backend: file-backed lockbox storage
 - Profile artifact: `rust/target/flamegraph-file-small-50k.svg`
 
 Results after compressed logical chunking:
 
-| Scenario | Logical bytes | Vault bytes | Add | Commit | Extract/Delete | Range read | Ratio |
+| Scenario | Logical bytes | Lockbox bytes | Add | Commit | Extract/Delete | Range read | Ratio |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 GiB zero large file | 1,073,741,824 | 159,383,616 | 2.770s | 15.158ms | 2.454s | 112.452ms | 0.148 |
 | 1 GiB randomish large file | 1,073,741,824 | 1,098,907,712 | 6.412s | 17.466ms | 1.787s | 6.749ms | 1.023 |
@@ -341,7 +341,7 @@ Results after compressed logical chunking:
 Conclusion:
 
 - The old large-file behavior failed a meaningful compression standard:
-  1 GiB zero and 1 GiB randomish files both used the same vault size.
+  1 GiB zero and 1 GiB randomish files both used the same lockbox size.
 - The new behavior gives real page-count savings for compressible large files,
   but the fixed 8 MiB physical page design creates a compression floor. With
   the current 64 MiB logical cap, the best possible ratio for a huge perfectly
@@ -374,3 +374,186 @@ Criterion comparison after the compressed logical chunking change:
 The earlier TOC separator regression did not reproduce in this run. The
 remaining large-file regressions are the expected cost of testing and adapting
 larger logical chunks before falling back for high-entropy data.
+
+## 2026-05-09 - Page-Packed File Frames and Object-Indexed Cache
+
+Description: after moving to the final page-packed file-data model, reran the
+production-scale file-backed example. The first post-format run showed the
+right compression behavior for highly compressible data, but exposed two
+performance issues: page-fit checks were doing full encode/encrypt/compress
+work for every tentative file fragment, and small-file extraction scanned every
+object in a cached page for each file. Replaced tentative fit checks with a
+fixed page-budget calculation, tuned large-file frame size so high-entropy
+frames pack tightly into 8 MiB pages, and added an object-id index to cached
+decoded pages.
+
+Commands:
+
+```bash
+cd rust
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=large \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_LARGE_BYTES=1073741824 \
+LOCKBOX_PERF_PATTERN=zero \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=large \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_LARGE_BYTES=1073741824 \
+LOCKBOX_PERF_PATTERN=randomish \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=small \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_FILES=100000 \
+LOCKBOX_PERF_FILE_BYTES=1024 \
+LOCKBOX_PERF_EXTRACT=memory \
+LOCKBOX_PERF_EXTRACT_REPEAT=5 \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=append-delete \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_INITIAL_FILES=50000 \
+LOCKBOX_PERF_APPEND_FILES=10000 \
+LOCKBOX_PERF_FILE_BYTES=2048 \
+cargo run -p lockbox_core --example perf --release
+```
+
+Environment:
+
+- Host: `Linux slayer4 6.11.0-26-generic x86_64`
+- CPU: `AMD Ryzen 7 3700X 8-Core Processor`, 8 cores / 16 threads
+- Rust: `rustc 1.94.1 (e408947bf 2026-03-25)`
+- Backend: file-backed lockbox storage
+- Scratch directory: `rust/.tmp-bench`
+- Verification: `cargo test --workspace` before this optimization, and
+  `cargo test -p lockbox_core` after the optimization
+
+Pre-fix observations from this run:
+
+| Scenario | Result |
+| --- | --- |
+| 1 GiB randomish large file | 37.103s add, 1,249,902,656 bytes, 1.164 ratio |
+| 20k x 1 KiB files, one memory extract | 28.476s extract |
+| 100k x 1 KiB files, 5 memory extracts | aborted after several minutes |
+
+Results after page-budget fitting and object-indexed cache:
+
+| Scenario | Logical bytes | Lockbox bytes | Add | Commit | Extract/Delete | Range read | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 GiB zero large file | 1,073,741,824 | 25,165,888 | 842.507ms | 8.712ms | 675.549ms | 962.597us | 0.023 |
+| 1 GiB randomish large file | 1,073,741,824 | 1,098,907,712 | 5.919s | 9.240ms | 1.371s | 1.882ms | 1.023 |
+| 100k x 1 KiB files, 5 memory extracts | 102,400,000 | 50,331,712 | 216.496ms | 1.433s | 800.422ms | n/a | 0.492 |
+| 50k initial + 10k append/delete/replace | 122,880,000 | 58,720,320 | 23.830ms | 467.940ms | 26.019ms | n/a | 0.478 |
+
+Comparison to the previous production-scale file-backed run:
+
+| Scenario | Previous | New | Change |
+| --- | ---: | ---: | ---: |
+| 1 GiB zero add | 2.770s | 842.507ms | -69.6% |
+| 1 GiB zero extract | 2.454s | 675.549ms | -72.5% |
+| 1 GiB zero lockbox bytes | 159,383,616 | 25,165,888 | -84.2% |
+| 1 GiB randomish add | 6.412s | 5.919s | -7.7% |
+| 1 GiB randomish ratio | 1.023 | 1.023 | flat |
+| 100k small-file extract x5 | 612.156ms | 800.422ms | +30.8% |
+| 100k small-file lockbox bytes | 142,606,400 | 50,331,712 | -64.7% |
+| Append/delete commit | 516.788ms | 467.940ms | -9.5% |
+| Append/delete lockbox bytes | 184,549,440 | 58,720,320 | -68.2% |
+
+Conclusion:
+
+- The final page-packed model removes the fixed-page compression floor for
+  highly compressible large files while preserving high-entropy size behavior.
+- Page-budget fitting removes encode/encrypt/compress work from tentative
+  packing checks; this was the main large-file write regression.
+- Object-indexed decoded pages remove the O(files x objects-per-page) small-file
+  extraction path. A 20k-file extraction dropped from 28.476s to 31.065ms.
+- Small-file extraction is slightly slower than the previous 100k baseline but
+  uses far less disk, because many tiny files now co-reside in fewer physical
+  pages. The remaining extraction cost is acceptable for this run, but should be
+  watched in future cold-cache directory extraction benchmarks.
+
+## 2026-05-10 - Archive Compression Comparison
+
+Description: compared the current lockbox page-packed compression behavior with
+common archive formats on the same local corpus classes. The corpus was kept
+locally under `rust/.tmp-archive-compare` for follow-up inspection. Large
+lockbox inputs were generated with the performance harness. Traditional archive
+inputs were real files/directories so the tools could run normally.
+
+Commands:
+
+```bash
+cd rust
+mkdir -p .tmp-archive-compare/{zero,random,small}
+truncate -s 1073741824 .tmp-archive-compare/zero/blob.bin
+
+cd .tmp-archive-compare/zero
+zip -q -9 zero.zip blob.bin
+tar --zstd -cf zero.tar.zst blob.bin
+7z a -bd -mx=9 zero.7z blob.bin
+
+cd ../random
+# Corpus generated as 1 GiB of high-entropy bytes.
+zip -q -9 random.zip blob.bin
+tar --zstd -cf random.tar.zst blob.bin
+7z a -bd -mx=9 random.7z blob.bin
+
+cd ../small
+# 100k files, each 1 KiB of repeated bytes.
+zip -q -9 -r small.zip .
+tar --zstd -cf small.tar.zst --exclude=small.tar.zst --exclude=small.zip --exclude=small.7z .
+7z a -bd -mx=9 -xr!small.zip -xr!small.tar.zst -xr!small.7z small.7z .
+```
+
+Environment:
+
+- Host: `Linux slayer4 6.11.0-26-generic x86_64`
+- CPU: `AMD Ryzen 7 3700X 8-Core Processor`, 8 cores / 16 threads
+- Rust: `rustc 1.94.1 (e408947bf 2026-03-25)`
+- Tools: `/usr/bin/zip`, `/usr/bin/zstd`, `/usr/bin/tar`, `/usr/bin/7z`
+- Local corpus path retained: `rust/.tmp-archive-compare`
+
+Results:
+
+| Corpus | Tool | Archive bytes | Ratio | Time |
+| --- | --- | ---: | ---: | ---: |
+| 1 GiB zero file | lockbox | 25,165,888 | 0.023 | 0.822s add |
+| 1 GiB zero file | ZIP `-9` | 1,042,217 | 0.001 | 4.11s |
+| 1 GiB zero file | tar.zst | 33,761 | 0.00003 | 1.66s |
+| 1 GiB zero file | 7z `-mx=9` | 156,739 | 0.00015 | 3.95s |
+| 1 GiB high-entropy file | lockbox | 1,098,907,712 | 1.023 | 5.871s add |
+| 1 GiB high-entropy file | ZIP `-9` | 1,073,915,736 | 1.000 | 24.94s |
+| 1 GiB high-entropy file | tar.zst | 1,073,766,937 | 1.000 | 1.38s |
+| 1 GiB high-entropy file | 7z `-mx=9` | 1,073,808,403 | 1.000 | 42.43s |
+| 100k x 1 KiB repeated files | lockbox | 50,331,712 | 0.492 | 1.329s commit |
+| 100k x 1 KiB repeated files | ZIP `-9` | 16,700,539 | 0.163 | 9.16s |
+| 100k x 1 KiB repeated files | tar.zst | 1,113,522 | 0.011 | 2.87s |
+| 100k x 1 KiB repeated files | 7z `-mx=9` | 288,304 | 0.003 | 4.60s |
+
+Conclusion:
+
+- ZIP, tar.zst, and 7z beat lockbox on extreme repeated data because they store
+  variable-length compressed archive streams. Lockbox deliberately stores fixed
+  encrypted pages with recoverable object boundaries.
+- Lockbox is competitive on high-entropy size and much faster than ZIP/7z for
+  the measured high-entropy write path, but tar.zst is faster when encryption,
+  random access, recovery, and key management are not required.
+- The many-small-file repeated corpus shows the expected tradeoff: lockbox is
+  faster than ZIP in this run and far smaller than raw data, but whole-archive
+  compressors win the ratio test by exploiting repetition across file and
+  metadata boundaries.
+- Compression regression coverage now lives in
+  `rust/lockbox_core/tests/compression_regression.rs`. The tests are ignored by
+  default to keep local CI fast, and GitHub Actions runs them explicitly in the
+  `compression regression corpus` job.
+- The GitHub job stores deterministic source corpus files in `actions/cache`
+  under `rust/.ci-compression-corpus`, keyed by
+  `LOCKBOX_COMPRESSION_CORPUS_VERSION`. On a cache miss it rebuilds the corpus
+  with `cargo run --release -p lockbox_core --example compression_corpus --
+  .ci-compression-corpus`, then runs the ignored regression tests against that
+  cached corpus.

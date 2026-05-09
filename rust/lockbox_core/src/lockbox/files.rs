@@ -1,19 +1,23 @@
 use std::io::{Cursor, Read, Write};
 
 use super::Lockbox;
-use crate::constants::{
-    DEFAULT_FILE_PERMISSIONS, DEFAULT_MAX_SEGMENT_BODY_BYTES, DEFAULT_MAX_SEGMENT_LOGICAL_BYTES,
-};
-use crate::file_chunk::{FileChunk, PendingFileChunk};
-use crate::format::{decode_file_segment_payload, encode_file_segment_payload};
+use crate::compression::{decode_file_frame, encode_file_frame};
+use crate::constants::{DEFAULT_FILE_PERMISSIONS, DEFAULT_MAX_SEGMENT_BODY_BYTES};
+use crate::file_chunk::{FileChunk, FileFragment, PendingFileChunk};
+use crate::format::{decode_file_fragment_payload, encode_file_fragment_payload};
 use crate::logical_path::{canonicalize_api_path as canonicalize_path, LogicalPath};
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
-use crate::record::RecordKind;
 use crate::security::validate_permissions;
+use crate::segment_page::{
+    encoded_object_len, uncompressed_objects_fit, SegmentObject, SegmentObjectKind,
+    DEFAULT_SEGMENT_PAGE_BYTES,
+};
 use crate::{Error, Result};
 
 const SMALL_FILE_PACKING_LIMIT: usize = 1024 * 1024;
+const FILE_FRAME_BYTES: usize = 1020 * 1024;
+const MAX_FRAGMENT_BYTES: usize = DEFAULT_MAX_SEGMENT_BODY_BYTES - 64 * 1024;
 
 impl Lockbox {
     pub fn put_file(&mut self, path: &str, data: &[u8]) -> Result<()> {
@@ -51,36 +55,48 @@ impl Lockbox {
 
         let mut chunks = Vec::new();
         let mut file_offset = 0u64;
-        let chunk_target = if likely_incompressible_path(&path) {
-            DEFAULT_MAX_SEGMENT_BODY_BYTES
-        } else {
-            DEFAULT_MAX_SEGMENT_LOGICAL_BYTES
-        };
-        let mut buffer = vec![0; chunk_target];
+        let mut writer = FilePageWriter::new(self);
+        let skip_compression = likely_incompressible_path(&path);
+        let mut buffer = vec![0; FILE_FRAME_BYTES];
         loop {
             let read = read_next_chunk(&mut reader, &mut buffer)?;
             if read == 0 {
                 if file_offset == 0 {
-                    self.write_file_chunk(&path, permissions, 0, &[], &mut chunks)?;
+                    writer.write_frame(
+                        &path,
+                        permissions,
+                        0,
+                        0,
+                        &[],
+                        skip_compression,
+                        &mut chunks,
+                    )?;
                 }
                 break;
             }
-            self.write_file_chunk_adaptive(
+            writer.write_frame(
                 &path,
                 permissions,
+                0,
                 file_offset,
                 &buffer[..read],
+                skip_compression,
                 &mut chunks,
             )?;
             file_offset += read as u64;
         }
+        writer.finish(&mut chunks)?;
 
         let dirty_path = path.clone();
         let entry = ManifestEntry {
             path,
             len: file_offset,
-            record_offset: chunks.first().map(|chunk| chunk.record_offset).unwrap_or(0),
-            record_len: chunks.first().map(|chunk| chunk.record_len).unwrap_or(0),
+            record_offset: chunks
+                .first()
+                .and_then(|chunk| chunk.fragments.first())
+                .map(|fragment| fragment.page_offset)
+                .unwrap_or(0),
+            record_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
             deleted: false,
             node_kind: NodeKind::File,
             permissions,
@@ -93,63 +109,6 @@ impl Lockbox {
         self.mark_toc_dirty(&dirty_path);
         self.needs_packing = true;
         Ok(())
-    }
-
-    fn write_file_chunk_adaptive(
-        &mut self,
-        path: &str,
-        permissions: u32,
-        file_offset: u64,
-        data: &[u8],
-        chunks: &mut Vec<FileChunk>,
-    ) -> Result<()> {
-        if !likely_incompressible_path(path)
-            && data.len() > DEFAULT_MAX_SEGMENT_BODY_BYTES
-            && crate::compression::looks_incompressible(data)
-        {
-            return self.write_split_file_chunks(
-                path,
-                permissions,
-                file_offset,
-                data,
-                chunks,
-                SplitStrategy::SegmentBody,
-            );
-        }
-
-        match self.write_file_chunk(path, permissions, file_offset, data, chunks) {
-            Ok(()) => Ok(()),
-            Err(err) if is_segment_page_too_large(&err) && data.len() > 1 => self
-                .write_split_file_chunks(
-                    path,
-                    permissions,
-                    file_offset,
-                    data,
-                    chunks,
-                    SplitStrategy::Halve,
-                ),
-            Err(err) => Err(err),
-        }
-    }
-
-    fn write_split_file_chunks(
-        &mut self,
-        path: &str,
-        permissions: u32,
-        file_offset: u64,
-        data: &[u8],
-        chunks: &mut Vec<FileChunk>,
-        strategy: SplitStrategy,
-    ) -> Result<()> {
-        let midpoint = split_at(data.len(), strategy);
-        self.write_file_chunk_adaptive(path, permissions, file_offset, &data[..midpoint], chunks)?;
-        self.write_file_chunk_adaptive(
-            path,
-            permissions,
-            file_offset + midpoint as u64,
-            &data[midpoint..],
-            chunks,
-        )
     }
 
     pub fn get_file(&self, path: &str) -> Result<Vec<u8>> {
@@ -180,16 +139,9 @@ impl Lockbox {
         let mut chunks = entry.chunks.clone();
         chunks.sort_by_key(|chunk| chunk.file_offset);
         for chunk in chunks {
-            let record = self.read_record(chunk.record_offset)?;
-            let decoded = decode_file_segment_payload(&record.payload)?;
-            let Some(decoded_chunk) = decoded
-                .into_iter()
-                .find(|item| item.path == path && item.file_offset == chunk.file_offset)
-            else {
-                return Err(Error::CorruptRecord);
-            };
+            let decoded_chunk = self.read_file_chunk_frame(&entry.path, entry.len, &chunk)?;
             writer
-                .write_all(&decoded_chunk.data)
+                .write_all(&decoded_chunk)
                 .map_err(|err| Error::Io(err.to_string()))?;
         }
         Ok(())
@@ -235,55 +187,48 @@ impl Lockbox {
                 continue;
             }
 
-            let record = self.read_record(chunk.record_offset)?;
-            let decoded = decode_file_segment_payload(&record.payload)?;
-            let Some(decoded_chunk) = decoded
-                .into_iter()
-                .find(|item| item.path == path && item.file_offset == chunk.file_offset)
-            else {
-                return Err(Error::CorruptRecord);
-            };
+            let decoded_chunk = self.read_file_chunk_frame(&entry.path, entry.len, &chunk)?;
 
             let copy_start = offset.max(chunk_start) - chunk_start;
             let copy_end = wanted_end.min(chunk_end) - chunk_start;
-            out.extend_from_slice(&decoded_chunk.data[copy_start as usize..copy_end as usize]);
+            out.extend_from_slice(&decoded_chunk[copy_start as usize..copy_end as usize]);
         }
         Ok(out)
     }
 
-    fn write_file_chunk(
-        &mut self,
-        path: &str,
-        permissions: u32,
-        file_offset: u64,
-        data: &[u8],
-        chunks: &mut Vec<FileChunk>,
-    ) -> Result<()> {
-        self.sequence += 1;
-        let pending = PendingFileChunk {
-            path: path.to_string(),
-            permissions,
-            total_len: 0,
-            file_offset,
-            data: data.to_vec(),
-        };
-        let segment_inner_offset = file_segment_inner_offsets(std::slice::from_ref(&pending))
-            .into_iter()
-            .next()
-            .ok_or(Error::CorruptRecord)?;
-        let payload = encode_file_segment_payload(&[pending]);
-        let record_offset =
-            self.write_object_page(RecordKind::FileSegment, self.sequence, payload)?;
-        let record_len = crate::segment_page::DEFAULT_SEGMENT_PAGE_BYTES as u64;
-        chunks.push(FileChunk {
-            record_offset,
-            record_len,
-            file_offset,
-            len: data.len() as u64,
-            segment_inner_offset,
-            segment_inner_len: data.len() as u64,
-        });
-        Ok(())
+    pub(crate) fn read_file_chunk_frame(
+        &self,
+        expected_path: &str,
+        expected_total_len: u64,
+        chunk: &FileChunk,
+    ) -> Result<Vec<u8>> {
+        let mut stored = vec![0u8; chunk.compressed_len as usize];
+        for fragment in &chunk.fragments {
+            let object = self.read_segment_object(fragment.page_offset, fragment.object_id)?;
+            let decoded = decode_file_fragment_payload(&object.payload)?;
+            if decoded.path != expected_path
+                || (decoded.total_len != 0 && decoded.total_len != expected_total_len)
+                || decoded.frame_id != chunk.frame_id
+                || decoded.file_offset != chunk.file_offset
+                || decoded.len != chunk.len
+                || decoded.compressed_len != chunk.compressed_len
+                || decoded.compression != chunk.compression
+                || decoded.fragment_offset != fragment.fragment_offset
+                || decoded.data.len() as u64 != fragment.fragment_len
+            {
+                return Err(Error::CorruptRecord);
+            }
+            let start =
+                usize::try_from(fragment.fragment_offset).map_err(|_| Error::CorruptRecord)?;
+            let end = start
+                .checked_add(decoded.data.len())
+                .ok_or(Error::CorruptRecord)?;
+            if end > stored.len() {
+                return Err(Error::CorruptRecord);
+            }
+            stored[start..end].copy_from_slice(&decoded.data);
+        }
+        decode_file_frame(chunk.compression, &stored, chunk.len)
     }
 
     fn stage_small_file(&mut self, path: &str, data: &[u8], permissions: u32) -> Result<()> {
@@ -328,21 +273,44 @@ impl Lockbox {
         }
 
         let pending = std::mem::take(&mut self.pending_small_files);
-        let mut batch = Vec::new();
-        let mut batch_size = 0usize;
+        let mut writer = FilePageWriter::new(self);
+        let mut all_chunks = Vec::new();
+        let mut updates = Vec::new();
+        let mut dirty_paths = Vec::new();
         for chunk in pending.into_values() {
-            let entry_size = 2 + chunk.path.len() + 28 + chunk.data.len();
-            if !batch.is_empty() && batch_size + entry_size > DEFAULT_MAX_SEGMENT_BODY_BYTES {
-                self.write_packed_file_segment(&batch)?;
-                batch.clear();
-                batch_size = 0;
+            let start = all_chunks.len();
+            writer.write_frame(
+                &chunk.path,
+                chunk.permissions,
+                chunk.total_len,
+                0,
+                &chunk.data,
+                likely_incompressible_path(&chunk.path),
+                &mut all_chunks,
+            )?;
+            updates.push((chunk.path, chunk.permissions, chunk.total_len, start));
+        }
+        writer.finish(&mut all_chunks)?;
+        for (path, permissions, total_len, start) in updates {
+            let chunks = all_chunks[start..start + 1].to_vec();
+            if let Some(entry) = writer.lockbox.manifest.get_mut(path.as_str()) {
+                entry.record_offset = chunks
+                    .first()
+                    .and_then(|chunk| chunk.fragments.first())
+                    .map(|fragment| fragment.page_offset)
+                    .unwrap_or(0);
+                entry.record_len = DEFAULT_SEGMENT_PAGE_BYTES as u64;
+                entry.len = total_len;
+                entry.permissions = permissions;
+                entry.chunks = chunks;
+                dirty_paths.push(entry.path.clone());
+                let entry = entry.clone();
+                writer.lockbox.add_entry_record_refs(&entry);
             }
-            batch_size += entry_size;
-            batch.push(chunk);
         }
-        if !batch.is_empty() {
-            self.write_packed_file_segment(&batch)?;
-        }
+        writer
+            .lockbox
+            .mark_toc_dirty_paths(dirty_paths.iter().map(String::as_str));
         Ok(())
     }
 
@@ -364,80 +332,47 @@ impl Lockbox {
             self.free_entry_slots(old.clone());
         }
 
-        let mut batch = Vec::new();
-        let mut batch_size = 0usize;
-        for (path, permissions, data, _) in candidates {
-            let entry_size = 2 + path.len() + 28 + data.len();
-            if !batch.is_empty() && batch_size + entry_size > DEFAULT_MAX_SEGMENT_BODY_BYTES {
-                self.write_packed_file_segment(&batch)?;
-                batch.clear();
-                batch_size = 0;
-            }
-            batch_size += entry_size;
-            batch.push(PendingFileChunk {
-                path,
-                permissions,
-                total_len: data.len() as u64,
-                file_offset: 0,
-                data,
-            });
-        }
-        if !batch.is_empty() {
-            self.write_packed_file_segment(&batch)?;
-        }
-        Ok(())
-    }
-
-    fn write_packed_file_segment(&mut self, chunks: &[PendingFileChunk]) -> Result<()> {
-        self.sequence += 1;
-        let payload = encode_file_segment_payload(chunks);
-        let inner_offsets = file_segment_inner_offsets(chunks);
-        let record_offset =
-            self.write_object_page(RecordKind::FileSegment, self.sequence, payload)?;
-        let record_len = crate::segment_page::DEFAULT_SEGMENT_PAGE_BYTES as u64;
+        let mut writer = FilePageWriter::new(self);
+        let mut all_chunks = Vec::new();
+        let mut updates = Vec::new();
         let mut dirty_paths = Vec::new();
-        let mut updated_entries = Vec::new();
-        for (chunk, segment_inner_offset) in chunks.iter().zip(inner_offsets) {
-            if let Some(entry) = self.manifest.get_mut(chunk.path.as_str()) {
-                entry.record_offset = record_offset;
-                entry.record_len = record_len;
-                entry.len = chunk.total_len;
-                entry.permissions = chunk.permissions;
-                entry.chunks = vec![FileChunk {
-                    record_offset,
-                    record_len,
-                    file_offset: chunk.file_offset,
-                    len: chunk.data.len() as u64,
-                    segment_inner_offset,
-                    segment_inner_len: chunk.data.len() as u64,
-                }];
+        for (path, permissions, data, _) in candidates {
+            let start = all_chunks.len();
+            let len = data.len() as u64;
+            writer.write_frame(
+                &path,
+                permissions,
+                len,
+                0,
+                &data,
+                likely_incompressible_path(&path),
+                &mut all_chunks,
+            )?;
+            updates.push((path, permissions, len, start));
+        }
+        writer.finish(&mut all_chunks)?;
+        for (path, permissions, len, start) in updates {
+            let chunks = all_chunks[start..start + 1].to_vec();
+            if let Some(entry) = writer.lockbox.manifest.get_mut(path.as_str()) {
+                entry.record_offset = chunks
+                    .first()
+                    .and_then(|chunk| chunk.fragments.first())
+                    .map(|fragment| fragment.page_offset)
+                    .unwrap_or(0);
+                entry.record_len = DEFAULT_SEGMENT_PAGE_BYTES as u64;
+                entry.len = len;
+                entry.permissions = permissions;
+                entry.chunks = chunks;
                 dirty_paths.push(entry.path.clone());
-                updated_entries.push(entry.clone());
+                let entry = entry.clone();
+                writer.lockbox.add_entry_record_refs(&entry);
             }
         }
-        for entry in &updated_entries {
-            self.add_entry_record_refs(entry);
-        }
-        self.mark_toc_dirty_paths(dirty_paths.iter().map(String::as_str));
+        writer
+            .lockbox
+            .mark_toc_dirty_paths(dirty_paths.iter().map(String::as_str));
         Ok(())
     }
-}
-
-fn file_segment_inner_offsets(chunks: &[PendingFileChunk]) -> Vec<u64> {
-    let mut offsets = Vec::with_capacity(chunks.len());
-    let mut offset = 4u64;
-    for chunk in chunks {
-        offset += 2 + chunk.path.len() as u64 + 4 + 8 + 8 + 8;
-        offsets.push(offset);
-        offset += chunk.data.len() as u64;
-    }
-    offsets
-}
-
-#[derive(Clone, Copy)]
-enum SplitStrategy {
-    Halve,
-    SegmentBody,
 }
 
 fn read_next_chunk(reader: &mut impl Read, buffer: &mut [u8]) -> Result<usize> {
@@ -452,22 +387,6 @@ fn read_next_chunk(reader: &mut impl Read, buffer: &mut [u8]) -> Result<usize> {
         read_total += read;
     }
     Ok(read_total)
-}
-
-fn split_at(len: usize, strategy: SplitStrategy) -> usize {
-    match strategy {
-        SplitStrategy::Halve => (len / 2).clamp(1, len - 1),
-        SplitStrategy::SegmentBody => DEFAULT_MAX_SEGMENT_BODY_BYTES.min(len - 1).max(1),
-    }
-}
-
-fn is_segment_page_too_large(err: &Error) -> bool {
-    matches!(
-        err,
-        Error::SecurityLimitExceeded(message)
-            if message.contains("segment page body exceeds fixed page size")
-                || message.contains("segment page body is too large")
-    )
 }
 
 fn likely_incompressible_path(path: &str) -> bool {
@@ -511,4 +430,193 @@ fn likely_incompressible_path(path: &str) -> bool {
             | "zip"
             | "zst"
     )
+}
+
+struct PendingPageObject {
+    chunk_index: usize,
+    fragment_offset: u64,
+    fragment_len: u64,
+    object: SegmentObject,
+}
+
+struct FilePageWriter<'a> {
+    lockbox: &'a mut Lockbox,
+    pending: Vec<PendingPageObject>,
+    pending_object_stream_len: usize,
+}
+
+impl<'a> FilePageWriter<'a> {
+    fn new(lockbox: &'a mut Lockbox) -> Self {
+        Self {
+            lockbox,
+            pending: Vec::new(),
+            pending_object_stream_len: 4,
+        }
+    }
+
+    fn write_frame(
+        &mut self,
+        path: &str,
+        permissions: u32,
+        total_len: u64,
+        file_offset: u64,
+        data: &[u8],
+        skip_compression: bool,
+        chunks: &mut Vec<FileChunk>,
+    ) -> Result<()> {
+        let (compression, stored) = encode_file_frame(data, skip_compression);
+        self.lockbox.sequence += 1;
+        let frame_id = self.lockbox.sequence;
+        let chunk_index = chunks.len();
+        chunks.push(FileChunk {
+            file_offset,
+            len: data.len() as u64,
+            compressed_len: stored.len() as u64,
+            compression,
+            frame_id,
+            fragments: Vec::new(),
+        });
+
+        if stored.is_empty() {
+            self.add_fragment(
+                path,
+                permissions,
+                total_len,
+                file_offset,
+                data.len() as u64,
+                compression,
+                frame_id,
+                0,
+                stored.len() as u64,
+                chunk_index,
+                &[],
+                chunks,
+            )?;
+            return Ok(());
+        }
+
+        let mut offset = 0usize;
+        while offset < stored.len() {
+            let end = (offset + MAX_FRAGMENT_BYTES).min(stored.len());
+            self.add_fragment(
+                path,
+                permissions,
+                total_len,
+                file_offset,
+                data.len() as u64,
+                compression,
+                frame_id,
+                offset as u64,
+                stored.len() as u64,
+                chunk_index,
+                &stored[offset..end],
+                chunks,
+            )?;
+            offset = end;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_fragment(
+        &mut self,
+        path: &str,
+        permissions: u32,
+        total_len: u64,
+        file_offset: u64,
+        frame_len: u64,
+        compression: u8,
+        frame_id: u64,
+        fragment_offset: u64,
+        compressed_len: u64,
+        chunk_index: usize,
+        fragment: &[u8],
+        chunks: &mut [FileChunk],
+    ) -> Result<()> {
+        self.lockbox.sequence += 1;
+        let object_id = self.lockbox.sequence;
+        let payload = encode_file_fragment_payload(
+            &PendingFileChunk {
+                path: path.to_string(),
+                permissions,
+                total_len,
+                file_offset,
+                data: fragment.to_vec(),
+            },
+            compression,
+            frame_id,
+            frame_len,
+            compressed_len,
+            fragment_offset,
+        );
+        let object = SegmentObject {
+            kind: SegmentObjectKind::FileData,
+            id: object_id,
+            payload,
+        };
+        let pending = PendingPageObject {
+            chunk_index,
+            fragment_offset,
+            fragment_len: fragment.len() as u64,
+            object,
+        };
+
+        let encoded_len = encoded_object_len(&pending.object)?;
+        if !self.pending.is_empty() && !self.fits_with(encoded_len)? {
+            self.flush(chunks)?;
+        }
+        if !self.fits_with(encoded_len)? {
+            return Err(Error::SecurityLimitExceeded(
+                "file fragment does not fit in a segment page".to_string(),
+            ));
+        }
+        self.pending_object_stream_len = self
+            .pending_object_stream_len
+            .checked_add(encoded_len)
+            .ok_or_else(|| Error::SecurityLimitExceeded("segment page is too large".to_string()))?;
+        self.pending.push(pending);
+        Ok(())
+    }
+
+    fn finish(&mut self, chunks: &mut [FileChunk]) -> Result<()> {
+        self.flush(chunks)
+    }
+
+    fn fits_with(&self, encoded_len: usize) -> Result<bool> {
+        let stream_len = self
+            .pending_object_stream_len
+            .checked_add(encoded_len)
+            .ok_or_else(|| Error::SecurityLimitExceeded("segment page is too large".to_string()))?;
+        Ok(uncompressed_objects_fit(
+            DEFAULT_SEGMENT_PAGE_BYTES,
+            stream_len,
+        ))
+    }
+
+    fn flush(&mut self, chunks: &mut [FileChunk]) -> Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let page_offset = self.lockbox.allocate_segment_page_offset()?;
+        let objects = self
+            .pending
+            .iter()
+            .map(|pending| pending.object.clone())
+            .collect::<Vec<_>>();
+        self.lockbox
+            .write_decoded_segment_page_at(page_offset, self.lockbox.sequence, objects)?;
+        for pending in self.pending.drain(..) {
+            if let Some(chunk) = chunks.get_mut(pending.chunk_index) {
+                chunk.fragments.push(FileFragment {
+                    page_offset,
+                    page_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
+                    object_id: pending.object.id,
+                    fragment_offset: pending.fragment_offset,
+                    fragment_len: pending.fragment_len,
+                });
+            }
+        }
+        self.pending_object_stream_len = 4;
+        Ok(())
+    }
 }

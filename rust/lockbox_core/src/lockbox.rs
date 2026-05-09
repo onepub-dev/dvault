@@ -10,8 +10,11 @@ use crate::format::{
 };
 use crate::free_index::{decode_free_index_internal, decode_free_index_leaf};
 use crate::free_slot::{FreeSlot, FreeSpace};
-use crate::key_directory::read_key_directory_from_storage;
+use crate::key_directory::{
+    best_key_directory, read_key_directory_from_storage, scan_key_directories, DecodedKeyDirectory,
+};
 use crate::key_slot::KeySlot;
+use crate::lockbox_id::LockboxId;
 use crate::logical_path::LogicalPath;
 use crate::manifest_entry::ManifestEntry;
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
@@ -22,7 +25,6 @@ use crate::segment_page::{
     SEGMENT_PAGE_MAGIC,
 };
 use crate::storage::{Storage, StorageBackend};
-use crate::vault_id::VaultId;
 use crate::{CacheLimit, CacheStats, Error, LockboxOptions, Result};
 
 mod commit;
@@ -35,7 +37,7 @@ mod mutation;
 mod recovery;
 mod symlinks;
 
-pub use key_management::UnlockedVaultKey;
+pub use key_management::UnlockedContentKey;
 
 #[derive(Debug, Clone)]
 pub struct Lockbox {
@@ -46,7 +48,8 @@ pub struct Lockbox {
     manifest_offset: u64,
     free_index_offset: u64,
     key_directory_offset: u64,
-    vault_id: VaultId,
+    key_directory_mirror_offsets: [u64; 2],
+    lockbox_id: LockboxId,
     key_slots: Vec<KeySlot>,
     manifest: BTreeMap<LogicalPath, ManifestEntry>,
     toc_root: Option<TocTreeNode>,
@@ -67,25 +70,25 @@ impl Lockbox {
     }
 
     pub fn create_with_options(key: impl AsRef<[u8]>, options: LockboxOptions) -> Self {
-        Self::create_with_vault_id_and_options(
+        Self::create_with_lockbox_id_and_options(
             key,
-            VaultId::new_random().expect("system random source failed"),
+            LockboxId::new_random().expect("system random source failed"),
             options,
         )
     }
 
-    pub fn create_with_vault_id(key: impl AsRef<[u8]>, vault_id: VaultId) -> Self {
-        Self::create_with_vault_id_and_options(key, vault_id, LockboxOptions::default())
+    pub fn create_with_lockbox_id(key: impl AsRef<[u8]>, lockbox_id: LockboxId) -> Self {
+        Self::create_with_lockbox_id_and_options(key, lockbox_id, LockboxOptions::default())
     }
 
-    pub fn create_with_vault_id_and_options(
+    pub fn create_with_lockbox_id_and_options(
         key: impl AsRef<[u8]>,
-        vault_id: VaultId,
+        lockbox_id: LockboxId,
         options: LockboxOptions,
     ) -> Self {
         let key = SecretBytes::new(key.as_ref().to_vec());
         let mut bytes = vec![0; HEADER_LEN];
-        write_header(&mut bytes, 0, 0, 0, vault_id);
+        write_header(&mut bytes, 0, 0, 0, lockbox_id);
         Self {
             storage: StorageBackend::memory(bytes),
             key,
@@ -94,7 +97,8 @@ impl Lockbox {
             manifest_offset: 0,
             free_index_offset: 0,
             key_directory_offset: 0,
-            vault_id,
+            key_directory_mirror_offsets: [0, 0],
+            lockbox_id,
             key_slots: Vec::new(),
             manifest: BTreeMap::new(),
             toc_root: None,
@@ -129,8 +133,23 @@ impl Lockbox {
     ) -> Result<Self> {
         let key = SecretBytes::new(key.as_ref().to_vec());
         let header = storage.read_at(0, HEADER_LEN)?;
-        let (header_root_offset, sequence, header_key_directory_offset, vault_id) =
-            read_header(&header)?;
+        let header_result = read_header(&header);
+        let scanned_key_directory = if header_result.is_err() {
+            let all_bytes = storage.read_all()?;
+            best_key_directory(scan_key_directories(&all_bytes, None))
+        } else {
+            None
+        };
+        let (header_root_offset, sequence, header_key_directory_offset, lockbox_id) =
+            match header_result {
+                Ok(header) => header,
+                Err(_) => {
+                    let Some(key_directory) = scanned_key_directory.as_ref() else {
+                        return Err(Error::CorruptHeader);
+                    };
+                    (0, 0, key_directory.offset, key_directory.lockbox_id)
+                }
+            };
         let mut lockbox = Self {
             storage,
             key,
@@ -139,7 +158,8 @@ impl Lockbox {
             manifest_offset: 0,
             free_index_offset: 0,
             key_directory_offset: header_key_directory_offset,
-            vault_id,
+            key_directory_mirror_offsets: [0, 0],
+            lockbox_id,
             key_slots: Vec::new(),
             manifest: BTreeMap::new(),
             toc_root: None,
@@ -172,11 +192,20 @@ impl Lockbox {
             };
             lockbox.sequence = commit_root.sequence;
             lockbox.key_directory_offset = commit_root.key_directory_offset;
+            lockbox.key_directory_mirror_offsets = commit_root.key_directory_mirror_offsets;
+            lockbox.free_index_offset = commit_root.free_index_root_offset;
+            toc_root_offset = commit_root.toc_root_offset;
+        } else if let Some((offset, commit_root)) = lockbox.find_latest_valid_commit_root()? {
+            lockbox.commit_root_offset = offset;
+            lockbox.sequence = commit_root.sequence;
+            lockbox.key_directory_offset = commit_root.key_directory_offset;
+            lockbox.key_directory_mirror_offsets = commit_root.key_directory_mirror_offsets;
             lockbox.free_index_offset = commit_root.free_index_root_offset;
             toc_root_offset = commit_root.toc_root_offset;
         }
-        lockbox.key_slots =
-            read_key_directory_from_storage(&lockbox.storage, lockbox.key_directory_offset)?;
+        lockbox.key_slots = lockbox
+            .read_best_key_directory_slots(scanned_key_directory.as_ref())?
+            .unwrap_or_default();
 
         if toc_root_offset > 0 {
             let (manifest, root, leaves) = lockbox.decode_toc_btree(toc_root_offset)?;
@@ -197,16 +226,43 @@ impl Lockbox {
         }
     }
 
-    pub fn vault_id(&self) -> VaultId {
-        self.vault_id
+    pub fn lockbox_id(&self) -> LockboxId {
+        self.lockbox_id
     }
 
-    pub fn read_vault_id(bytes: &[u8]) -> Result<VaultId> {
-        crate::header::read_vault_id(bytes)
+    pub fn read_lockbox_id(bytes: &[u8]) -> Result<LockboxId> {
+        crate::header::read_lockbox_id(bytes)
     }
 
     pub(crate) fn bytes(&self) -> Result<Vec<u8>> {
         self.storage.read_all()
+    }
+
+    fn read_best_key_directory_slots(
+        &self,
+        scanned_fallback: Option<&DecodedKeyDirectory>,
+    ) -> Result<Option<Vec<KeySlot>>> {
+        let mut directories = Vec::new();
+        for offset in [
+            self.key_directory_offset,
+            self.key_directory_mirror_offsets[0],
+            self.key_directory_mirror_offsets[1],
+        ] {
+            if offset == 0 {
+                continue;
+            }
+            if let Ok(directory) =
+                read_key_directory_from_storage(&self.storage, offset, Some(self.lockbox_id))
+            {
+                directories.push(directory);
+            }
+        }
+        if let Some(directory) = scanned_fallback {
+            if directory.lockbox_id == self.lockbox_id {
+                directories.push(directory.clone());
+            }
+        }
+        Ok(best_key_directory(directories).map(|directory| directory.slots))
     }
 
     pub(crate) fn read_record(&self, offset: u64) -> Result<DecodedRecord> {
@@ -226,6 +282,7 @@ impl Lockbox {
                 total_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
             },
             offset,
+            object_id: object.id,
             payload: object.payload.clone(),
         })
     }
@@ -242,16 +299,7 @@ impl Lockbox {
             id: sequence,
             payload,
         };
-        let page = crate::segment_page::encode_segment_page(
-            DEFAULT_SEGMENT_PAGE_BYTES,
-            self.vault_id,
-            page_offset,
-            sequence,
-            self.key.expose(),
-            std::slice::from_ref(&object),
-        )?;
-        self.write_segment_page_at(page_offset, &page)?;
-        self.cache_decoded_segment_page(page_offset, sequence, vec![object]);
+        self.write_decoded_segment_page_at(page_offset, sequence, vec![object])?;
         Ok(page_offset)
     }
 
@@ -263,7 +311,18 @@ impl Lockbox {
             &self.storage,
             offset,
             DEFAULT_SEGMENT_PAGE_BYTES,
-            self.vault_id,
+            self.lockbox_id,
+            self.key.expose(),
+        )
+    }
+
+    pub(crate) fn read_segment_object(&self, offset: u64, object_id: u64) -> Result<SegmentObject> {
+        self.segment_manager.borrow_mut().read_segment_object(
+            &self.storage,
+            offset,
+            object_id,
+            DEFAULT_SEGMENT_PAGE_BYTES,
+            self.lockbox_id,
             self.key.expose(),
         )
     }
@@ -276,43 +335,26 @@ impl Lockbox {
         }
     }
 
-    pub(crate) fn write_segment_page_at(&mut self, offset: u64, page: &[u8]) -> Result<()> {
-        if page.len() != DEFAULT_SEGMENT_PAGE_BYTES {
-            return Err(Error::CorruptRecord);
-        }
-        if offset == self.storage.len()? {
-            let appended = self
-                .segment_manager
-                .borrow_mut()
-                .append_segment_page(&mut self.storage, page)?;
-            if appended != offset {
-                return Err(Error::CorruptRecord);
-            }
-        } else {
-            self.segment_manager.borrow_mut().write_segment_page(
-                &mut self.storage,
-                offset,
-                page,
-            )?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn cache_decoded_segment_page(
+    pub(crate) fn write_decoded_segment_page_at(
         &mut self,
         offset: u64,
         sequence: u64,
         objects: Vec<SegmentObject>,
-    ) {
-        self.segment_manager.borrow_mut().insert_page(
-            offset,
-            DecodedSegmentPage {
-                page_id: offset,
-                sequence,
-                objects,
-            },
-            DEFAULT_SEGMENT_PAGE_BYTES as u64,
-        );
+    ) -> Result<()> {
+        self.segment_manager
+            .borrow_mut()
+            .write_decoded_segment_page(
+                &mut self.storage,
+                offset,
+                DEFAULT_SEGMENT_PAGE_BYTES,
+                self.lockbox_id,
+                self.key.expose(),
+                DecodedSegmentPage {
+                    page_id: offset,
+                    sequence,
+                    objects,
+                },
+            )
     }
 
     pub fn set_cache_limit(&self, limit: CacheLimit) {
@@ -592,7 +634,12 @@ fn entry_record_slots(entry: &ManifestEntry) -> Vec<(u64, u64)> {
     entry
         .chunks
         .iter()
-        .map(|chunk| (chunk.record_offset, chunk.record_len))
+        .flat_map(|chunk| {
+            chunk
+                .fragments
+                .iter()
+                .map(|fragment| (fragment.page_offset, fragment.page_len))
+        })
         .collect()
 }
 

@@ -5,6 +5,7 @@ use crate::commit_root::decode_commit_root;
 use crate::format::{
     decode_index_record, decode_index_records, decode_symlink_payload, decode_toc_node, read_header,
 };
+use crate::lockbox_id::LockboxId;
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::record::{DecodedRecord, RecordKind};
@@ -12,14 +13,13 @@ use crate::segment_page::{
     decode_segment_page, scan_segment_page_records, SegmentObjectKind, DEFAULT_SEGMENT_PAGE_BYTES,
     SEGMENT_PAGE_MAGIC,
 };
-use crate::vault_id::VaultId;
 use crate::{Entry, RecoveryReport, Result};
 
 impl Lockbox {
     pub fn recover(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
         let key = key.as_ref().to_vec();
-        let vault_id = vault_id_from_bytes_unchecked(&bytes);
-        let scan = scan_segment_page_records(&bytes, vault_id, &key);
+        let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);
+        let scan = scan_segment_page_records(&bytes, lockbox_id, &key);
         let mut manifest = BTreeMap::new();
         let mut corrupt_records = scan.corrupt_records;
         let mut manifest_recovered = false;
@@ -31,7 +31,7 @@ impl Lockbox {
                     .filter(|page| page.get(..8) == Some(SEGMENT_PAGE_MAGIC.as_slice()))
                     .ok_or(crate::Error::CorruptRecord)
                     .and_then(|page| {
-                        let decoded = decode_segment_page(page, vault_id, &key)?;
+                        let decoded = decode_segment_page(page, lockbox_id, &key)?;
                         let Some(commit_root_object) = decoded
                             .objects
                             .iter()
@@ -45,7 +45,7 @@ impl Lockbox {
                     if let Ok(decoded) = decode_toc_btree_from_offset(
                         &bytes,
                         &key,
-                        vault_id,
+                        lockbox_id,
                         commit_root.toc_root_offset,
                         0,
                     ) {
@@ -77,16 +77,15 @@ impl Lockbox {
             if entry.deleted {
                 continue;
             }
-            let complete = read_record_from_page(&bytes, &key, vault_id, entry.record_offset)
-                .ok()
-                .filter(|r| {
-                    matches!(
-                        (entry.node_kind, r.header.kind),
-                        (NodeKind::File, RecordKind::FileSegment)
-                            | (NodeKind::Symlink, RecordKind::Symlink)
-                    )
-                })
-                .is_some();
+            let complete = match entry.node_kind {
+                NodeKind::File => read_segment_file_bytes(&bytes, entry, &key, lockbox_id).is_ok(),
+                NodeKind::Symlink => {
+                    read_record_from_page(&bytes, &key, lockbox_id, entry.record_offset)
+                        .ok()
+                        .filter(|r| r.header.kind == RecordKind::Symlink)
+                        .is_some()
+                }
+            };
             if complete {
                 intact_file_count += 1;
             } else {
@@ -113,8 +112,8 @@ impl Lockbox {
 
     pub fn salvage(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Self> {
         let key_bytes = key.as_ref().to_vec();
-        let vault_id = vault_id_from_bytes_unchecked(&bytes);
-        let scan = scan_segment_page_records(&bytes, vault_id, &key_bytes);
+        let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);
+        let scan = scan_segment_page_records(&bytes, lockbox_id, &key_bytes);
         let mut recovered = Self::create(&key_bytes);
         let mut latest_paths = BTreeMap::new();
 
@@ -129,12 +128,12 @@ impl Lockbox {
                 continue;
             }
             if let Ok(record) =
-                read_record_from_page(&bytes, &key_bytes, vault_id, entry.record_offset)
+                read_record_from_page(&bytes, &key_bytes, lockbox_id, entry.record_offset)
             {
                 match record.header.kind {
                     RecordKind::FileSegment => {
                         if let Ok(file_bytes) =
-                            read_segment_file_bytes(&bytes, entry, &key_bytes, vault_id)
+                            read_segment_file_bytes(&bytes, entry, &key_bytes, lockbox_id)
                         {
                             recovered.put_file_with_permissions(
                                 &entry.path,
@@ -173,14 +172,14 @@ impl Lockbox {
 fn decode_toc_btree_from_offset(
     bytes: &[u8],
     key: &[u8],
-    vault_id: crate::VaultId,
+    lockbox_id: crate::LockboxId,
     offset: u64,
     depth: usize,
 ) -> Result<BTreeMap<String, ManifestEntry>> {
     if depth > 8 {
         return Err(crate::Error::CorruptRecord);
     }
-    let payload = read_toc_node_payload_from_bytes(bytes, key, vault_id, offset)?;
+    let payload = read_toc_node_payload_from_bytes(bytes, key, lockbox_id, offset)?;
 
     let mut manifest = BTreeMap::new();
     match decode_toc_node(&payload)? {
@@ -192,7 +191,7 @@ fn decode_toc_btree_from_offset(
         crate::format::TocNode::Internal(children) => {
             for child in children {
                 let child_manifest =
-                    decode_toc_btree_from_offset(bytes, key, vault_id, child.offset, depth + 1)?;
+                    decode_toc_btree_from_offset(bytes, key, lockbox_id, child.offset, depth + 1)?;
                 manifest.extend(child_manifest);
             }
         }
@@ -203,14 +202,14 @@ fn decode_toc_btree_from_offset(
 fn read_toc_node_payload_from_bytes(
     bytes: &[u8],
     key: &[u8],
-    vault_id: crate::VaultId,
+    lockbox_id: crate::LockboxId,
     offset: u64,
 ) -> Result<Vec<u8>> {
     if bytes.get(offset as usize..offset as usize + 8) == Some(SEGMENT_PAGE_MAGIC.as_slice()) {
         let page = bytes
             .get(offset as usize..offset as usize + DEFAULT_SEGMENT_PAGE_BYTES)
             .ok_or(crate::Error::Truncated)?;
-        let decoded = decode_segment_page(page, vault_id, key)?;
+        let decoded = decode_segment_page(page, lockbox_id, key)?;
         let Some(toc_object) = decoded.objects.iter().find(|object| {
             matches!(
                 object.kind,
@@ -228,21 +227,53 @@ fn read_segment_file_bytes(
     bytes: &[u8],
     entry: &crate::manifest_entry::ManifestEntry,
     key: &[u8],
-    vault_id: VaultId,
+    lockbox_id: LockboxId,
 ) -> Result<Vec<u8>> {
     let mut chunks = entry.chunks.clone();
     chunks.sort_by_key(|chunk| chunk.file_offset);
     let mut out = Vec::with_capacity(entry.len as usize);
     for chunk in chunks {
-        let record = read_record_from_page(bytes, key, vault_id, chunk.record_offset)?;
-        let decoded = crate::payload::decode_file_segment_payload(&record.payload)?;
-        let Some(decoded_chunk) = decoded
-            .into_iter()
-            .find(|item| item.path == entry.path && item.file_offset == chunk.file_offset)
-        else {
-            return Err(crate::Error::CorruptRecord);
-        };
-        out.extend_from_slice(&decoded_chunk.data);
+        let mut stored = vec![0u8; chunk.compressed_len as usize];
+        for fragment in &chunk.fragments {
+            let page = bytes
+                .get(
+                    fragment.page_offset as usize
+                        ..fragment.page_offset as usize + DEFAULT_SEGMENT_PAGE_BYTES,
+                )
+                .ok_or(crate::Error::Truncated)?;
+            let decoded_page = decode_segment_page(page, lockbox_id, key)?;
+            let Some(object) = decoded_page
+                .objects
+                .iter()
+                .find(|object| object.id == fragment.object_id)
+            else {
+                return Err(crate::Error::CorruptRecord);
+            };
+            let decoded = crate::format::decode_file_fragment_payload(&object.payload)?;
+            if decoded.path != entry.path
+                || (decoded.total_len != 0 && decoded.total_len != entry.len)
+                || decoded.file_offset != chunk.file_offset
+                || decoded.len != chunk.len
+                || decoded.compressed_len != chunk.compressed_len
+                || decoded.compression != chunk.compression
+                || decoded.frame_id != chunk.frame_id
+                || decoded.fragment_offset != fragment.fragment_offset
+                || decoded.data.len() as u64 != fragment.fragment_len
+            {
+                return Err(crate::Error::CorruptRecord);
+            }
+            let start = usize::try_from(fragment.fragment_offset)
+                .map_err(|_| crate::Error::CorruptRecord)?;
+            let end = start
+                .checked_add(decoded.data.len())
+                .ok_or(crate::Error::CorruptRecord)?;
+            if end > stored.len() {
+                return Err(crate::Error::CorruptRecord);
+            }
+            stored[start..end].copy_from_slice(&decoded.data);
+        }
+        let decoded = crate::compression::decode_file_frame(chunk.compression, &stored, chunk.len)?;
+        out.extend_from_slice(&decoded);
     }
     Ok(out)
 }
@@ -250,13 +281,13 @@ fn read_segment_file_bytes(
 fn read_record_from_page(
     bytes: &[u8],
     key: &[u8],
-    vault_id: VaultId,
+    lockbox_id: LockboxId,
     offset: u64,
 ) -> Result<DecodedRecord> {
     let page = bytes
         .get(offset as usize..offset as usize + DEFAULT_SEGMENT_PAGE_BYTES)
         .ok_or(crate::Error::Truncated)?;
-    let decoded = decode_segment_page(page, vault_id, key)?;
+    let decoded = decode_segment_page(page, lockbox_id, key)?;
     let Some(object) = decoded.objects.first() else {
         return Err(crate::Error::CorruptRecord);
     };
@@ -280,14 +311,15 @@ fn read_record_from_page(
             total_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
         },
         offset,
+        object_id: object.id,
         payload: object.payload.clone(),
     })
 }
 
-fn vault_id_from_bytes_unchecked(bytes: &[u8]) -> VaultId {
+fn lockbox_id_from_bytes_unchecked(bytes: &[u8]) -> LockboxId {
     bytes
         .get(40..56)
         .and_then(|bytes| bytes.try_into().ok())
-        .map(VaultId::from_bytes)
-        .unwrap_or_else(|| VaultId::from_bytes([0; 16]))
+        .map(LockboxId::from_bytes)
+        .unwrap_or_else(|| LockboxId::from_bytes([0; 16]))
 }

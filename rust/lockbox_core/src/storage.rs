@@ -199,7 +199,7 @@ impl FileStore {
             .read(true)
             .write(true)
             .open(&path)
-            .map_err(|err| Error::Io(err.to_string()))?;
+            .map_err(|err| Error::Io(format!("open {}: {err}", path.display())))?;
         Ok(Self {
             path,
             file: Arc::new(Mutex::new(file)),
@@ -217,10 +217,11 @@ impl FileStore {
             .create(true)
             .truncate(true)
             .open(&path)
-            .map_err(|err| Error::Io(err.to_string()))?;
+            .map_err(|err| Error::Io(format!("create {}: {err}", path.display())))?;
         file.write_all(initial_bytes)
-            .map_err(|err| Error::Io(err.to_string()))?;
-        file.sync_data().map_err(|err| Error::Io(err.to_string()))?;
+            .map_err(|err| Error::Io(format!("write {}: {err}", path.display())))?;
+        file.sync_data()
+            .map_err(|err| Error::Io(format!("sync {}: {err}", path.display())))?;
         Ok(Self {
             path,
             file: Arc::new(Mutex::new(file)),
@@ -237,20 +238,20 @@ impl FileStore {
 impl Storage for FileStore {
     fn len(&self) -> Result<u64> {
         Ok(fs::metadata(&self.path)
-            .map_err(|err| Error::Io(err.to_string()))?
+            .map_err(|err| Error::Io(format!("metadata {}: {err}", self.path.display())))?
             .len())
     }
 
     fn read_at(&self, offset: u64, len: usize) -> Result<Vec<u8>> {
         let mut file = self.lock_file()?;
         file.seek(SeekFrom::Start(offset))
-            .map_err(|err| Error::Io(err.to_string()))?;
+            .map_err(|err| Error::Io(format!("seek {}: {err}", self.path.display())))?;
         let mut out = vec![0; len];
         file.read_exact(&mut out).map_err(|err| {
             if err.kind() == std::io::ErrorKind::UnexpectedEof {
                 Error::Truncated
             } else {
-                Error::Io(err.to_string())
+                Error::Io(format!("read {}: {err}", self.path.display()))
             }
         })?;
         Ok(out)
@@ -260,17 +261,17 @@ impl Storage for FileStore {
         let mut file = self.lock_file()?;
         let offset = file
             .seek(SeekFrom::End(0))
-            .map_err(|err| Error::Io(err.to_string()))?;
+            .map_err(|err| Error::Io(format!("seek {}: {err}", self.path.display())))?;
         file.write_all(bytes)
-            .map_err(|err| Error::Io(err.to_string()))?;
+            .map_err(|err| Error::Io(format!("append {}: {err}", self.path.display())))?;
         Ok(offset)
     }
 
     fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
         let mut file = self.lock_file()?;
         file.seek(SeekFrom::Start(offset))
-            .map_err(|err| Error::Io(err.to_string()))?;
+            .map_err(|err| Error::Io(format!("seek {}: {err}", self.path.display())))?;
         file.write_all(bytes)
-            .map_err(|err| Error::Io(err.to_string()))
+            .map_err(|err| Error::Io(format!("write {}: {err}", self.path.display())))
     }
 }

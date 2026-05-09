@@ -10,9 +10,7 @@ use crate::free_index::{
 };
 use crate::host_path::HostPath;
 use crate::key_directory::encode_key_directory;
-use crate::segment_page::{
-    encode_segment_page, SegmentObject, SegmentObjectKind, DEFAULT_SEGMENT_PAGE_BYTES,
-};
+use crate::segment_page::{SegmentObject, SegmentObjectKind};
 use crate::storage::{Storage, StorageBackend};
 use crate::{Error, LockboxOptions, Result};
 use std::fs;
@@ -47,14 +45,14 @@ impl Lockbox {
     ) -> Result<Self> {
         let path = HostPath::new(path);
         let mut bytes = vec![0; crate::constants::HEADER_LEN];
-        let vault_id = crate::vault_id::VaultId::new_random()?;
-        write_header(&mut bytes, 0, 0, 0, vault_id);
+        let lockbox_id = crate::lockbox_id::LockboxId::new_random()?;
+        write_header(&mut bytes, 0, 0, 0, lockbox_id);
         let mut lockbox = Self::open_storage(
             StorageBackend::create_file(path.as_path(), &bytes)?,
             key,
             options,
         )?;
-        lockbox.vault_id = vault_id;
+        lockbox.lockbox_id = lockbox_id;
         Ok(lockbox)
     }
 
@@ -84,13 +82,10 @@ impl Lockbox {
         if self.toc_root.is_some() && self.dirty_toc_paths.is_empty() && self.key_slots.is_empty() {
             return Ok(());
         }
-        self.key_directory_offset = if self.key_slots.is_empty() {
-            0
-        } else {
-            let key_slots = self.key_slots.clone();
-            let key_directory = encode_key_directory(&key_slots)?;
-            self.storage.append(&key_directory)?
-        };
+        let key_directory_generation = self.sequence.saturating_add(1);
+        let key_directory_offsets = self.write_key_directory_mirrors(key_directory_generation)?;
+        self.key_directory_offset = key_directory_offsets[0];
+        self.key_directory_mirror_offsets = [key_directory_offsets[1], key_directory_offsets[2]];
         self.manifest_offset = self.commit_toc_btree()?;
         let manifest_offset = self.manifest_offset;
         self.free_index_offset = self.write_free_index()?;
@@ -100,23 +95,39 @@ impl Lockbox {
             toc_root_offset: manifest_offset,
             free_index_root_offset: self.free_index_offset,
             key_directory_offset: self.key_directory_offset,
+            key_directory_mirror_offsets: self.key_directory_mirror_offsets,
+            key_directory_generation,
             previous_commit_root_offset: self.commit_root_offset,
             flags: 0,
         });
         self.commit_root_offset = self.append_commit_root_page(commit_root_payload)?;
         let sequence = self.sequence;
         let key_directory_offset = self.key_directory_offset;
-        let vault_id = self.vault_id;
+        let lockbox_id = self.lockbox_id;
         let mut header = vec![0; crate::constants::HEADER_LEN];
         write_header(
             &mut header,
             self.commit_root_offset,
             sequence,
             key_directory_offset,
-            vault_id,
+            lockbox_id,
         );
         self.storage.write_at(0, &header)?;
         Ok(())
+    }
+
+    fn write_key_directory_mirrors(&mut self, generation: u64) -> Result<[u64; 3]> {
+        if self.key_slots.is_empty() {
+            return Ok([0, 0, 0]);
+        }
+        let key_slots = self.key_slots.clone();
+        let mut offsets = [0u64; 3];
+        for (copy_index, offset) in offsets.iter_mut().enumerate() {
+            let key_directory =
+                encode_key_directory(&key_slots, self.lockbox_id, generation, copy_index as u32)?;
+            *offset = self.storage.append(&key_directory)?;
+        }
+        Ok(offsets)
     }
 
     fn commit_toc_btree(&mut self) -> Result<u64> {
@@ -356,16 +367,7 @@ impl Lockbox {
             id: self.sequence,
             payload,
         };
-        let page = encode_segment_page(
-            DEFAULT_SEGMENT_PAGE_BYTES,
-            self.vault_id,
-            page_offset,
-            self.sequence,
-            self.key.expose(),
-            std::slice::from_ref(&object),
-        )?;
-        self.write_segment_page_at(page_offset, &page)?;
-        self.cache_decoded_segment_page(page_offset, self.sequence, vec![object]);
+        self.write_decoded_segment_page_at(page_offset, self.sequence, vec![object])?;
         Ok(page_offset)
     }
 
@@ -410,22 +412,7 @@ impl Lockbox {
             id: self.sequence,
             payload,
         };
-        let page = encode_segment_page(
-            DEFAULT_SEGMENT_PAGE_BYTES,
-            self.vault_id,
-            page_offset,
-            self.sequence,
-            self.key.expose(),
-            std::slice::from_ref(&object),
-        )?;
-        let appended = self
-            .segment_manager
-            .borrow_mut()
-            .append_segment_page(&mut self.storage, &page)?;
-        if appended != page_offset {
-            return Err(Error::CorruptRecord);
-        }
-        self.cache_decoded_segment_page(page_offset, self.sequence, vec![object]);
+        self.write_decoded_segment_page_at(page_offset, self.sequence, vec![object])?;
         Ok(page_offset)
     }
 
@@ -436,22 +423,7 @@ impl Lockbox {
             id: self.sequence,
             payload,
         };
-        let page = encode_segment_page(
-            DEFAULT_SEGMENT_PAGE_BYTES,
-            self.vault_id,
-            page_offset,
-            self.sequence,
-            self.key.expose(),
-            std::slice::from_ref(&object),
-        )?;
-        let appended = self
-            .segment_manager
-            .borrow_mut()
-            .append_segment_page(&mut self.storage, &page)?;
-        if appended != page_offset {
-            return Err(Error::CorruptRecord);
-        }
-        self.cache_decoded_segment_page(page_offset, self.sequence, vec![object]);
+        self.write_decoded_segment_page_at(page_offset, self.sequence, vec![object])?;
         Ok(page_offset)
     }
 }
@@ -462,6 +434,7 @@ struct CommitRollback {
     manifest_offset: u64,
     free_index_offset: u64,
     key_directory_offset: u64,
+    key_directory_mirror_offsets: [u64; 2],
     key_slots: Vec<crate::key_slot::KeySlot>,
     manifest: std::collections::BTreeMap<
         crate::logical_path::LogicalPath,
@@ -486,6 +459,7 @@ impl CommitRollback {
             manifest_offset: lockbox.manifest_offset,
             free_index_offset: lockbox.free_index_offset,
             key_directory_offset: lockbox.key_directory_offset,
+            key_directory_mirror_offsets: lockbox.key_directory_mirror_offsets,
             key_slots: lockbox.key_slots.clone(),
             manifest: lockbox.manifest.clone(),
             toc_root: lockbox.toc_root.clone(),
@@ -506,6 +480,7 @@ impl CommitRollback {
         lockbox.manifest_offset = self.manifest_offset;
         lockbox.free_index_offset = self.free_index_offset;
         lockbox.key_directory_offset = self.key_directory_offset;
+        lockbox.key_directory_mirror_offsets = self.key_directory_mirror_offsets;
         lockbox.key_slots = self.key_slots;
         lockbox.manifest = self.manifest;
         lockbox.toc_root = self.toc_root;
@@ -553,10 +528,11 @@ fn leaf_directory_is_compatible(old: &[TocLeaf], new: &[TocLeaf]) -> bool {
 mod tests {
     use super::*;
     use crate::constants::DEFAULT_FILE_PERMISSIONS;
-    use crate::file_chunk::FileChunk;
+    use crate::file_chunk::{FileChunk, FileFragment};
     use crate::logical_path::LogicalPath;
     use crate::manifest_entry::ManifestEntry;
     use crate::node_kind::NodeKind;
+    use crate::segment_page::DEFAULT_SEGMENT_PAGE_BYTES;
 
     #[test]
     fn compatible_toc_update_rewrites_only_changed_leaf_and_ancestors() {
@@ -630,7 +606,7 @@ mod tests {
         let page = &bytes
             [header_root_offset as usize..header_root_offset as usize + DEFAULT_SEGMENT_PAGE_BYTES];
         let decoded =
-            crate::segment_page::decode_segment_page(page, lb.vault_id, lb.key.expose()).unwrap();
+            crate::segment_page::decode_segment_page(page, lb.lockbox_id, lb.key.expose()).unwrap();
         let commit_object = decoded
             .objects
             .iter()
@@ -715,7 +691,7 @@ mod tests {
         let root_page = &bytes[lb.free_index_offset as usize
             ..lb.free_index_offset as usize + crate::segment_page::DEFAULT_SEGMENT_PAGE_BYTES];
         let decoded =
-            crate::segment_page::decode_segment_page(root_page, lb.vault_id, lb.key.expose())
+            crate::segment_page::decode_segment_page(root_page, lb.lockbox_id, lb.key.expose())
                 .unwrap();
         assert!(decoded
             .objects
@@ -788,12 +764,18 @@ mod tests {
                 symlink_target: None,
                 chunks: (0..8)
                     .map(|chunk| FileChunk {
-                        record_offset: 2_000_000 + (i * 8 + chunk) as u64,
-                        record_len: 64,
                         file_offset: chunk as u64,
                         len: 1,
-                        segment_inner_offset: 0,
-                        segment_inner_len: 1,
+                        compressed_len: 1,
+                        compression: crate::compression::COMPRESSION_NONE,
+                        frame_id: 3_000_000 + (i * 8 + chunk) as u64,
+                        fragments: vec![FileFragment {
+                            page_offset: 2_000_000 + (i * 8 + chunk) as u64,
+                            page_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
+                            object_id: 4_000_000 + (i * 8 + chunk) as u64,
+                            fragment_offset: 0,
+                            fragment_len: 1,
+                        }],
                     })
                     .collect(),
             })

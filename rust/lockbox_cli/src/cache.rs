@@ -1,4 +1,4 @@
-use lockbox_core::VaultId;
+use lockbox_core::LockboxId;
 use std::io;
 use zeroize::Zeroize;
 
@@ -19,7 +19,7 @@ use windows as platform;
 
 #[cfg(not(any(unix, windows)))]
 mod platform {
-    use lockbox_core::VaultId;
+    use lockbox_core::LockboxId;
     use std::io;
 
     pub(crate) fn serve_agent() -> io::Result<()> {
@@ -29,18 +29,18 @@ mod platform {
         ))
     }
 
-    pub(crate) fn get(_vault_id: VaultId) -> io::Result<Option<Vec<u8>>> {
+    pub(crate) fn get(_lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
         Ok(None)
     }
 
-    pub(crate) fn put(_vault_id: VaultId, _key: &[u8]) -> io::Result<()> {
+    pub(crate) fn put(_lockbox_id: LockboxId, _key: &[u8]) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "lockbox agent is not supported on this platform",
         ))
     }
 
-    pub(crate) fn forget(_vault_id: VaultId) -> io::Result<()> {
+    pub(crate) fn forget(_lockbox_id: LockboxId) -> io::Result<()> {
         Ok(())
     }
 
@@ -53,16 +53,16 @@ pub(crate) fn serve_agent() -> io::Result<()> {
     platform::serve_agent()
 }
 
-pub(crate) fn get(vault_id: VaultId) -> io::Result<Option<Vec<u8>>> {
-    platform::get(vault_id)
+pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
+    platform::get(lockbox_id)
 }
 
-pub(crate) fn put(vault_id: VaultId, key: &[u8]) -> io::Result<()> {
-    platform::put(vault_id, key)
+pub(crate) fn put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<()> {
+    platform::put(lockbox_id, key)
 }
 
-pub(crate) fn forget(vault_id: VaultId) -> io::Result<()> {
-    platform::forget(vault_id)
+pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
+    platform::forget(lockbox_id)
 }
 
 pub(crate) fn forget_all() -> io::Result<()> {
@@ -179,16 +179,16 @@ pub(crate) enum AgentRequest {
     ForgetAll,
 }
 
-pub(crate) fn encode_get(vault_id: VaultId) -> String {
-    format!("{PROTOCOL_VERSION} GET {vault_id}\n")
+pub(crate) fn encode_get(lockbox_id: LockboxId) -> String {
+    format!("{PROTOCOL_VERSION} GET {lockbox_id}\n")
 }
 
-pub(crate) fn encode_put(vault_id: VaultId, key: &[u8]) -> String {
-    format!("{PROTOCOL_VERSION} PUT {vault_id} {}\n", encode_hex(key))
+pub(crate) fn encode_put(lockbox_id: LockboxId, key: &[u8]) -> String {
+    format!("{PROTOCOL_VERSION} PUT {lockbox_id} {}\n", encode_hex(key))
 }
 
-pub(crate) fn encode_forget(vault_id: VaultId) -> String {
-    format!("{PROTOCOL_VERSION} FORGET {vault_id}\n")
+pub(crate) fn encode_forget(lockbox_id: LockboxId) -> String {
+    format!("{PROTOCOL_VERSION} FORGET {lockbox_id}\n")
 }
 
 pub(crate) fn encode_forget_all() -> &'static str {
@@ -204,14 +204,14 @@ pub(crate) fn parse_request(request: &str) -> io::Result<AgentRequest> {
     }
     let parts: Vec<&str> = request.split_whitespace().collect();
     match parts.as_slice() {
-        [version, "GET", vault_id] if *version == PROTOCOL_VERSION => {
-            Ok(AgentRequest::Get((*vault_id).to_string()))
+        [version, "GET", lockbox_id] if *version == PROTOCOL_VERSION => {
+            Ok(AgentRequest::Get((*lockbox_id).to_string()))
         }
-        [version, "PUT", vault_id, key_hex] if *version == PROTOCOL_VERSION => Ok(
-            AgentRequest::Put((*vault_id).to_string(), decode_hex(key_hex)?),
+        [version, "PUT", lockbox_id, key_hex] if *version == PROTOCOL_VERSION => Ok(
+            AgentRequest::Put((*lockbox_id).to_string(), decode_hex(key_hex)?),
         ),
-        [version, "FORGET", vault_id] if *version == PROTOCOL_VERSION => {
-            Ok(AgentRequest::Forget((*vault_id).to_string()))
+        [version, "FORGET", lockbox_id] if *version == PROTOCOL_VERSION => {
+            Ok(AgentRequest::Forget((*lockbox_id).to_string()))
         }
         [version, "FORGET_ALL"] if *version == PROTOCOL_VERSION => Ok(AgentRequest::ForgetAll),
         _ => Err(io::Error::new(
@@ -239,8 +239,8 @@ mod tests {
     #[test]
     fn protocol_parses_put_and_forget_all() {
         match parse_request("LBX1 PUT vault 616263\n").unwrap() {
-            AgentRequest::Put(vault_id, key) => {
-                assert_eq!(vault_id, "vault");
+            AgentRequest::Put(lockbox_id, key) => {
+                assert_eq!(lockbox_id, "vault");
                 assert_eq!(key, b"abc");
             }
             _ => panic!("expected PUT"),

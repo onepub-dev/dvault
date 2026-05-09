@@ -1,8 +1,9 @@
 use crate::constants::{DEFAULT_FILE_PERMISSIONS, DEFAULT_SYMLINK_PERMISSIONS};
-use crate::file_chunk::FileChunk;
+use crate::file_chunk::{FileChunk, FileFragment};
+use crate::format::decode_file_fragment_payload;
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
-use crate::payload::{decode_delete_payloads, decode_file_segment_payload, decode_symlink_payload};
+use crate::payload::{decode_delete_payloads, decode_symlink_payload};
 use crate::record::{DecodedRecord, RecordKind};
 use crate::Result;
 
@@ -13,29 +14,31 @@ pub(crate) fn decode_index_record(record: &DecodedRecord) -> Result<Option<Manif
 pub(crate) fn decode_index_records(record: &DecodedRecord) -> Result<Vec<ManifestEntry>> {
     match record.header.kind {
         RecordKind::FileSegment => {
-            let chunks = decode_file_segment_payload(&record.payload)?;
-            let mut entries = Vec::new();
-            for chunk in chunks {
-                entries.push(ManifestEntry {
-                    path: chunk.path,
-                    len: chunk.total_len,
-                    record_offset: record.offset,
-                    record_len: record.header.total_len,
-                    deleted: false,
-                    node_kind: NodeKind::File,
-                    permissions: chunk.permissions,
-                    symlink_target: None,
-                    chunks: vec![FileChunk {
-                        record_offset: record.offset,
-                        record_len: record.header.total_len,
-                        file_offset: chunk.file_offset,
-                        len: chunk.data.len() as u64,
-                        segment_inner_offset: chunk.segment_inner_offset,
-                        segment_inner_len: chunk.data.len() as u64,
+            let chunk = decode_file_fragment_payload(&record.payload)?;
+            Ok(vec![ManifestEntry {
+                path: chunk.path,
+                len: chunk.total_len,
+                record_offset: record.offset,
+                record_len: record.header.total_len,
+                deleted: false,
+                node_kind: NodeKind::File,
+                permissions: chunk.permissions,
+                symlink_target: None,
+                chunks: vec![FileChunk {
+                    file_offset: chunk.file_offset,
+                    len: chunk.len,
+                    compressed_len: chunk.compressed_len,
+                    compression: chunk.compression,
+                    frame_id: chunk.frame_id,
+                    fragments: vec![FileFragment {
+                        page_offset: record.offset,
+                        page_len: record.header.total_len,
+                        object_id: record.object_id,
+                        fragment_offset: chunk.fragment_offset,
+                        fragment_len: chunk.data.len() as u64,
                     }],
-                });
-            }
-            Ok(entries)
+                }],
+            }])
         }
         RecordKind::Symlink => {
             let (path, target) = decode_symlink_payload(&record.payload)?;

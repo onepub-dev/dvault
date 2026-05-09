@@ -1,18 +1,12 @@
 use super::Lockbox;
-use crate::fast_hash::FastBuildHasher;
-use crate::format::{file_segment_chunk_count, for_each_file_segment_chunk_trusted_toc};
 use crate::host_path::HostPath;
 use crate::logical_path::{canonicalize_stored_path, validate_symlink_paths as validate_symlink};
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::{Error, ExtractPolicy, ExtractedFile, ExtractedNode, ExtractedSymlink, Result};
-use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-
-type PathIds<'a> = HashMap<&'a str, u64, FastBuildHasher>;
-type DecodedSegmentCache = HashMap<u64, Vec<(u128, Vec<u8>)>, FastBuildHasher>;
 
 impl Lockbox {
     pub fn extract_all(&self, policy: &ExtractPolicy) -> Result<Vec<ExtractedFile>> {
@@ -32,9 +26,7 @@ impl Lockbox {
 
         let mut total = 0u64;
         let mut extracted = Vec::with_capacity(live_entries.len());
-        let path_ids = build_path_ids(&live_entries);
-        let mut cache = HashMap::with_hasher(FastBuildHasher::default());
-        for (path_id, entry) in live_entries.into_iter().enumerate() {
+        for entry in live_entries {
             if entry.len > policy.max_file_bytes {
                 return Err(Error::SecurityLimitExceeded(format!(
                     "{} is {} bytes, limit is {}",
@@ -50,8 +42,7 @@ impl Lockbox {
                     policy.max_total_bytes
                 )));
             }
-            let bytes =
-                self.read_file_entry_cached(entry, path_id as u64, &path_ids, &mut cache)?;
+            let bytes = self.read_file_entry_cached(entry)?;
             if bytes.len() as u64 != entry.len {
                 return Err(Error::CorruptRecord);
             }
@@ -81,9 +72,7 @@ impl Lockbox {
 
         let mut total = 0u64;
         let mut extracted = Vec::with_capacity(live_entries.len());
-        let path_ids = build_path_ids(&live_entries);
-        let mut cache = HashMap::with_hasher(FastBuildHasher::default());
-        for (path_id, entry) in live_entries.into_iter().enumerate() {
+        for entry in live_entries {
             match entry.node_kind {
                 NodeKind::File => {
                     if entry.len > policy.max_file_bytes {
@@ -101,8 +90,7 @@ impl Lockbox {
                             policy.max_total_bytes
                         )));
                     }
-                    let bytes =
-                        self.read_file_entry_cached(entry, path_id as u64, &path_ids, &mut cache)?;
+                    let bytes = self.read_file_entry_cached(entry)?;
                     extracted.push(ExtractedNode::File(ExtractedFile {
                         path: entry.path.clone(),
                         bytes,
@@ -179,24 +167,15 @@ impl Lockbox {
         policy: &ExtractPolicy,
     ) -> Result<()> {
         let live_entries = self.validate_extract_plan(policy)?;
-        let path_ids = build_path_ids(&live_entries);
         if self.should_extract_files_in_parallel(&live_entries) {
             self.extract_entries_to_directory_parallel(destination, policy, &live_entries)?;
             return Ok(());
         }
-        let mut cache = HashMap::with_hasher(FastBuildHasher::default());
         for (index, entry) in live_entries.into_iter().enumerate() {
             match entry.node_kind {
                 NodeKind::File => {
                     let out_path = checked_destination(destination, &entry.path)?;
-                    self.extract_file_entry_to_path(
-                        entry,
-                        &out_path,
-                        policy,
-                        index as u64,
-                        &path_ids,
-                        &mut cache,
-                    )?;
+                    self.extract_file_entry_to_path(entry, &out_path, policy, index as u64)?;
                 }
                 NodeKind::Symlink => {
                     if !policy.restore_symlinks {
@@ -244,8 +223,8 @@ impl Lockbox {
             .iter()
             .copied()
             .filter(|entry| entry.node_kind == NodeKind::File)
+            .enumerate()
             .collect();
-        let path_ids = build_path_ids(&file_entries);
         let workers = std::thread::available_parallelism()
             .map(|count| count.get())
             .unwrap_or(1)
@@ -257,18 +236,14 @@ impl Lockbox {
             let mut handles = Vec::new();
             for chunk in file_entries.chunks(chunk_size) {
                 let worker = self.clone();
-                let path_ids = &path_ids;
                 handles.push(scope.spawn(move || {
-                    let mut cache = HashMap::with_hasher(FastBuildHasher::default());
-                    for entry in chunk {
+                    for (path_id, entry) in chunk {
                         let out_path = checked_destination(destination, &entry.path)?;
                         worker.extract_file_entry_to_path(
                             entry,
                             &out_path,
                             policy,
-                            path_id_for(entry, path_ids)?,
-                            path_ids,
-                            &mut cache,
+                            *path_id as u64,
                         )?;
                     }
                     Ok(())
@@ -367,8 +342,6 @@ impl Lockbox {
         out_path: &Path,
         policy: &ExtractPolicy,
         path_id: u64,
-        path_ids: &PathIds<'_>,
-        cache: &mut DecodedSegmentCache,
     ) -> Result<()> {
         let parent = out_path
             .parent()
@@ -390,9 +363,7 @@ impl Lockbox {
                 }
                 Err(err) => return Err(Error::Io(err.to_string())),
             };
-            if let Err(err) =
-                self.write_file_entry_cached(entry, path_id, path_ids, &mut out, cache)
-            {
+            if let Err(err) = self.write_file_entry_cached(entry, &mut out) {
                 let _ = fs::remove_file(out_path);
                 return Err(err);
             }
@@ -407,9 +378,7 @@ impl Lockbox {
                 .create_new(true)
                 .open(out_path)
                 .map_err(|err| Error::Io(err.to_string()))?;
-            if let Err(err) =
-                self.write_file_entry_cached(entry, path_id, path_ids, &mut out, cache)
-            {
+            if let Err(err) = self.write_file_entry_cached(entry, &mut out) {
                 let _ = fs::remove_file(out_path);
                 return Err(err);
             }
@@ -419,8 +388,7 @@ impl Lockbox {
         }
 
         let (temp_path, mut temp_file) = create_temp_file(parent, path_id)?;
-        let write_result =
-            self.write_file_entry_cached(entry, path_id, path_ids, &mut temp_file, cache);
+        let write_result = self.write_file_entry_cached(entry, &mut temp_file);
         if let Err(err) = write_result {
             let _ = fs::remove_file(&temp_path);
             return Err(err);
@@ -444,10 +412,7 @@ impl Lockbox {
     fn write_file_entry_cached(
         &self,
         entry: &ManifestEntry,
-        path_id: u64,
-        path_ids: &PathIds<'_>,
         writer: &mut impl Write,
-        cache: &mut DecodedSegmentCache,
     ) -> Result<()> {
         if let Some(pending) = self.pending_small_files.get(&entry.path) {
             if pending.data.len() as u64 != entry.len {
@@ -464,35 +429,14 @@ impl Lockbox {
         }
 
         let mut written = 0u64;
-        if entry.chunks.len() == 1 {
-            let chunk = &entry.chunks[0];
-            let decoded = self.read_cached_chunk(
-                path_id,
-                path_ids,
-                chunk.record_offset,
-                chunk.file_offset,
-                cache,
-            )?;
+        let mut chunks = entry.chunks.clone();
+        chunks.sort_by_key(|chunk| chunk.file_offset);
+        for chunk in chunks {
+            let decoded = self.read_file_chunk_frame(&entry.path, entry.len, &chunk)?;
             writer
                 .write_all(&decoded)
                 .map_err(|err| Error::Io(err.to_string()))?;
             written += decoded.len() as u64;
-        } else {
-            let mut chunks = entry.chunks.clone();
-            chunks.sort_by_key(|chunk| chunk.file_offset);
-            for chunk in chunks {
-                let decoded = self.read_cached_chunk(
-                    path_id,
-                    path_ids,
-                    chunk.record_offset,
-                    chunk.file_offset,
-                    cache,
-                )?;
-                writer
-                    .write_all(&decoded)
-                    .map_err(|err| Error::Io(err.to_string()))?;
-                written += decoded.len() as u64;
-            }
         }
 
         if written != entry.len {
@@ -501,13 +445,7 @@ impl Lockbox {
         Ok(())
     }
 
-    fn read_file_entry_cached(
-        &self,
-        entry: &ManifestEntry,
-        path_id: u64,
-        path_ids: &PathIds<'_>,
-        cache: &mut DecodedSegmentCache,
-    ) -> Result<Vec<u8>> {
+    fn read_file_entry_cached(&self, entry: &ManifestEntry) -> Result<Vec<u8>> {
         if let Some(pending) = self.pending_small_files.get(&entry.path) {
             return Ok(pending.data.clone());
         }
@@ -516,71 +454,15 @@ impl Lockbox {
             return Err(Error::CorruptRecord);
         }
 
-        if entry.chunks.len() == 1 {
-            let chunk = &entry.chunks[0];
-            return self.read_cached_chunk(
-                path_id,
-                path_ids,
-                chunk.record_offset,
-                chunk.file_offset,
-                cache,
-            );
-        }
-
         let mut out = Vec::with_capacity(entry.len as usize);
         let mut chunks = entry.chunks.clone();
         chunks.sort_by_key(|chunk| chunk.file_offset);
         for chunk in chunks {
-            let decoded = self.read_cached_chunk(
-                path_id,
-                path_ids,
-                chunk.record_offset,
-                chunk.file_offset,
-                cache,
-            )?;
+            let decoded = self.read_file_chunk_frame(&entry.path, entry.len, &chunk)?;
             out.extend_from_slice(&decoded);
         }
         Ok(out)
     }
-
-    fn read_cached_chunk(
-        &self,
-        path_id: u64,
-        path_ids: &PathIds<'_>,
-        record_offset: u64,
-        file_offset: u64,
-        cache: &mut DecodedSegmentCache,
-    ) -> Result<Vec<u8>> {
-        if let std::collections::hash_map::Entry::Vacant(entry) = cache.entry(record_offset) {
-            let record = self.read_record(record_offset)?;
-            let mut by_chunk =
-                Vec::with_capacity(file_segment_chunk_count(&record.payload).unwrap_or(0));
-            for_each_file_segment_chunk_trusted_toc(&record.payload, |item| {
-                let Some(decoded_path_id) = path_ids.get(item.path).copied() else {
-                    return Err(Error::CorruptRecord);
-                };
-                by_chunk.push((
-                    chunk_key(decoded_path_id, item.file_offset),
-                    item.data.to_vec(),
-                ));
-                Ok(())
-            })?;
-            by_chunk.sort_unstable_by_key(|(key, _)| *key);
-            entry.insert(by_chunk);
-        }
-        let Some(decoded) = cache.get_mut(&record_offset) else {
-            return Err(Error::CorruptRecord);
-        };
-        let key = chunk_key(path_id, file_offset);
-        let Ok(index) = decoded.binary_search_by_key(&key, |(key, _)| *key) else {
-            return Err(Error::CorruptRecord);
-        };
-        Ok(std::mem::take(&mut decoded[index].1))
-    }
-}
-
-fn chunk_key(path_id: u64, file_offset: u64) -> u128 {
-    ((path_id as u128) << 64) | file_offset as u128
 }
 
 fn checked_destination(root: &Path, logical_path: &str) -> Result<PathBuf> {
@@ -599,21 +481,6 @@ fn checked_destination(root: &Path, logical_path: &str) -> Result<PathBuf> {
         ));
     }
     Ok(out)
-}
-
-fn build_path_ids<'a>(entries: &[&'a ManifestEntry]) -> PathIds<'a> {
-    entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| (entry.path.as_str(), index as u64))
-        .collect::<HashMap<_, _, FastBuildHasher>>()
-}
-
-fn path_id_for(entry: &ManifestEntry, path_ids: &PathIds<'_>) -> Result<u64> {
-    path_ids
-        .get(entry.path.as_str())
-        .copied()
-        .ok_or(Error::CorruptRecord)
 }
 
 fn create_temp_file(parent: &Path, index: u64) -> Result<(PathBuf, File)> {

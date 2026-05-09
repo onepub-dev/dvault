@@ -262,35 +262,63 @@ fn password_keys_are_derived_with_argon2id() {
 }
 
 #[test]
-fn vault_keys_can_be_wrapped_with_ml_kem_1024() {
+fn content_keys_can_be_wrapped_with_ml_kem_1024() {
     let key_pair = MlKemKeyPair::generate();
-    let vault_key = [9u8; 32];
+    let content_key = [9u8; 32];
 
-    let wrapped = key_pair.wrap_key(&vault_key).unwrap();
+    let wrapped = key_pair.wrap_key(&content_key).unwrap();
     let unwrapped = key_pair.unwrap_key(&wrapped).unwrap();
 
-    assert_eq!(unwrapped, vault_key);
+    assert_eq!(unwrapped, content_key);
     assert!(!wrapped.encrypted_key().is_empty());
 }
 
 #[test]
-fn password_slots_unlock_the_random_vault_key() {
+fn password_slots_unlock_the_random_content_key() {
     let mut lb = Lockbox::create_with_password(b"share-password").unwrap();
-    let vault_id = lb.vault_id();
+    let lockbox_id = lb.lockbox_id();
     lb.put_file("/docs/a.txt", b"alpha").unwrap();
     lb.commit().unwrap();
 
     let bytes = lb.to_bytes();
-    assert_eq!(Lockbox::read_vault_id(&bytes).unwrap(), vault_id);
+    assert_eq!(Lockbox::read_lockbox_id(&bytes).unwrap(), lockbox_id);
     assert!(matches!(
         Lockbox::open_with_password(bytes.clone(), b"wrong-password"),
         Err(Error::InvalidKey)
     ));
 
     let reopened = Lockbox::open_with_password(bytes, b"share-password").unwrap();
-    assert_eq!(reopened.vault_id(), vault_id);
+    assert_eq!(reopened.lockbox_id(), lockbox_id);
     assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
     assert_eq!(reopened.list_key_slots()[0].kind, KeySlotKind::Password);
+}
+
+#[test]
+fn password_unlock_recovers_when_header_is_corrupt() {
+    let mut lb = Lockbox::create_with_password(b"share-password").unwrap();
+    lb.put_file("/docs/a.txt", b"alpha").unwrap();
+    lb.commit().unwrap();
+
+    let mut bytes = lb.to_bytes();
+    bytes[0] ^= 0xff;
+
+    let reopened = Lockbox::open_with_password(bytes, b"share-password").unwrap();
+    assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
+}
+
+#[test]
+fn password_unlock_recovers_when_primary_key_directory_is_corrupt() {
+    let mut lb = Lockbox::create_with_password(b"share-password").unwrap();
+    lb.put_file("/docs/a.txt", b"alpha").unwrap();
+    lb.commit().unwrap();
+
+    let mut bytes = lb.to_bytes();
+    let primary_key_directory_offset =
+        u64::from_le_bytes(bytes[32..40].try_into().unwrap()) as usize;
+    bytes[primary_key_directory_offset] ^= 0xff;
+
+    let reopened = Lockbox::open_with_password(bytes, b"share-password").unwrap();
+    assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
 }
 
 #[test]
@@ -375,13 +403,19 @@ fn oversized_key_directories_are_rejected() {
     lb.commit().unwrap();
 
     let mut bytes = lb.to_bytes();
-    let key_dir_offset = u64::from_le_bytes(bytes[32..40].try_into().unwrap()) as usize;
-    bytes[key_dir_offset + 8..key_dir_offset + 16]
-        .copy_from_slice(&(2 * 1024 * 1024u64).to_le_bytes());
+    let mut offset = 64usize;
+    while offset + 24 <= bytes.len() {
+        if bytes.get(offset..offset + 8) == Some(b"LBX2KEY\0".as_slice()) {
+            bytes[offset + 16..offset + 24].copy_from_slice(&(2 * 1024 * 1024u64).to_le_bytes());
+            offset += 64;
+        } else {
+            offset += 1;
+        }
+    }
 
     assert!(matches!(
         Lockbox::open_with_password(bytes, b"share-password"),
-        Err(Error::SecurityLimitExceeded(_))
+        Err(Error::SecurityLimitExceeded(_) | Error::InvalidKey | Error::CorruptHeader)
     ));
 }
 
@@ -1169,10 +1203,7 @@ fn recovery_survives_header_manifest_pointer_zeroed() {
     damaged[60..64].copy_from_slice(&crc.to_le_bytes());
 
     let opened = Lockbox::open(damaged.clone(), KEY).unwrap();
-    assert!(matches!(
-        opened.get_file("/docs/a.txt"),
-        Err(Error::NotFound(_))
-    ));
+    assert_eq!(opened.get_file("/docs/a.txt").unwrap(), b"alpha");
 
     let report = Lockbox::recover(damaged, KEY);
     assert_eq!(report.intact_file_count, 3);

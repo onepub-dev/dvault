@@ -32,8 +32,8 @@ impl MlKemKeyPair {
         }
     }
 
-    pub fn wrap_key(&self, vault_key: &[u8]) -> Result<MlKemWrappedKey> {
-        self.recipient_key().wrap_key(vault_key)
+    pub fn wrap_key(&self, content_key: &[u8]) -> Result<MlKemWrappedKey> {
+        self.recipient_key().wrap_key(content_key)
     }
 
     pub fn unwrap_key(&self, wrapped: &MlKemWrappedKey) -> Result<Vec<u8>> {
@@ -84,12 +84,12 @@ impl MlKemRecipientKey {
         self.encapsulation_key.to_bytes().to_vec()
     }
 
-    pub fn wrap_key(&self, vault_key: &[u8]) -> Result<MlKemWrappedKey> {
+    pub fn wrap_key(&self, content_key: &[u8]) -> Result<MlKemWrappedKey> {
         let (ciphertext, shared_secret) = self.encapsulation_key.encapsulate();
         let mut wrapping_key = derive_wrapping_key(shared_secret.as_ref());
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&wrapping_key));
         let encrypted_key = cipher
-            .encrypt(Nonce::from_slice(&[0u8; 12]), vault_key)
+            .encrypt(Nonce::from_slice(&[0u8; 12]), content_key)
             .map_err(|_| Error::InvalidKey)?;
         wrapping_key.zeroize();
         Ok(MlKemWrappedKey {

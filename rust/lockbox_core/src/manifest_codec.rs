@@ -1,4 +1,4 @@
-use crate::file_chunk::FileChunk;
+use crate::file_chunk::{FileChunk, FileFragment};
 use crate::logical_path::{
     validate_stored_path as validate_path, validate_symlink_paths as validate_symlink,
 };
@@ -37,12 +37,21 @@ pub(crate) fn encode_manifest_entries<'a>(
         }
         out.extend_from_slice(&(entry.chunks.len() as u32).to_le_bytes());
         for chunk in &entry.chunks {
-            out.extend_from_slice(&chunk.record_offset.to_le_bytes());
-            out.extend_from_slice(&chunk.record_len.to_le_bytes());
             out.extend_from_slice(&chunk.file_offset.to_le_bytes());
             out.extend_from_slice(&chunk.len.to_le_bytes());
-            out.extend_from_slice(&chunk.segment_inner_offset.to_le_bytes());
-            out.extend_from_slice(&chunk.segment_inner_len.to_le_bytes());
+            out.extend_from_slice(&chunk.compressed_len.to_le_bytes());
+            out.push(chunk.compression);
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.push(0);
+            out.extend_from_slice(&chunk.frame_id.to_le_bytes());
+            out.extend_from_slice(&(chunk.fragments.len() as u32).to_le_bytes());
+            for fragment in &chunk.fragments {
+                out.extend_from_slice(&fragment.page_offset.to_le_bytes());
+                out.extend_from_slice(&fragment.page_len.to_le_bytes());
+                out.extend_from_slice(&fragment.object_id.to_le_bytes());
+                out.extend_from_slice(&fragment.fragment_offset.to_le_bytes());
+                out.extend_from_slice(&fragment.fragment_len.to_le_bytes());
+            }
         }
     }
     out
@@ -114,30 +123,56 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
         offset += 4;
         let mut chunks = Vec::with_capacity(chunk_count);
         for _ in 0..chunk_count {
-            if offset + 48 > payload.len() {
+            if offset + 40 > payload.len() {
                 return Err(Error::CorruptRecord);
             }
-            let record_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-            offset += 8;
-            let record_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-            offset += 8;
             let file_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
             offset += 8;
             let chunk_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
             offset += 8;
-            let segment_inner_offset =
+            let compressed_len =
                 u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
             offset += 8;
-            let segment_inner_len =
-                u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+            let compression = payload[offset];
+            offset += 4;
+            let frame_id = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
             offset += 8;
+            let fragment_count =
+                u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            let mut fragments = Vec::with_capacity(fragment_count);
+            for _ in 0..fragment_count {
+                if offset + 40 > payload.len() {
+                    return Err(Error::CorruptRecord);
+                }
+                let page_offset =
+                    u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                let page_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                let object_id = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                let fragment_offset =
+                    u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                let fragment_len =
+                    u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                fragments.push(FileFragment {
+                    page_offset,
+                    page_len,
+                    object_id,
+                    fragment_offset,
+                    fragment_len,
+                });
+            }
             chunks.push(FileChunk {
-                record_offset,
-                record_len,
                 file_offset,
                 len: chunk_len,
-                segment_inner_offset,
-                segment_inner_len,
+                compressed_len,
+                compression,
+                frame_id,
+                fragments,
             });
         }
         match node_kind {

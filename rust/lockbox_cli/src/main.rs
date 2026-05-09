@@ -42,7 +42,7 @@ fn run() -> CliResult<()> {
 
     match command.as_str() {
         "create" => {
-            let vault = require_arg(&args, 0, "vault")?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
             let (mut lb, password) = match &access {
                 Access::RawKey(key) => (Lockbox::create(key), None),
                 Access::PromptPassword => {
@@ -56,30 +56,30 @@ fn run() -> CliResult<()> {
             };
             lb.commit()?;
             match (&access, password) {
-                (Access::RawKey(key), _) => cache::put(lb.vault_id(), key)?,
+                (Access::RawKey(key), _) => cache::put(lb.lockbox_id(), key)?,
                 (_, Some(password)) => {
                     let unlocked =
                         Lockbox::unlock_with_password(&lb.to_bytes(), password.as_bytes())?;
-                    cache::put(unlocked.vault_id, unlocked.key())?;
+                    cache::put(unlocked.lockbox_id, unlocked.key())?;
                 }
                 _ => {}
             }
-            fs::write(vault, lb.to_bytes())?;
+            fs::write(lockbox_path, lb.to_bytes())?;
         }
         "open" => {
-            let vault = require_arg(&args, 0, "vault")?;
-            let bytes = fs::read(vault)?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
+            let bytes = fs::read(lockbox_path)?;
             let password = read_password("Password: ")?;
             let unlocked = Lockbox::unlock_with_password(&bytes, password.as_bytes())?;
-            cache::put(unlocked.vault_id, unlocked.key())?;
+            cache::put(unlocked.lockbox_id, unlocked.key())?;
         }
         "lock" => {
             if args.first().map(String::as_str) == Some("--all") {
                 cache::forget_all()?;
             } else {
-                let vault = require_arg(&args, 0, "vault")?;
-                let bytes = fs::read(vault)?;
-                cache::forget(Lockbox::read_vault_id(&bytes)?)?;
+                let lockbox_path = require_arg(&args, 0, "lockbox")?;
+                let bytes = fs::read(lockbox_path)?;
+                cache::forget(Lockbox::read_lockbox_id(&bytes)?)?;
             }
         }
         "keygen" => {
@@ -93,101 +93,101 @@ fn run() -> CliResult<()> {
             )?;
         }
         "open-key" => {
-            let vault = require_arg(&args, 0, "vault")?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
             let private_path = require_arg(&args, 1, "private key path")?;
-            let bytes = fs::read(vault)?;
+            let bytes = fs::read(lockbox_path)?;
             let keypair = MlKemKeyPair::from_seed_bytes(&read_hex_file(private_path)?)?;
             let unlocked = Lockbox::unlock_with_recipient(&bytes, &keypair)?;
-            cache::put(unlocked.vault_id, unlocked.key())?;
+            cache::put(unlocked.lockbox_id, unlocked.key())?;
         }
         "add-recipient" => {
-            let vault = require_arg(&args, 0, "vault")?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
             let public_path = require_arg(&args, 1, "public key path")?;
             let recipient = MlKemRecipientKey::from_bytes(&read_hex_file(public_path)?)?;
-            let mut lb = open_existing(vault, &access)?;
+            let mut lb = open_existing(lockbox_path, &access)?;
             lb.add_recipient_key(&recipient)?;
             lb.commit()?;
-            fs::write(vault, lb.to_bytes())?;
+            fs::write(lockbox_path, lb.to_bytes())?;
         }
         "list-keys" => {
-            let vault = require_arg(&args, 0, "vault")?;
-            let lb = open_existing(vault, &access)?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
+            let lb = open_existing(lockbox_path, &access)?;
             for slot in lb.list_key_slots() {
                 println!("{}\t{:?}\t{}", slot.id, slot.kind, slot.algorithm);
             }
         }
         "remove-key" => {
-            let vault = require_arg(&args, 0, "vault")?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
             let slot_id = require_arg(&args, 1, "slot id")?.parse::<u64>()?;
-            let mut lb = open_existing(vault, &access)?;
+            let mut lb = open_existing(lockbox_path, &access)?;
             lb.remove_key_slot_and_compact(slot_id)?;
-            fs::write(vault, lb.to_bytes())?;
+            fs::write(lockbox_path, lb.to_bytes())?;
         }
         "add" => {
-            let vault = require_arg(&args, 0, "vault")?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
             let source = require_arg(&args, 1, "source")?;
-            let path = require_arg(&args, 2, "vault path")?;
-            let mut lb = open_or_create(vault, &access)?;
+            let path = require_arg(&args, 2, "lockbox path")?;
+            let mut lb = open_or_create(lockbox_path, &access)?;
             add_source_path(&mut lb, Path::new(source), path)?;
             lb.commit()?;
-            fs::write(vault, lb.to_bytes())?;
+            fs::write(lockbox_path, lb.to_bytes())?;
         }
         "extract" => {
-            let vault = require_arg(&args, 0, "vault")?;
-            let lb = open_existing(vault, &access)?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
+            let lb = open_existing(lockbox_path, &access)?;
             if args.get(1).map(String::as_str) == Some("--to") {
                 let dest = require_arg(&args, 2, "destination")?;
                 let policy = extract_policy_from_args(&args[3..]);
                 lb.extract_to_directory(dest, &policy)?;
             } else {
-                let path = require_arg(&args, 1, "vault path")?;
+                let path = require_arg(&args, 1, "lockbox path")?;
                 let dest = require_arg(&args, 2, "destination")?;
                 let mut file = File::create(dest)?;
                 lb.write_file_to(path, &mut file)?;
             }
         }
         "cat" => {
-            let vault = require_arg(&args, 0, "vault")?;
-            let path = require_arg(&args, 1, "vault path")?;
-            let lb = open_existing(vault, &access)?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
+            let path = require_arg(&args, 1, "lockbox path")?;
+            let lb = open_existing(lockbox_path, &access)?;
             let stdout = io::stdout();
             let mut lock = stdout.lock();
             lb.write_file_to(path, &mut lock)?;
         }
         "list" => {
-            let vault = require_arg(&args, 0, "vault")?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
             let path = args.get(1).map(String::as_str).unwrap_or("/");
-            let lb = open_existing(vault, &access)?;
+            let lb = open_existing(lockbox_path, &access)?;
             for entry in lb.list_iter(ListOptions::new(path))? {
                 let entry = entry?;
                 println!("{}\t{}\t{}", kind_name(&entry.kind), entry.len, entry.path);
             }
         }
         "rm" => {
-            let vault = require_arg(&args, 0, "vault")?;
-            let path = require_arg(&args, 1, "vault path")?;
-            let mut lb = open_existing(vault, &access)?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
+            let path = require_arg(&args, 1, "lockbox path")?;
+            let mut lb = open_existing(lockbox_path, &access)?;
             lb.delete(path)?;
             lb.commit()?;
-            fs::write(vault, lb.to_bytes())?;
+            fs::write(lockbox_path, lb.to_bytes())?;
         }
         "rename" => {
-            let vault = require_arg(&args, 0, "vault")?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
             let from = require_arg(&args, 1, "from")?;
             let to = require_arg(&args, 2, "to")?;
-            let mut lb = open_existing(vault, &access)?;
+            let mut lb = open_existing(lockbox_path, &access)?;
             lb.rename(from, to)?;
             lb.commit()?;
-            fs::write(vault, lb.to_bytes())?;
+            fs::write(lockbox_path, lb.to_bytes())?;
         }
         "env" => run_env(&args, &access)?,
         "recover" => {
-            let vault = require_arg(&args, 0, "vault")?;
-            let bytes = fs::read(vault)?;
+            let lockbox_path = require_arg(&args, 0, "lockbox")?;
+            let bytes = fs::read(lockbox_path)?;
             let report = match &access {
                 Access::RawKey(key) => Lockbox::recover(bytes, key),
-                Access::CacheOnly => open_existing(vault, &access)?.recover_current(),
-                Access::PromptPassword => return Err("recover requires an unlocked vault".into()),
+                Access::CacheOnly => open_existing(lockbox_path, &access)?.recover_current(),
+                Access::PromptPassword => return Err("recover requires an unlocked lockbox".into()),
             };
             print!("{}", report.render(&RecoveryReportOptions::default()));
         }
@@ -198,41 +198,41 @@ fn run() -> CliResult<()> {
 
 fn run_env(args: &[String], access: &Access) -> CliResult<()> {
     let subcommand = require_arg(args, 0, "env command")?;
-    let vault = require_arg(args, 1, "vault")?;
+    let lockbox_path = require_arg(args, 1, "lockbox")?;
     match subcommand {
         "set" => {
             let name = require_arg(args, 2, "name")?;
             let value = require_arg(args, 3, "value")?;
-            let mut lb = open_or_create(vault, access)?;
+            let mut lb = open_or_create(lockbox_path, access)?;
             lb.set_env(name, value)?;
             lb.commit()?;
-            fs::write(vault, lb.to_bytes())?;
+            fs::write(lockbox_path, lb.to_bytes())?;
         }
         "get" => {
             let name = require_arg(args, 2, "name")?;
-            let lb = open_existing(vault, access)?;
+            let lb = open_existing(lockbox_path, access)?;
             if let Some(value) = lb.get_env(name)? {
                 println!("{value}");
             }
         }
         "list" => {
-            let lb = open_existing(vault, access)?;
+            let lb = open_existing(lockbox_path, access)?;
             for name in lb.list_env() {
                 println!("{name}");
             }
         }
         "export" => {
-            let lb = open_existing(vault, access)?;
+            let lb = open_existing(lockbox_path, access)?;
             for (name, value) in lb.get_all_env() {
                 println!("{name}={}", shell_quote(&value));
             }
         }
         "rm" => {
             let name = require_arg(args, 2, "name")?;
-            let mut lb = open_existing(vault, access)?;
+            let mut lb = open_existing(lockbox_path, access)?;
             lb.remove_env(name)?;
             lb.commit()?;
-            fs::write(vault, lb.to_bytes())?;
+            fs::write(lockbox_path, lb.to_bytes())?;
         }
         _ => usage(false),
     }
@@ -281,8 +281,9 @@ fn open_existing(path: &str, access: &Access) -> Result<Lockbox, Error> {
         Access::RawKey(key) => Lockbox::open(bytes, key),
         Access::PromptPassword => Err(Error::InvalidKey),
         Access::CacheOnly => {
-            let vault_id = Lockbox::read_vault_id(&bytes)?;
-            let Some(key) = cache::get(vault_id).map_err(|err| Error::Io(err.to_string()))? else {
+            let lockbox_id = Lockbox::read_lockbox_id(&bytes)?;
+            let Some(key) = cache::get(lockbox_id).map_err(|err| Error::Io(err.to_string()))?
+            else {
                 return Err(Error::InvalidKey);
             };
             Lockbox::open(bytes, key)
@@ -361,14 +362,14 @@ fn extract_policy_from_args(args: &[String]) -> ExtractPolicy {
     policy
 }
 
-fn add_source_path(lockbox: &mut Lockbox, source: &Path, vault_path: &str) -> CliResult<()> {
+fn add_source_path(lockbox: &mut Lockbox, source: &Path, lockbox_root: &str) -> CliResult<()> {
     if source.is_file() {
         let file = File::open(source)?;
-        lockbox.put_file_from_reader(vault_path, file)?;
+        lockbox.put_file_from_reader(lockbox_root, file)?;
         return Ok(());
     }
     if source.is_dir() {
-        add_directory(lockbox, source, source, vault_path)?;
+        add_directory(lockbox, source, source, lockbox_root)?;
         return Ok(());
     }
     Err(format!("unsupported source path: {}", source.display()).into())
@@ -378,26 +379,26 @@ fn add_directory(
     lockbox: &mut Lockbox,
     root: &Path,
     current: &Path,
-    vault_root: &str,
+    lockbox_root: &str,
 ) -> CliResult<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            add_directory(lockbox, root, &path, vault_root)?;
+            add_directory(lockbox, root, &path, lockbox_root)?;
         } else if file_type.is_file() {
             let relative = path.strip_prefix(root)?;
-            let vault_path = join_logical_path(vault_root, relative)?;
+            let logical_path = join_logical_path(lockbox_root, relative)?;
             let file = File::open(&path)?;
-            lockbox.put_file_from_reader(&vault_path, file)?;
+            lockbox.put_file_from_reader(&logical_path, file)?;
         }
     }
     Ok(())
 }
 
-fn join_logical_path(vault_root: &str, relative: &Path) -> CliResult<String> {
-    let mut out = vault_root.trim_end_matches('/').to_string();
+fn join_logical_path(lockbox_root: &str, relative: &Path) -> CliResult<String> {
+    let mut out = lockbox_root.trim_end_matches('/').to_string();
     if out.is_empty() {
         out.push('/');
     }
@@ -437,33 +438,33 @@ fn set_private_key_permissions(_path: &str) -> CliResult<()> {
 fn usage(verbose: bool) {
     eprintln!(
         "usage:
-  lockbox create <vault>
-  lockbox open <vault>
-  lockbox add <vault> <source> <vault-path>
-  lockbox extract <vault> <vault-path> <destination>
-  lockbox extract <vault> --to <destination> [--overwrite] [--restore-permissions]
-  lockbox cat <vault> <vault-path>
-  lockbox list <vault> [path]
-  lockbox rm <vault> <vault-path>
-  lockbox rename <vault> <from> <to>
+  lockbox create <lockbox>
+  lockbox open <lockbox>
+  lockbox add <lockbox> <source> <lockbox-path>
+  lockbox extract <lockbox> <lockbox-path> <destination>
+  lockbox extract <lockbox> --to <destination> [--overwrite] [--restore-permissions]
+  lockbox cat <lockbox> <lockbox-path>
+  lockbox list <lockbox> [path]
+  lockbox rm <lockbox> <lockbox-path>
+  lockbox rename <lockbox> <from> <to>
   lockbox env set|get|list|export|rm ...
-  lockbox recover <vault>
-  lockbox lock <vault>
+  lockbox recover <lockbox>
+  lockbox lock <lockbox>
   lockbox lock --all
   lockbox keygen <private-key> <public-key>
-  lockbox open-key <vault> <private-key>
-  lockbox add-recipient <vault> <public-key>
-  lockbox list-keys <vault>
-  lockbox remove-key <vault> <slot-id>"
+  lockbox open-key <lockbox> <private-key>
+  lockbox add-recipient <lockbox> <public-key>
+  lockbox list-keys <lockbox>
+  lockbox remove-key <lockbox> <slot-id>"
     );
 
     if verbose {
         eprintln!(
             "
 developer/testing:
-  lockbox --key <raw-vault-key> <command> ...
-  LOCKBOX_KEY=<raw-vault-key> lockbox <command> ...
-  LOCKBOX_PASSWORD=<password> lockbox open <vault>
+  lockbox --key <raw-content-key> <command> ...
+  LOCKBOX_KEY=<raw-content-key> lockbox <command> ...
+  LOCKBOX_PASSWORD=<password> lockbox open <lockbox>
   LOCKBOX_CACHE_DIR=<dir> lockbox <command> ...
 
 help:

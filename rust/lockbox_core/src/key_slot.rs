@@ -59,10 +59,10 @@ impl KeySlot {
         id: u64,
         password: &[u8],
         salt: Vec<u8>,
-        vault_key: &[u8],
+        content_key: &[u8],
     ) -> Result<Self> {
         let mut wrapping_key = derive_key_from_password(password, &salt)?;
-        let encrypted_key = encrypt_wrapped_key(&wrapping_key, vault_key)?;
+        let encrypted_key = encrypt_wrapped_key(&wrapping_key, content_key)?;
         wrapping_key.zeroize();
         Ok(Self::Password {
             id,
@@ -74,11 +74,11 @@ impl KeySlot {
     pub(crate) fn ml_kem_1024(
         id: u64,
         recipient: &MlKemRecipientKey,
-        vault_key: &[u8],
+        content_key: &[u8],
     ) -> Result<Self> {
         Ok(Self::MlKem1024 {
             id,
-            wrapped: Box::new(recipient.wrap_key(vault_key)?),
+            wrapped: Box::new(recipient.wrap_key(content_key)?),
         })
     }
 
@@ -106,10 +106,10 @@ impl KeySlot {
     }
 }
 
-pub(crate) fn encrypt_wrapped_key(wrapping_key: &[u8; 32], vault_key: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn encrypt_wrapped_key(wrapping_key: &[u8; 32], content_key: &[u8]) -> Result<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(wrapping_key));
     cipher
-        .encrypt(Nonce::from_slice(&[0u8; 12]), vault_key)
+        .encrypt(Nonce::from_slice(&[0u8; 12]), content_key)
         .map_err(|_| Error::InvalidKey)
 }
 
@@ -127,7 +127,7 @@ pub(crate) fn next_key_slot_id(slots: &[KeySlot]) -> u64 {
     slots.iter().map(KeySlot::id).max().unwrap_or(0) + 1
 }
 
-pub(crate) fn random_vault_key() -> Result<[u8; 32]> {
+pub(crate) fn random_content_key() -> Result<[u8; 32]> {
     let mut key = [0u8; 32];
     getrandom::getrandom(&mut key).map_err(|err| Error::Io(err.to_string()))?;
     Ok(key)

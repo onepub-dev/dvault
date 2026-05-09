@@ -1,9 +1,20 @@
 # Lockbox Format Notes
 
-This document records the intended pre-1.0 production format. Numeric fields are
-little endian unless stated otherwise.
+This document records the intended pre-1.0 production format. All on-disk
+numeric fields are little-endian unless stated otherwise.
 
-The physical unit of the vault is a fixed-size encrypted segment page. Higher
+Implementations must not serialize on-disk structures with native-endian
+conversions, memory transmutation, or raw struct layout. Every numeric field
+must be encoded and decoded with an explicit byte order. Language bindings
+should expose parsed APIs rather than asking callers to reinterpret raw lockbox
+bytes.
+
+The CI workflow `.github/workflows/endian-interop.yml` verifies this contract
+by transferring lockbox fixtures between Linux x64, Linux arm64, macOS arm64,
+and an emulated big-endian `s390x` environment. The big-endian job reads a
+little-endian-created fixture and emits a fixture that Linux x64 reads back.
+
+The physical unit of the lockbox is a fixed-size encrypted segment page. Higher
 level structures such as TOC nodes, file chunks, environment variables, key
 directories, free-space indexes, and commit roots are encoded as objects inside
 segment pages. Public APIs must not expose segment-page management.
@@ -22,13 +33,13 @@ offset  size  field
 16      8     latest commit-root segment page offset, or 0
 24      8     latest commit sequence
 32      8     latest public key-directory offset, or 0
-40      16    public vault UUID
+40      16    public lockbox UUID
 56      4     reserved
 60      4     checksum over bytes 0..60
 ```
 
-The vault UUID is public metadata. It exists so tools can identify a vault even
-if the file is renamed or moved. It must not be derived from file names,
+The lockbox UUID is public metadata. It exists so tools can identify a lockbox
+even if the file is renamed or moved. It must not be derived from file names,
 content, recipients, or passwords.
 
 The header checksum detects torn or malformed header updates. It is not a
@@ -36,8 +47,8 @@ security boundary. Security decisions must be based on authenticated segment
 pages and authenticated commit roots.
 
 The key-directory pointer remains in the fixed header because users need the key
-directory before the vault key is unlocked. The key directory stores only unlock
-metadata and must not contain private file metadata.
+directory before the content key is unlocked. The key directory stores only
+unlock metadata and must not contain private file metadata.
 
 ## Segment Pages
 
@@ -62,7 +73,7 @@ H       m     encrypted body
 H+m     p     zero padding to the fixed page size
 ```
 
-The nonce is generated per page write and must be unique for the vault key. It
+The nonce is generated per page write and must be unique for the content key. It
 must not be derived only from record kind, object kind, or commit sequence.
 
 Only the segment page header is public. Object kinds, object lengths, logical
@@ -71,9 +82,9 @@ selection, and file contents are inside the encrypted body.
 
 Segment page AEAD associated data includes:
 
-- vault format domain string
+- lockbox format domain string
 - fixed header version
-- vault UUID
+- lockbox UUID
 - page id
 - commit sequence
 - public flags
@@ -107,21 +118,23 @@ profile internally.
 
 ## Compressed File Extents
 
-The intended production file-data layout is page-packed compressed extents, not
-one compressed object per physical page. A fixed 8 MiB physical page is a
-container. Its encrypted body may contain:
+The production file-data layout is page-packed compressed extents, not one
+compressed object per physical page. A fixed 8 MiB physical page is a container.
+Its encrypted body may contain:
 
 - many complete compressed small files
 - many compressed chunks from one or more files
 - one fragment of a large compressed chunk
 - a mix of complete chunks and fragments, as long as the page body fits
 
-Large files should be compressed as independent bounded frames rather than one
-whole-file solid stream. A frame may span multiple physical pages, but it must
-remain independently decompressible once its page fragments have been fetched
-and decrypted. TOC chunk entries identify the logical file offset, logical
-length, compressed length, uncompressed length, frame id, and ordered physical
-page ranges needed to reassemble that frame.
+Large files are compressed as independent bounded frames rather than one
+whole-file solid stream. A frame may span multiple physical pages, but it remains
+independently decompressible once its page fragments have been fetched and
+decrypted. TOC chunk entries identify the logical file offset, logical length,
+compressed length, compression algorithm, frame id, and ordered physical page
+fragments needed to reassemble that frame. Each physical fragment reference
+contains the page offset, fixed page length, encrypted object id, compressed
+frame offset, and fragment length.
 
 This gives browser and web-service clients fast random access at frame
 granularity:
@@ -132,20 +145,31 @@ granularity:
 4. request only the physical pages containing those frame fragments
 5. decrypt the pages, reassemble the compressed frame bytes, and decompress
 
-Recovery must not depend solely on the TOC. Page fragment metadata should be
-inside encrypted page bodies and should include a stable anonymous file/content
-id, frame id, fragment index, fragment count or compressed byte range, logical
-offset, compressed length, uncompressed length, and checksums. These fields let
-recovery rebuild intact anonymous blobs or partial blobs even when path metadata
-is unavailable. Paths remain private and are restored only when the TOC is
-intact.
+Recovery does not depend solely on the TOC. File fragment metadata is inside
+encrypted page bodies and includes path, permissions, optional final file length,
+logical frame offset, frame length, compression algorithm, frame id, compressed
+frame length, compressed fragment offset, and fragment length. Streaming writes
+may store `0` for the final file length because the final length is not known
+when early frames are written; the TOC is authoritative when available, and
+recovery can still infer a best-effort length from intact frames.
 
-The current implementation still stores file-data as segment-page objects. It
-allows compressible large-file chunks to represent more logical bytes per fixed
-page, which provides real page-count savings, but it does not yet implement the
-full page-packed compressed-extent model above. Because every physical page is
-still written at 8 MiB, this interim model has a compression floor that normal
-zstd archives do not have.
+Paths remain private because both TOC entries and fragment metadata are inside
+encrypted segment page bodies. They are exposed only after the caller has
+unlocked the content key.
+
+## Page Cache Boundary
+
+Encryption and decryption are owned by the segment page cache. Higher layers
+construct or consume decoded `SegmentObject` values and are otherwise oblivious
+to encryption. On read, the cache loads fixed encrypted bytes from storage,
+authenticates and decrypts the page once, then caches the decoded page. On
+write, callers submit decoded page objects; the cache encodes, compresses,
+encrypts, writes one fixed page to storage, and stores the decoded page in cache.
+
+Raw segment encode/decode helpers are format primitives. Production read/write
+paths should route through the cache boundary. Direct raw decoding is reserved
+for recovery scans and low-level format tests, where the caller starts from
+untrusted bytes rather than from an opened lockbox.
 
 ## Objects
 
@@ -192,24 +216,35 @@ The commit root payload contains:
 ```text
 field
 commit sequence
-vault UUID
+lockbox UUID
 format parameter set id
 TOC root object reference
 free-space index root object reference
-key directory offset, or zero
+primary key-directory offset, or zero
+key-directory mirror offset A, or zero
+key-directory mirror offset B, or zero
+key-directory generation
 previous commit-root reference, or zero
 commit creation timestamp, optional and coarse
 commit flags
 ```
 
-Opening a vault reads the header, decrypts the commit-root page, validates the
-commit root, then opens the referenced TOC and free-space indexes. If the header
-is corrupt or stale, recovery may scan segment pages for valid commit roots and
-choose the highest valid sequence.
+Opening a lockbox reads the header, decrypts the commit-root page, validates
+the commit root, then opens the referenced TOC and free-space indexes. If the
+header is corrupt or stale, recovery may scan segment pages for valid commit
+roots and choose the highest valid sequence.
 
 Rollback attacks on a standalone copied file cannot be fully prevented without an
 external freshness anchor. Lockbox detects internal corruption; it cannot prove
 that an attacker has not replaced the entire file with an older valid copy.
+
+An external freshness anchor is state outside the lockbox that records the
+latest known version, generation, hash, or signed timestamp. Examples include a
+server-side object generation number, transparency log entry, signed manifest,
+append-only audit log, or application database row. Lockbox can reject stale
+internal metadata within one file by choosing the highest authenticated
+generation; only an external anchor can detect replacement of the whole file
+with an older but internally valid lockbox.
 
 ## Table Of Contents
 
@@ -271,22 +306,52 @@ published index never lists the page that stores the index itself.
 
 The key directory is public unlock metadata referenced by the fixed header and
 mirrored in the commit root. It stores only slot ids, slot kinds,
-salts/ciphertexts, public recipient wrapping data, and encrypted vault-key bytes.
+salts/ciphertexts, public recipient wrapping data, and encrypted content-key
+bytes.
 It must not store paths, file names, environment variable names, or file
 contents.
 
-The key directory is intentionally readable before the vault key is available.
-Its wrapped vault-key values are authenticated by their wrapping algorithms; its
+The key directory is intentionally readable before the content key is available.
+Its wrapped content-key values are authenticated by their wrapping algorithms; its
 outer structure is length-limited and checksummed so tools can reject malformed
 metadata early.
+
+Every key-directory block has its own public recovery header:
+
+```text
+offset  size  field
+0       8     magic: "LBX2KEY\0"
+8       2     key-directory version
+10      2     flags
+12      4     header length
+16      8     total key-directory length
+24      8     key-directory generation
+32      16    lockbox UUID
+48      4     copy index
+52      4     payload checksum
+56      4     reserved
+60      4     header checksum
+64      n     key-slot payload
+```
+
+The lockbox writes three copies of the key directory for every key-directory
+generation: a primary copy referenced by the fixed header, plus two mirror
+copies referenced by the commit root. Recovery can also scan the raw lockbox for
+`LBX2KEY\0` blocks, validate their checksums, group them by lockbox UUID, and
+use the highest generation that successfully unwraps the content key.
+
+The fixed header is therefore a fast path, not the only path. If the header is
+corrupt, password/public-key unlock can recover the lockbox UUID and content key
+from a scanned key-directory mirror, then use those values to authenticate and
+decrypt segment pages while scanning for the latest valid commit root.
 
 Removing a password or recipient is not just a metadata delete. Because old COW
 history may contain old key directories or data pages, the CLI must treat key
 removal as a conservative maintenance operation:
 
 1. remove the key slot from the live key directory
-2. rewrite reachable encrypted pages as needed under the retained vault key or a
-   new vault key
+2. rewrite reachable encrypted pages as needed under the retained content key or
+   a new content key
 3. compact unreachable old pages
 4. commit the new key directory and free-space index
 

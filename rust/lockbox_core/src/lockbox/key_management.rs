@@ -1,19 +1,19 @@
 use super::Lockbox;
 use crate::format::read_header;
-use crate::key_directory::read_key_directory;
-use crate::key_slot::{next_key_slot_id, random_salt, random_vault_key, KeySlot, KeySlotInfo};
+use crate::key_directory::{best_key_directory, read_key_directory, scan_key_directories};
+use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, KeySlotInfo};
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey};
+use crate::lockbox_id::LockboxId;
 use crate::secret_bytes::SecretBytes;
-use crate::vault_id::VaultId;
 use crate::{EntryKind, Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnlockedVaultKey {
-    pub vault_id: VaultId,
+pub struct UnlockedContentKey {
+    pub lockbox_id: LockboxId,
     key: SecretBytes,
 }
 
-impl UnlockedVaultKey {
+impl UnlockedContentKey {
     pub fn key(&self) -> &[u8] {
         self.key.expose()
     }
@@ -25,8 +25,8 @@ impl UnlockedVaultKey {
 
 impl Lockbox {
     pub fn create_with_password(password: &[u8]) -> Result<Self> {
-        let vault_key = random_vault_key()?;
-        let mut lockbox = Self::create(vault_key);
+        let content_key = random_content_key()?;
+        let mut lockbox = Self::create(content_key);
         lockbox.add_password_slot(password)?;
         Ok(lockbox)
     }
@@ -36,12 +36,14 @@ impl Lockbox {
         Self::open(bytes, unlocked.key())
     }
 
-    pub fn unlock_with_password(bytes: &[u8], password: &[u8]) -> Result<UnlockedVaultKey> {
-        let (_, _, _, vault_id) = read_header(bytes)?;
-        for slot in key_slots_from_bytes(bytes)? {
-            if let Ok(key) = slot.try_password(password) {
-                return Ok(UnlockedVaultKey {
-                    vault_id,
+    pub fn unlock_with_password(bytes: &[u8], password: &[u8]) -> Result<UnlockedContentKey> {
+        for directory in key_directories_from_bytes(bytes)? {
+            for slot in directory.slots {
+                let Ok(key) = slot.try_password(password) else {
+                    continue;
+                };
+                return Ok(UnlockedContentKey {
+                    lockbox_id: directory.lockbox_id,
                     key: SecretBytes::new(key),
                 });
             }
@@ -54,8 +56,8 @@ impl Lockbox {
     }
 
     pub fn create_with_recipient_key(recipient: &MlKemRecipientKey) -> Result<Self> {
-        let vault_key = random_vault_key()?;
-        let mut lockbox = Self::create(vault_key);
+        let content_key = random_content_key()?;
+        let mut lockbox = Self::create(content_key);
         lockbox.add_recipient_key(recipient)?;
         Ok(lockbox)
     }
@@ -68,12 +70,14 @@ impl Lockbox {
     pub fn unlock_with_recipient(
         bytes: &[u8],
         recipient: &MlKemKeyPair,
-    ) -> Result<UnlockedVaultKey> {
-        let (_, _, _, vault_id) = read_header(bytes)?;
-        for slot in key_slots_from_bytes(bytes)? {
-            if let Ok(key) = slot.try_ml_kem(recipient) {
-                return Ok(UnlockedVaultKey {
-                    vault_id,
+    ) -> Result<UnlockedContentKey> {
+        for directory in key_directories_from_bytes(bytes)? {
+            for slot in directory.slots {
+                let Ok(key) = slot.try_ml_kem(recipient) else {
+                    continue;
+                };
+                return Ok(UnlockedContentKey {
+                    lockbox_id: directory.lockbox_id,
                     key: SecretBytes::new(key),
                 });
             }
@@ -151,7 +155,7 @@ impl Lockbox {
             .collect::<Vec<_>>();
         let env = self.get_all_env();
         let key_slots = self.key_slots.clone();
-        let mut compacted = Lockbox::create_with_vault_id(self.key.expose(), self.vault_id);
+        let mut compacted = Lockbox::create_with_lockbox_id(self.key.expose(), self.lockbox_id);
         compacted.key_slots = key_slots;
 
         for (name, value) in env {
@@ -180,7 +184,30 @@ impl Lockbox {
     }
 }
 
-fn key_slots_from_bytes(bytes: &[u8]) -> Result<Vec<KeySlot>> {
-    let (_, _, key_directory_offset, _) = read_header(bytes)?;
-    read_key_directory(bytes, key_directory_offset)
+fn key_directories_from_bytes(
+    bytes: &[u8],
+) -> Result<Vec<crate::key_directory::DecodedKeyDirectory>> {
+    let mut directories = Vec::new();
+    if let Ok((_, _, key_directory_offset, lockbox_id)) = read_header(bytes) {
+        if let Ok(directory) = read_key_directory(bytes, key_directory_offset, Some(lockbox_id)) {
+            directories.push(directory);
+        }
+        directories.extend(scan_key_directories(bytes, Some(lockbox_id)));
+    } else {
+        directories.extend(scan_key_directories(bytes, None));
+    }
+    if directories.is_empty() {
+        return Err(Error::CorruptHeader);
+    }
+    let Some(best) = best_key_directory(directories.clone()) else {
+        return Err(Error::CorruptHeader);
+    };
+    directories.sort_by_key(|directory| {
+        (
+            std::cmp::Reverse(directory.lockbox_id == best.lockbox_id),
+            std::cmp::Reverse(directory.generation),
+            directory.copy_index,
+        )
+    });
+    Ok(directories)
 }
