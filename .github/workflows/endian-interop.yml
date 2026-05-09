@@ -2,7 +2,7 @@ name: Endian Interop
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  LOCKBOX_INTEROP_FIXTURE_VERSION: v1
+  LOCKBOX_INTEROP_FIXTURE_VERSION: v2
 
 on:
   push:
@@ -206,7 +206,7 @@ jobs:
           -e LOCKBOX_INTEROP_VERIFY_PATH=/work/interop/lockbox-x64.lbx
           -e LOCKBOX_INTEROP_CREATE_PATH=/work/interop/lockbox-s390x.lbx
           rust:1-bookworm
-          bash -lc "cargo test --release -p lockbox_core --test endian_interop -- --ignored --nocapture"
+          bash -lc "export PATH=/usr/local/cargo/bin:/usr/local/rustup/bin:$PATH; cargo test --release -p lockbox_core --test endian_interop -- --ignored --nocapture"
 
       - name: Verify x64 fixture on s390x
         if: steps.s390x-fixture-cache.outputs.cache-hit == 'true'
@@ -219,7 +219,7 @@ jobs:
           -e CARGO_TARGET_DIR=/tmp/target
           -e LOCKBOX_INTEROP_VERIFY_PATH=/work/interop/lockbox-x64.lbx
           rust:1-bookworm
-          bash -lc "cargo test --release -p lockbox_core --test endian_interop -- --ignored --nocapture"
+          bash -lc "export PATH=/usr/local/cargo/bin:/usr/local/rustup/bin:$PATH; cargo test --release -p lockbox_core --test endian_interop -- --ignored --nocapture"
 
       - name: Upload s390x fixture
         uses: actions/upload-artifact@v4

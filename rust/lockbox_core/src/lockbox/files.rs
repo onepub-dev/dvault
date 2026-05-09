@@ -63,24 +63,28 @@ impl Lockbox {
             if read == 0 {
                 if file_offset == 0 {
                     writer.write_frame(
-                        &path,
-                        permissions,
-                        0,
-                        0,
-                        &[],
-                        skip_compression,
+                        FileFrameWrite {
+                            path: &path,
+                            permissions,
+                            total_len: 0,
+                            file_offset: 0,
+                            data: &[],
+                            skip_compression,
+                        },
                         &mut chunks,
                     )?;
                 }
                 break;
             }
             writer.write_frame(
-                &path,
-                permissions,
-                0,
-                file_offset,
-                &buffer[..read],
-                skip_compression,
+                FileFrameWrite {
+                    path: &path,
+                    permissions,
+                    total_len: 0,
+                    file_offset,
+                    data: &buffer[..read],
+                    skip_compression,
+                },
                 &mut chunks,
             )?;
             file_offset += read as u64;
@@ -280,12 +284,14 @@ impl Lockbox {
         for chunk in pending.into_values() {
             let start = all_chunks.len();
             writer.write_frame(
-                &chunk.path,
-                chunk.permissions,
-                chunk.total_len,
-                0,
-                &chunk.data,
-                likely_incompressible_path(&chunk.path),
+                FileFrameWrite {
+                    path: &chunk.path,
+                    permissions: chunk.permissions,
+                    total_len: chunk.total_len,
+                    file_offset: 0,
+                    data: &chunk.data,
+                    skip_compression: likely_incompressible_path(&chunk.path),
+                },
                 &mut all_chunks,
             )?;
             updates.push((chunk.path, chunk.permissions, chunk.total_len, start));
@@ -340,12 +346,14 @@ impl Lockbox {
             let start = all_chunks.len();
             let len = data.len() as u64;
             writer.write_frame(
-                &path,
-                permissions,
-                len,
-                0,
-                &data,
-                likely_incompressible_path(&path),
+                FileFrameWrite {
+                    path: &path,
+                    permissions,
+                    total_len: len,
+                    file_offset: 0,
+                    data: &data,
+                    skip_compression: likely_incompressible_path(&path),
+                },
                 &mut all_chunks,
             )?;
             updates.push((path, permissions, len, start));
@@ -445,6 +453,16 @@ struct FilePageWriter<'a> {
     pending_object_stream_len: usize,
 }
 
+#[derive(Clone, Copy)]
+struct FileFrameWrite<'a> {
+    path: &'a str,
+    permissions: u32,
+    total_len: u64,
+    file_offset: u64,
+    data: &'a [u8],
+    skip_compression: bool,
+}
+
 impl<'a> FilePageWriter<'a> {
     fn new(lockbox: &'a mut Lockbox) -> Self {
         Self {
@@ -456,21 +474,16 @@ impl<'a> FilePageWriter<'a> {
 
     fn write_frame(
         &mut self,
-        path: &str,
-        permissions: u32,
-        total_len: u64,
-        file_offset: u64,
-        data: &[u8],
-        skip_compression: bool,
+        frame: FileFrameWrite<'_>,
         chunks: &mut Vec<FileChunk>,
     ) -> Result<()> {
-        let (compression, stored) = encode_file_frame(data, skip_compression);
+        let (compression, stored) = encode_file_frame(frame.data, frame.skip_compression);
         self.lockbox.sequence += 1;
         let frame_id = self.lockbox.sequence;
         let chunk_index = chunks.len();
         chunks.push(FileChunk {
-            file_offset,
-            len: data.len() as u64,
+            file_offset: frame.file_offset,
+            len: frame.data.len() as u64,
             compressed_len: stored.len() as u64,
             compression,
             frame_id,
@@ -479,11 +492,11 @@ impl<'a> FilePageWriter<'a> {
 
         if stored.is_empty() {
             self.add_fragment(
-                path,
-                permissions,
-                total_len,
-                file_offset,
-                data.len() as u64,
+                frame.path,
+                frame.permissions,
+                frame.total_len,
+                frame.file_offset,
+                frame.data.len() as u64,
                 compression,
                 frame_id,
                 0,
@@ -499,11 +512,11 @@ impl<'a> FilePageWriter<'a> {
         while offset < stored.len() {
             let end = (offset + MAX_FRAGMENT_BYTES).min(stored.len());
             self.add_fragment(
-                path,
-                permissions,
-                total_len,
-                file_offset,
-                data.len() as u64,
+                frame.path,
+                frame.permissions,
+                frame.total_len,
+                frame.file_offset,
+                frame.data.len() as u64,
                 compression,
                 frame_id,
                 offset as u64,
