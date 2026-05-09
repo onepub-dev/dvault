@@ -12,8 +12,8 @@ use std::ptr::{null, null_mut};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_NO_TOKEN, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ,
-    GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, GetLastError, ERROR_FILE_NOT_FOUND, ERROR_NO_TOKEN, ERROR_PIPE_BUSY,
+    ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::{
     EqualSid, GetTokenInformation, RevertToSelf, TokenUser, TOKEN_QUERY, TOKEN_USER,
@@ -30,6 +30,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const IDLE_EXIT_SECONDS: u64 = 10 * 60;
+const PIPE_OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
 
 struct CacheEntry {
@@ -180,6 +181,7 @@ fn connect_pipe(pipe: HANDLE) -> io::Result<()> {
 }
 
 fn open_pipe(pipe_name: &[u16]) -> io::Result<HANDLE> {
+    let deadline = Instant::now() + PIPE_OPEN_TIMEOUT;
     loop {
         let handle = unsafe {
             CreateFileW(
@@ -196,6 +198,13 @@ fn open_pipe(pipe_name: &[u16]) -> io::Result<HANDLE> {
             return Ok(handle);
         }
         let err = unsafe { GetLastError() };
+        if err == ERROR_FILE_NOT_FOUND {
+            if Instant::now() >= deadline {
+                return Err(io::Error::from_raw_os_error(err as i32));
+            }
+            thread::sleep(Duration::from_millis(25));
+            continue;
+        }
         if err != ERROR_PIPE_BUSY {
             return Err(io::Error::from_raw_os_error(err as i32));
         }
