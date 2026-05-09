@@ -221,6 +221,7 @@ pub(crate) fn parse_request(request: &str) -> io::Result<AgentRequest> {
     }
 }
 
+#[cfg(unix)]
 pub(crate) fn max_request_bytes() -> usize {
     MAX_REQUEST_BYTES
 }

@@ -25,9 +25,10 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
 pub(crate) fn available_memory_bytes() -> Option<u64> {
     let mut stats = unsafe { std::mem::zeroed::<libc::vm_statistics64_data_t>() };
     let mut count = libc::HOST_VM_INFO64_COUNT;
+    let host = unsafe { mach2::mach_init::mach_host_self() };
     let result = unsafe {
         libc::host_statistics64(
-            libc::mach_host_self(),
+            host,
             libc::HOST_VM_INFO64,
             (&mut stats as *mut libc::vm_statistics64_data_t).cast(),
             &mut count,

@@ -12,22 +12,22 @@ use std::ptr::{null, null_mut};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_NO_TOKEN, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE,
-    INVALID_HANDLE_VALUE,
+    CloseHandle, GetLastError, ERROR_NO_TOKEN, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ,
+    GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::{
-    EqualSid, GetTokenInformation, ImpersonateNamedPipeClient, OpenProcessToken, OpenThreadToken,
-    RevertToSelf, TokenUser, TOKEN_QUERY, TOKEN_USER,
+    EqualSid, GetTokenInformation, RevertToSelf, TokenUser, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING,
+    CreateFileW, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, WaitNamedPipeW, PIPE_ACCESS_DUPLEX,
-    PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, ImpersonateNamedPipeClient,
+    WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread};
-use windows_sys::Win32::System::IO::{ReadFile, WriteFile};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
+};
 
 const IDLE_EXIT_SECONDS: u64 = 10 * 60;
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
@@ -186,7 +186,7 @@ fn open_pipe(pipe_name: &[u16]) -> io::Result<HANDLE> {
                 null(),
                 OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL,
-                0,
+                null_mut(),
             )
         };
         if handle != INVALID_HANDLE_VALUE {
@@ -247,7 +247,7 @@ fn client_matches_current_user(pipe: HANDLE, current_user_sid: &[u8]) -> io::Res
     }
 
     let result = (|| {
-        let mut token = 0;
+        let mut token: HANDLE = null_mut();
         let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 0, &mut token) };
         if opened == 0 {
             let err = unsafe { GetLastError() };
@@ -271,7 +271,7 @@ fn client_matches_current_user(pipe: HANDLE, current_user_sid: &[u8]) -> io::Res
 }
 
 fn current_process_user_sid() -> io::Result<Vec<u8>> {
-    let mut token = 0;
+    let mut token: HANDLE = null_mut();
     let ok = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
     if ok == 0 {
         return Err(io::Error::last_os_error());
@@ -331,15 +331,7 @@ fn write_all(handle: HANDLE, mut bytes: &[u8]) -> io::Result<()> {
     while !bytes.is_empty() {
         let mut written = 0u32;
         let chunk_len = bytes.len().min(PIPE_BUFFER_BYTES as usize) as u32;
-        let ok = unsafe {
-            WriteFile(
-                handle,
-                bytes.as_ptr() as *const c_void,
-                chunk_len,
-                &mut written,
-                null_mut(),
-            )
-        };
+        let ok = unsafe { WriteFile(handle, bytes.as_ptr(), chunk_len, &mut written, null_mut()) };
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -356,7 +348,7 @@ fn read_to_string(handle: HANDLE) -> io::Result<String> {
         let ok = unsafe {
             ReadFile(
                 handle,
-                buffer.as_mut_ptr() as *mut c_void,
+                buffer.as_mut_ptr(),
                 buffer.len() as u32,
                 &mut read,
                 null_mut(),
