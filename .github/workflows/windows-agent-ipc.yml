@@ -1,4 +1,4 @@
-name: Windows Agent IPC
+name: Agent IPC
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -8,24 +8,31 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "rust/lockbox_cli/src/cache.rs"
-      - "rust/lockbox_cli/src/cache/windows.rs"
+      - "rust/lockbox_vault/**"
       - "rust/lockbox_cli/src/main.rs"
+      - "rust/lockbox_cli/src/commands/**"
       - "rust/lockbox_cli/tests/agent_flow.rs"
       - ".github/workflows/windows-agent-ipc.yml"
   pull_request:
     paths:
-      - "rust/lockbox_cli/src/cache.rs"
-      - "rust/lockbox_cli/src/cache/windows.rs"
+      - "rust/lockbox_vault/**"
       - "rust/lockbox_cli/src/main.rs"
+      - "rust/lockbox_cli/src/commands/**"
       - "rust/lockbox_cli/tests/agent_flow.rs"
       - ".github/workflows/windows-agent-ipc.yml"
 
 jobs:
   agent-ipc:
-    name: Windows agent IPC smoke
-    runs-on: windows-latest
+    name: ${{ matrix.os }} agent IPC smoke
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
 
     defaults:
       run:

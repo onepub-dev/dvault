@@ -14,12 +14,16 @@ Terminology is explicit:
 See [docs/terminology.md](docs/terminology.md) for the canonical definitions.
 
 The current direction is a Rust core implementation that can be used from CLI,
-Dart, JavaScript/WASM, and other languages through thin bindings.
+Dart, JavaScript/WASM, and other languages through thin bindings. Native
+desktop/server tools can also use `lockbox_vault` for the local unlock-cache
+agent and high-level vault API.
 
 The `lockbox_core` crate is checked for Linux, macOS, Windows, Android,
-iOS, WASI, and browser-style `wasm32-unknown-unknown` builds. The Rust CLI and
-its unlock-cache agent are native desktop/server components; mobile and WASM
-applications should embed the core crate through platform bindings.
+iOS, WASI, and browser-style `wasm32-unknown-unknown` builds. The
+`lockbox_vault` crate contains the native unlock-cache agent transport and is
+intended for desktop/server CLIs and bindings. Mobile and WASM applications
+should embed the core crate through platform bindings and provide their own
+platform vault integration.
 
 > Status: the Rust implementation under `rust/lockbox_core` is the production
 > direction for the first Lockbox format release. The format is still pre-1.0,
@@ -158,6 +162,28 @@ lockbox.commit()?;
 let stored_bytes = lockbox.to_bytes();
 let reopened = Lockbox::open(stored_bytes, key)?;
 ```
+
+Native CLIs should use the higher-level vault crate instead of talking to the
+agent protocol directly:
+
+```rust
+use lockbox_vault::{local_vault, SecretString};
+
+let vault = local_vault();
+let password = SecretString::from_bytes(b"pw".to_vec());
+vault.create_lockbox_with_password("secrets.lbox", &password)?;
+vault.unlock_lockbox_with_password("secrets.lbox", &password)?;
+
+let mut lockbox = vault.open_lockbox("secrets.lbox")?;
+lockbox.add_file("notes.txt", "/notes.txt")?;
+lockbox.commit()?;
+
+vault.lock_lockbox("secrets.lbox")?;
+```
+
+`lockbox_vault::VaultDirectory` provides the local persistent vault store for
+native tools. It stores private recipient keys, trusted recipient public keys,
+and local key-directory backups separately from the portable `.lbox` file.
 
 Current tested APIs:
 

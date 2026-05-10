@@ -1,5 +1,6 @@
-use crate::cache;
+use crate::secret_prompt::prompt_secret;
 use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock};
+use lockbox_vault::{decode_hex, local_vault, NoopStore, SecretString, Vault};
 use std::env;
 use std::path::Path;
 
@@ -32,16 +33,11 @@ pub(crate) fn read_access(args: &mut Vec<String>) -> CliResult<Access> {
 
 pub(crate) fn open_existing(path: &str, access: &Access) -> Result<Lockbox, Error> {
     match access {
-        Access::RawKey(key) => Lockbox::open_file(path, LockboxUnlock::RawKey(key.clone())),
-        Access::PromptPassword => Err(Error::InvalidKey),
-        Access::CacheOnly => {
-            let lockbox_id = Lockbox::read_lockbox_id_path(path)?;
-            let Some(key) = cache::get(lockbox_id).map_err(|err| Error::Io(err.to_string()))?
-            else {
-                return Err(Error::InvalidKey);
-            };
-            Lockbox::open_file(path, LockboxUnlock::RawKey(key))
+        Access::RawKey(key) => {
+            Vault::new(NoopStore).unlock_lockbox(path, LockboxUnlock::RawKey(key.clone()))
         }
+        Access::PromptPassword => Err(Error::InvalidKey),
+        Access::CacheOnly => local_vault().open_lockbox(path),
     }
 }
 
@@ -50,10 +46,12 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> Result<Lockbox, Err
         open_existing(path, access)
     } else {
         match access {
-            Access::RawKey(key) => Lockbox::create_file(path, LockboxCreate::RawKey(key.clone())),
+            Access::RawKey(key) => {
+                Vault::new(NoopStore).create_lockbox(path, LockboxCreate::RawKey(key.clone()))
+            }
             Access::PromptPassword => {
                 let password = read_new_password().map_err(|err| Error::Io(err.to_string()))?;
-                Lockbox::create_file(path, LockboxCreate::Password(password.into_bytes()))
+                local_vault().create_lockbox_with_password(path, &password)
             }
             Access::CacheOnly => Err(Error::InvalidKey),
         }
@@ -75,26 +73,28 @@ pub(crate) fn remove_global_flag(args: &mut Vec<String>, flag: &str) -> bool {
     }
 }
 
-pub(crate) fn read_password(prompt: &str) -> CliResult<String> {
+pub(crate) fn read_password(prompt: &str) -> CliResult<SecretString> {
     if let Ok(password) = env::var("LOCKBOX_PASSWORD") {
-        return Ok(password);
+        return Ok(SecretString::from_bytes(password.into_bytes()));
     }
-    Ok(rpassword::prompt_password(prompt)?)
+    Ok(prompt_secret(prompt)?)
 }
 
-pub(crate) fn read_new_password() -> CliResult<String> {
+pub(crate) fn read_new_password() -> CliResult<SecretString> {
     if let Ok(password) = env::var("LOCKBOX_PASSWORD") {
-        return Ok(password);
+        return Ok(SecretString::from_bytes(password.into_bytes()));
     }
-    let password = rpassword::prompt_password("New password: ")?;
-    let confirm = rpassword::prompt_password("Confirm password: ")?;
-    if password != confirm {
+    let password = prompt_secret("New password: ")?;
+    let mut confirm = prompt_secret("Confirm password: ")?;
+    if password.expose_bytes() != confirm.expose_bytes() {
+        confirm.zeroize();
         return Err("passwords do not match".into());
     }
+    confirm.zeroize();
     Ok(password)
 }
 
 pub(crate) fn read_hex_file(path: &str) -> CliResult<Vec<u8>> {
     let text = std::fs::read_to_string(path)?;
-    Ok(cache::decode_hex(text.trim())?)
+    Ok(decode_hex(text.trim())?)
 }

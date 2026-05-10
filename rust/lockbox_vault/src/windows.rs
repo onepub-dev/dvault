@@ -12,11 +12,15 @@ use std::ptr::{null, null_mut};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_FILE_NOT_FOUND, ERROR_NO_TOKEN, ERROR_PIPE_BUSY,
+    CloseHandle, GetLastError, LocalFree, ERROR_FILE_NOT_FOUND, ERROR_NO_TOKEN, ERROR_PIPE_BUSY,
     ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
 use windows_sys::Win32::Security::{
-    EqualSid, GetTokenInformation, RevertToSelf, TokenUser, TOKEN_QUERY, TOKEN_USER,
+    EqualSid, GetTokenInformation, RevertToSelf, TokenUser, PSECURITY_DESCRIPTOR,
+    SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
@@ -127,6 +131,7 @@ fn start_agent() -> io::Result<()> {
 
 fn create_pipe() -> io::Result<HANDLE> {
     let name = wide_pipe_name();
+    let mut security = PipeSecurity::current_owner_only()?;
     let handle = unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
@@ -136,13 +141,58 @@ fn create_pipe() -> io::Result<HANDLE> {
             PIPE_BUFFER_BYTES,
             PIPE_BUFFER_BYTES,
             0,
-            null(),
+            security.as_mut_ptr(),
         )
     };
     if handle == INVALID_HANDLE_VALUE {
         Err(io::Error::last_os_error())
     } else {
         Ok(handle)
+    }
+}
+
+struct PipeSecurity {
+    descriptor: PSECURITY_DESCRIPTOR,
+    attributes: SECURITY_ATTRIBUTES,
+}
+
+impl PipeSecurity {
+    fn current_owner_only() -> io::Result<Self> {
+        let sddl = to_wide("D:P(A;;GA;;;OW)");
+        let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        let ok = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self {
+            descriptor,
+            attributes: SECURITY_ATTRIBUTES {
+                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: descriptor.cast(),
+                bInheritHandle: 0,
+            },
+        })
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut SECURITY_ATTRIBUTES {
+        &mut self.attributes
+    }
+}
+
+impl Drop for PipeSecurity {
+    fn drop(&mut self) {
+        if !self.descriptor.is_null() {
+            unsafe {
+                LocalFree(self.descriptor.cast());
+            }
+        }
     }
 }
 

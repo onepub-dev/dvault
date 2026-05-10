@@ -6,13 +6,12 @@ mod keys;
 mod recovery;
 mod visualize;
 
-use crate::cache;
 use context::{read_access, remove_global_flag, CliResult};
 
 pub(crate) fn run() -> CliResult<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("__agent") {
-        return Ok(cache::serve_agent()?);
+        return Ok(lockbox_vault::serve_agent()?);
     }
 
     let verbose_help =

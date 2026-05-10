@@ -1,23 +1,62 @@
-use std::fmt;
+use crate::{Error, Result};
+use std::{fmt, str};
 use zeroize::Zeroize;
 
-pub(crate) struct SecretBytes {
+pub struct SecretBytes {
     bytes: Vec<u8>,
     locked: bool,
 }
 
 impl SecretBytes {
-    pub(crate) fn new(bytes: Vec<u8>) -> Self {
+    pub fn new(bytes: Vec<u8>) -> Self {
         let locked = lock_memory(&bytes);
         Self { bytes, locked }
     }
 
-    pub(crate) fn expose(&self) -> &[u8] {
+    pub fn expose(&self) -> &[u8] {
         &self.bytes
     }
 
-    pub(crate) fn clone_exposed(&self) -> Vec<u8> {
+    pub fn clone_exposed(&self) -> Vec<u8> {
         self.bytes.clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct SecretString {
+    bytes: SecretBytes,
+}
+
+impl SecretString {
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes: SecretBytes::new(bytes),
+        }
+    }
+
+    pub fn expose_bytes(&self) -> &[u8] {
+        self.bytes.expose()
+    }
+
+    pub fn expose_str(&self) -> Result<&str> {
+        str::from_utf8(self.expose_bytes()).map_err(|_| Error::InvalidKey)
+    }
+
+    pub fn clone_exposed_bytes(&self) -> Vec<u8> {
+        self.bytes.clone_exposed()
+    }
+
+    pub fn zeroize(&mut self) {
+        self.bytes.bytes.zeroize();
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecretString")
+            .field("len", &self.bytes.expose().len())
+            .field("redacted", &true)
+            .finish()
     }
 }
 

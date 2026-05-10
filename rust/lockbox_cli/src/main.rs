@@ -1,5 +1,5 @@
-mod cache;
 mod commands;
+mod secret_prompt;
 
 fn main() {
     if let Err(err) = commands::run() {

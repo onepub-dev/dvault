@@ -170,6 +170,26 @@ private-key passphrase. It lives only in the agent process memory. There is no
 session token or bearer key written to disk; a stored token would just become a
 different secret that releases the content key.
 
+The native vault API uses `SecretString`/secret byte wrappers for passwords and
+cached content keys. These wrappers are implemented once in `lockbox_core` and
+re-exported by `lockbox_vault`. They zeroize memory on drop, redact debug
+output, and try to pin the backing allocation with `mlock` on Unix or
+`VirtualLock` on Windows. Pinning can fail because of OS limits, sandboxing, or
+platform policy; the API still zeroizes in that case.
+
+Interactive CLI prompting reads bytes directly into `SecretString` rather than
+building a password `String`. Language bindings should do the same where the
+host platform allows it: accept a byte buffer, pass it over FFI/WASM as bytes,
+and construct `SecretString::from_bytes` immediately on the Rust side. If a host
+language can only provide immutable strings, that should be documented as a
+weaker interop path because the host runtime may retain extra copies outside
+Rust's control.
+
+Passwords supplied through process environment variables may also exist in
+OS/process environment storage outside the wrapper, so env-based passwords
+remain a testing and automation escape hatch rather than the preferred
+interactive path.
+
 Core key handling follows the same rule. Long-lived content keys and unlocked
 content-key return values are stored in a secret wrapper that zeroizes memory on
 drop and redacts debug output. Temporary derived content/wrapping keys are also
@@ -189,11 +209,27 @@ Transport requirements:
 - The agent should validate the caller's OS identity where the platform exposes
   peer credentials.
 
-The current Rust CLI has Unix-domain-socket and Windows named-pipe transport
-implementations behind the same cache module boundary. The Windows code
-validates the connecting client's SID against the agent process user SID, but
-still needs a real Windows CI/smoke pass and explicit pipe DACL hardening before
-it should be considered validated.
+The reusable Rust implementation lives in the `lockbox_vault` crate. It exposes
+a high-level `LocalVault` API for native CLIs and bindings, plus the lower-level
+agent protocol helpers needed by alternate front ends. The Rust CLI uses that
+crate rather than owning agent transport code itself.
+
+`lockbox_vault` currently has Unix-domain-socket and Windows named-pipe
+transport implementations. The Windows pipe is created with an owner-only DACL
+and the server still validates the connecting client's SID against the agent
+process user SID after connection. The dedicated Agent IPC GitHub Action runs
+the smoke test on Linux, macOS, and Windows.
+
+The persistent local vault directory is a separate feature from the unlock
+agent. It can store:
+
+- the user's long-lived ML-KEM private key seed
+- trusted recipient public keys
+- local key-directory backups keyed by lockbox UUID
+
+These records are local recovery and convenience data. They are not required for
+a password-shared lockbox to be portable, and they are not the canonical copy of
+lockbox metadata.
 
 ## CLI Shape
 

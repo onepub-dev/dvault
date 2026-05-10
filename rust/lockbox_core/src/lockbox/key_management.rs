@@ -1,6 +1,8 @@
 use super::Lockbox;
 use crate::format::read_header;
-use crate::key_directory::{best_key_directory, read_key_directory, scan_key_directories};
+use crate::key_directory::{
+    best_key_directory, encode_key_directory, read_key_directory, scan_key_directories,
+};
 use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, KeySlotInfo};
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey};
 use crate::lockbox_id::LockboxId;
@@ -15,6 +17,7 @@ pub struct UnlockedContentKey {
     key: SecretBytes,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum LockboxCreate {
     RawKey(Vec<u8>),
     Password(Vec<u8>),
@@ -22,6 +25,7 @@ pub enum LockboxCreate {
     RecipientKeyFile(PathBuf),
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum LockboxUnlock {
     RawKey(Vec<u8>),
     Password(Vec<u8>),
@@ -240,6 +244,10 @@ impl Lockbox {
         self.remove_key_slot_and_compact(id)
     }
 
+    pub fn export_key_directory_backup(&self) -> Result<Vec<u8>> {
+        encode_key_directory(&self.key_slots, self.lockbox_id, self.sequence, 0)
+    }
+
     pub fn list_key_slots(&self) -> Vec<KeySlotInfo> {
         self.key_slots.iter().map(KeySlot::info).collect()
     }
@@ -262,6 +270,7 @@ impl Lockbox {
     }
 
     pub fn compact(&mut self) -> Result<()> {
+        let original_storage = self.storage.clone();
         let entries = self
             .manifest
             .values()
@@ -294,6 +303,9 @@ impl Lockbox {
         }
 
         compacted.commit()?;
+        let compacted_bytes = compacted.bytes()?;
+        compacted.storage = original_storage;
+        compacted.storage.replace_all(&compacted_bytes)?;
         *self = compacted;
         Ok(())
     }

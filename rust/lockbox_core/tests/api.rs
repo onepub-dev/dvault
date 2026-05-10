@@ -1,7 +1,7 @@
 use lockbox_core::{
     derive_key_from_password, CacheLimit, Entry, EntryKind, Error, ExtractPolicy, ExtractedNode,
-    KeySlotKind, ListOptions, Lockbox, LockboxOptions, MlKemKeyPair, MlKemRecipientKey,
-    RecoveryReportOptions,
+    KeySlotKind, ListOptions, Lockbox, LockboxCreate, LockboxOptions, LockboxUnlock, MlKemKeyPair,
+    MlKemRecipientKey, RecoveryReportOptions,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -405,6 +405,37 @@ fn key_slot_removal_compacts_old_key_material() {
     let reopened = Lockbox::open_with_password(bytes, b"primary-password").unwrap();
     assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
     assert_eq!(reopened.list_key_slots().len(), 1);
+}
+
+#[test]
+fn path_backed_key_slot_removal_compacts_and_remains_file_backed() {
+    let path = temp_path("path-backed-key-compaction");
+    let mut lb =
+        Lockbox::create_file(&path, LockboxCreate::Password(b"primary-password".to_vec())).unwrap();
+    let temporary_id = lb.add_password_slot(b"temporary-password").unwrap();
+    lb.put_file("/docs/a.txt", b"alpha").unwrap();
+    lb.commit().unwrap();
+    let before = std::fs::metadata(&path).unwrap().len();
+
+    lb.delete_key_slot_and_compact(temporary_id).unwrap();
+    lb.put_file("/docs/b.txt", b"bravo").unwrap();
+    lb.commit().unwrap();
+    let after = std::fs::metadata(&path).unwrap().len();
+
+    assert!(after <= before + 4 * PAGE_BYTES as u64);
+    assert!(matches!(
+        Lockbox::open_file(
+            &path,
+            LockboxUnlock::Password(b"temporary-password".to_vec())
+        ),
+        Err(Error::InvalidKey)
+    ));
+    let reopened =
+        Lockbox::open_file(&path, LockboxUnlock::Password(b"primary-password".to_vec())).unwrap();
+    assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
+    assert_eq!(reopened.get_file("/docs/b.txt").unwrap(), b"bravo");
+
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -1535,4 +1566,15 @@ fn update_test_header_checksum(bytes: &mut [u8]) {
     hasher.update(&bytes[0..HEADER_CHECKSUM_START]);
     let digest = hasher.finalize();
     bytes[HEADER_CHECKSUM_START..HEADER_LEN].copy_from_slice(&digest);
+}
+
+fn temp_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "lockbox-core-{label}-{}-{}.lbox",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
 }

@@ -1,0 +1,25 @@
+[package]
+name = "lockbox_vault"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Reusable Lockbox local vault and agent transport"
+
+[lib]
+name = "lockbox_vault"
+path = "src/lib.rs"
+
+[dependencies]
+lockbox_core = { path = "../lockbox_core" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }

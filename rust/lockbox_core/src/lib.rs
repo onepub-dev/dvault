@@ -42,3 +42,4 @@ pub use lockbox_id::LockboxId;
 pub use page_inspection::{PageInspection, PageObjectInspection};
 pub use recovery_report::RecoveryReport;
 pub use recovery_report_options::RecoveryReportOptions;
+pub use secret_bytes::{SecretBytes, SecretString};
