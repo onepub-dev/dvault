@@ -99,16 +99,17 @@ pub(crate) fn looks_incompressible(payload: &[u8]) -> bool {
         return false;
     }
 
-    let sample = sample_for_entropy(payload);
-    shannon_entropy_bits_per_byte(&sample) >= HIGH_ENTROPY_BITS_PER_BYTE
+    let (counts, len) = entropy_sample_counts(payload);
+    shannon_entropy_bits_per_byte(&counts, len) >= HIGH_ENTROPY_BITS_PER_BYTE
 }
 
-fn sample_for_entropy(payload: &[u8]) -> Vec<u8> {
+fn entropy_sample_counts(payload: &[u8]) -> ([usize; 256], usize) {
+    let mut counts = [0usize; 256];
     if payload.len() <= INCOMPRESSIBLE_SAMPLE_BYTES {
-        return payload.to_vec();
+        count_bytes(payload, &mut counts);
+        return (counts, payload.len());
     }
 
-    let mut sample = Vec::with_capacity(INCOMPRESSIBLE_SAMPLE_BYTES);
     let chunk_len = INCOMPRESSIBLE_SAMPLE_BYTES / 4;
     let offsets = [
         0,
@@ -117,23 +118,24 @@ fn sample_for_entropy(payload: &[u8]) -> Vec<u8> {
         payload.len().saturating_sub(chunk_len),
     ];
     for offset in offsets {
-        sample.extend_from_slice(&payload[offset..offset + chunk_len]);
+        count_bytes(&payload[offset..offset + chunk_len], &mut counts);
     }
-    sample
+    (counts, INCOMPRESSIBLE_SAMPLE_BYTES)
 }
 
-fn shannon_entropy_bits_per_byte(sample: &[u8]) -> f64 {
-    let mut counts = [0usize; 256];
-    for byte in sample {
+fn count_bytes(bytes: &[u8], counts: &mut [usize; 256]) {
+    for byte in bytes {
         counts[*byte as usize] += 1;
     }
+}
 
-    let len = sample.len() as f64;
+fn shannon_entropy_bits_per_byte(counts: &[usize; 256], len: usize) -> f64 {
+    let len = len as f64;
     counts
-        .into_iter()
-        .filter(|count| *count > 0)
+        .iter()
+        .filter(|count| **count > 0)
         .map(|count| {
-            let probability = count as f64 / len;
+            let probability = *count as f64 / len;
             -probability * probability.log2()
         })
         .sum()

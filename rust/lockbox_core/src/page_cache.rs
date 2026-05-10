@@ -6,7 +6,7 @@ use crate::storage::Storage;
 use crate::Result;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
-const AUTO_RESIZE_INTERVAL: u64 = 256;
+const AUTO_RESIZE_INTERVAL: u64 = 1024;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PageCache {
@@ -107,28 +107,33 @@ impl PageCache {
         key: &[u8],
     ) -> Result<()> {
         let dirty_offsets = self.dirty_offsets.iter().copied().collect::<Vec<_>>();
+        let mut storage_len = storage.len()?;
+        let zero_page = vec![0; page_size];
         for offset in dirty_offsets {
-            let page = self
-                .pages
-                .get(&offset)
-                .map(|entry| entry.page.clone())
-                .ok_or(crate::Error::CorruptRecord)?;
-            let encoded = encode_page(
-                page_size,
-                lockbox_id,
-                page.page_id,
-                page.sequence,
-                key,
-                &page.objects,
-            )?;
-            while offset > storage.len()? {
-                storage.append(&vec![0; page_size])?;
+            let encoded = {
+                let entry = self.pages.get(&offset).ok_or(crate::Error::CorruptRecord)?;
+                encode_page(
+                    page_size,
+                    lockbox_id,
+                    entry.page.page_id,
+                    entry.page.sequence,
+                    key,
+                    &entry.page.objects,
+                )?
+            };
+            while offset > storage_len {
+                let appended = storage.append(&zero_page)?;
+                if appended != storage_len {
+                    return Err(crate::Error::CorruptRecord);
+                }
+                storage_len = storage_len.saturating_add(page_size as u64);
             }
-            if offset == storage.len()? {
+            if offset == storage_len {
                 let appended = storage.append(&encoded)?;
                 if appended != offset {
                     return Err(crate::Error::CorruptRecord);
                 }
+                storage_len = storage_len.saturating_add(encoded.len() as u64);
             } else {
                 storage.write_at(offset, &encoded)?;
             }

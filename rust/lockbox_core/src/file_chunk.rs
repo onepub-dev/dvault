@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 #[derive(Debug, Clone)]
 pub(crate) struct FileFragment {
     pub(crate) page_offset: u64,
@@ -23,7 +25,7 @@ pub(crate) struct PendingFileChunk {
     pub(crate) permissions: u32,
     pub(crate) total_len: u64,
     pub(crate) file_offset: u64,
-    pub(crate) data: Vec<u8>,
+    pub(crate) data: Arc<[u8]>,
 }
 
 #[derive(Debug, Clone)]

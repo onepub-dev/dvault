@@ -663,3 +663,105 @@ Conclusion:
   coalescing dirty page flush ordering more aggressively, sampling memory
   pressure less often, and improving compression skip heuristics for data that
   zstd cannot shrink meaningfully.
+
+## 2026-05-10 - Performance Target Pass
+
+Description: targeted the visible hotspots from the dirty-page/redaction
+profile while preserving the production format and transaction model. Changes:
+
+- Dirty page flush now reads storage length once, reuses a zero-page buffer for
+  sparse gaps, and avoids cloning decoded pages before encoding.
+- Auto cache sizing samples OS memory pressure every 1024 cache operations
+  instead of every 256 operations.
+- TOC commit avoids sorting manifest values already ordered by `LogicalPath`.
+- TOC internal rebuild no longer performs a linear child-position search for
+  each child group.
+- Compression entropy probing counts sampled ranges directly instead of
+  allocating a temporary sample buffer.
+- Incompressible extension detection avoids allocating a lowercased extension.
+- Pending small-file bytes are stored as shared immutable data, so commit
+  rollback snapshots do not duplicate the staged file corpus.
+
+Disk-backed benchmark commands matched the previous run:
+
+```bash
+cd rust
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=small \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_FILES=50000 \
+LOCKBOX_PERF_FILE_BYTES=1024 \
+LOCKBOX_PERF_EXTRACT=memory \
+LOCKBOX_PERF_EXTRACT_REPEAT=5 \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=append-delete \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_INITIAL_FILES=50000 \
+LOCKBOX_PERF_APPEND_FILES=10000 \
+LOCKBOX_PERF_FILE_BYTES=2048 \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=large \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_LARGE_BYTES=134217728 \
+LOCKBOX_PERF_PATTERN=randomish \
+LOCKBOX_PERF_EXTRACT=memory \
+cargo run -p lockbox_core --example perf --release
+```
+
+Final run results:
+
+| Scenario | Logical bytes | Lockbox bytes | Add | Commit | List | Extract/Delete | Range read | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 50k x 1 KiB files, 5 memory extracts | 51,200,000 | 25,165,920 | 102.417ms | 681.244ms | 5.040ms | 359.722ms | n/a | 0.492 |
+| 50k initial + 10k append/delete/replace | 122,880,000 | 75,497,568 | 24.174ms | 525.359ms | 6.058ms | 25.017ms | n/a | 0.614 |
+| 128 MiB randomish large file | 134,217,728 | 159,383,648 | 247.933ms | 524.696ms | n/a | 86.357ms | 996.695us | 1.188 |
+
+Comparison to the previous dirty-page/redaction baseline:
+
+| Scenario | Metric | Previous | New | Change |
+| --- | --- | ---: | ---: | ---: |
+| 50k x 1 KiB files | Add | 123.538ms | 102.417ms | -17.1% |
+| 50k x 1 KiB files | Commit | 706.034ms | 681.244ms | -3.5% |
+| 50k x 1 KiB files | Extract x5 | 385.768ms | 359.722ms | -6.8% |
+| Append/delete/replace | Commit | 546.710ms | 525.359ms | -3.9% |
+| Append/delete/replace | List | 6.815ms | 6.058ms | -11.1% |
+| 128 MiB randomish | Add | 265.514ms | 247.933ms | -6.6% |
+| 128 MiB randomish | Extract | 87.854ms | 86.357ms | -1.7% |
+
+Updated profiling command:
+
+```bash
+cd rust
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_SCENARIO=small \
+LOCKBOX_PERF_EXTRACT=memory \
+LOCKBOX_PERF_EXTRACT_REPEAT=5 \
+LOCKBOX_PERF_FILES=20000 \
+LOCKBOX_PERF_FILE_BYTES=1024 \
+cargo flamegraph -p lockbox_core --example perf --release \
+  -o target/flamegraph-file-small-20k-perf-pass.svg
+```
+
+The profiling run produced
+`rust/target/flamegraph-file-small-20k-perf-pass.svg`. The profile workload
+reported:
+
+| Scenario | Logical bytes | Lockbox bytes | Add | Commit | List | Extract/Delete | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 20k x 1 KiB files, 5 memory extracts | 20,480,000 | 25,165,920 | 40.983ms | 279.438ms | 1.907ms | 125.960ms | 1.229 |
+
+Conclusion:
+
+- The changes improved every comparable final metric except small variations in
+  large-file commit/range timing, which remain dominated by fixed commit work
+  and normal local disk noise at this workload size.
+- The remaining visible profile cost is mostly allocation/copying around commit
+  rollback and manifest/TOC materialization, plus zstd internals. Further
+  reductions likely require a larger structural change: building TOC leaves from
+  borrowed manifest entries and making rollback journal-based instead of
+  snapshot-based.

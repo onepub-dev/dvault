@@ -1,4 +1,5 @@
 use std::io::{Cursor, Read, Write};
+use std::sync::Arc;
 
 use super::Lockbox;
 use crate::compression::{decode_file_frame, encode_file_frame};
@@ -248,7 +249,7 @@ impl Lockbox {
                 permissions,
                 total_len: data.len() as u64,
                 file_offset: 0,
-                data: data.to_vec(),
+                data: Arc::from(data),
             },
         );
         let dirty_path = path.clone();
@@ -400,44 +401,16 @@ fn likely_incompressible_path(path: &str) -> bool {
     let Some(extension) = path.rsplit_once('.').map(|(_, extension)| extension) else {
         return false;
     };
-    matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "7z" | "apk"
-            | "avi"
-            | "br"
-            | "bz2"
-            | "cab"
-            | "cr2"
-            | "deb"
-            | "dmg"
-            | "docx"
-            | "flac"
-            | "gif"
-            | "gz"
-            | "heic"
-            | "iso"
-            | "jar"
-            | "jpeg"
-            | "jpg"
-            | "m4a"
-            | "mkv"
-            | "mov"
-            | "mp3"
-            | "mp4"
-            | "ogg"
-            | "pdf"
-            | "png"
-            | "pptx"
-            | "rar"
-            | "rpm"
-            | "webm"
-            | "webp"
-            | "xlsx"
-            | "xz"
-            | "zip"
-            | "zst"
-    )
+    INCOMPRESSIBLE_EXTENSIONS
+        .iter()
+        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
 }
+
+const INCOMPRESSIBLE_EXTENSIONS: &[&str] = &[
+    "7z", "apk", "avi", "br", "bz2", "cab", "cr2", "deb", "dmg", "docx", "flac", "gif", "gz",
+    "heic", "iso", "jar", "jpeg", "jpg", "m4a", "mkv", "mov", "mp3", "mp4", "ogg", "pdf", "png",
+    "pptx", "rar", "rpm", "webm", "webp", "xlsx", "xz", "zip", "zst",
+];
 
 struct PendingPageObject {
     chunk_index: usize,
@@ -553,7 +526,7 @@ impl<'a> FilePageWriter<'a> {
                 permissions,
                 total_len,
                 file_offset,
-                data: fragment.to_vec(),
+                data: Arc::from(fragment),
             },
             compression,
             frame_id,

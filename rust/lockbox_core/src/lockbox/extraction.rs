@@ -447,7 +447,7 @@ impl Lockbox {
 
     fn read_file_entry_cached(&self, entry: &ManifestEntry) -> Result<Vec<u8>> {
         if let Some(pending) = self.pending_small_files.get(&entry.path) {
-            return Ok(pending.data.clone());
+            return Ok(pending.data.to_vec());
         }
 
         if entry.chunks.is_empty() {

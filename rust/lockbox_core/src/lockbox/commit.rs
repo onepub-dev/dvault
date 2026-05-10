@@ -152,8 +152,7 @@ impl Lockbox {
     }
 
     fn rebuild_toc_btree(&mut self) -> Result<u64> {
-        let mut entries = self.manifest.values().cloned().collect::<Vec<_>>();
-        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        let entries = self.manifest.values().cloned().collect::<Vec<_>>();
         if entries.is_empty() {
             let offset = self.write_toc_leaf(&[])?;
             let leaf = TocLeaf {
@@ -182,8 +181,7 @@ impl Lockbox {
 
     fn write_incremental_toc_btree(&mut self) -> Result<u64> {
         let dirty = std::mem::take(&mut self.dirty_toc_paths);
-        let mut all_entries = self.manifest.values().cloned().collect::<Vec<_>>();
-        all_entries.sort_by(|left, right| left.path.cmp(&right.path));
+        let all_entries = self.manifest.values().cloned().collect::<Vec<_>>();
 
         let mut rebuilt_leaves = Vec::new();
         let mut cursor = 0usize;
@@ -287,6 +285,7 @@ impl Lockbox {
 
         while level.len() > 1 {
             let mut next_level = Vec::new();
+            let mut child_cursor = 0usize;
             let children = level
                 .iter()
                 .map(|node| TocChild {
@@ -296,11 +295,10 @@ impl Lockbox {
                 .collect::<Vec<_>>();
             for chunk in toc_child_groups(&children)? {
                 let offset = self.write_toc_internal(chunk)?;
-                let start = children
-                    .iter()
-                    .position(|child| child.first_path == chunk[0].first_path)
-                    .ok_or(Error::CorruptRecord)?;
-                let child_nodes = level[start..start + chunk.len()].to_vec();
+                let start = child_cursor;
+                let end = start + chunk.len();
+                child_cursor = end;
+                let child_nodes = level[start..end].to_vec();
                 next_level.push(TocTreeNode::Internal(TocInternal {
                     offset,
                     children: child_nodes,
@@ -329,19 +327,25 @@ impl Lockbox {
                 Ok(TocTreeNode::Leaf(new_leaf))
             }
             TocTreeNode::Internal(old_internal) => {
+                let old_offset = old_internal.offset;
                 let mut changed = false;
                 let mut children = Vec::with_capacity(old_internal.children.len());
-                for child in &old_internal.children {
-                    let rewritten = self.rewrite_compatible_toc_tree(child.clone(), new_leaves)?;
-                    if rewritten.offset() != child.offset()
-                        || rewritten.first_path() != child.first_path()
+                for child in old_internal.children {
+                    let child_offset = child.offset();
+                    let child_first_path = child.first_path().to_string();
+                    let rewritten = self.rewrite_compatible_toc_tree(child, new_leaves)?;
+                    if rewritten.offset() != child_offset
+                        || rewritten.first_path() != child_first_path.as_str()
                     {
                         changed = true;
                     }
                     children.push(rewritten);
                 }
                 if !changed {
-                    return Ok(TocTreeNode::Internal(old_internal));
+                    return Ok(TocTreeNode::Internal(TocInternal {
+                        offset: old_offset,
+                        children,
+                    }));
                 }
                 let toc_children = children
                     .iter()
