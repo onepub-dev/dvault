@@ -1,3 +1,9 @@
+pub(crate) mod cache_options;
+pub(crate) mod free_index;
+pub(crate) mod free_slot;
+pub(crate) mod memory_pressure;
+pub(crate) mod page_cache;
+
 use crate::{Error, Result};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};

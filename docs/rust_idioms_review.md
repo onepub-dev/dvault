@@ -17,8 +17,9 @@ This review covers the current Rust implementation shape.
 - `Lockbox::create` currently panics if the system random source fails while
   generating a lockbox UUID. Prefer `try_create` or make `create` return
   `Result<Self>` before stabilizing the public API.
-- Some CLI behavior still lives in a single `main.rs`. Move commands into
-  separate modules once the command set settles.
+- CLI command behavior now lives under `lockbox_cli/src/commands/`, with
+  `main.rs` kept as the binary entrypoint. The command module can still be split
+  further by command family as the CLI grows.
 - Agent request handling is duplicated between Unix and Windows. The shared
   parser is now factored out, but response handling can be shared further.
 - The core has raw-key APIs for test/developer use. Consider naming them
@@ -33,16 +34,19 @@ This review covers the current Rust implementation shape.
 
 ## Suggested Near-Term Refactors
 
-- Move the many root-level format files into domain subdirectories:
+- Root-level core files have been moved into domain subdirectories:
   `format/` for header, page, payload, commit root, key directory, and codecs;
   `paths/` for logical and host paths; `keys/` for derivation, wrapping, slots,
-  and secret bytes; `toc/` for manifest entries/codecs and BTree code; and
-  `storage/` for storage, page cache, free space, and free index.
+  secret bytes, and crypto; `toc/` for manifest entries/codecs and BTree code;
+  `storage/` for storage, page cache, free space, free index, cache options, and
+  memory pressure; and `model/` for public data structs and shared record
+  metadata.
 - Keep `lockbox/` as the public operation facade, but consider grouping its
   modules as `lockbox/io.rs`, `lockbox/mutate.rs`, `lockbox/extract.rs`,
   `lockbox/recover.rs`, and `lockbox/keys.rs` once the API names settle.
-- Add `commands/` modules for CLI commands. `main.rs` is now carrying routing,
-  parsing, output formatting, and command behavior.
+- Split `lockbox_cli/src/commands/mod.rs` into command-family modules once the
+  syntax stabilizes further. The current move keeps behavior unchanged while
+  removing command handling from `main.rs`.
 - Move agent cache state and request execution into shared code used by both
   transports.
 - Introduce `LockboxBuilder` or explicit constructors before API stabilization.

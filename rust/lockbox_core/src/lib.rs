@@ -1,49 +1,29 @@
-mod cache_options;
-mod commit_root;
 mod compression;
 mod constants;
-mod crypto;
-mod entry;
 mod env_store;
 mod error;
-mod extract_policy;
-mod extracted_file;
-mod extracted_node;
-mod extracted_symlink;
 mod fast_hash;
-mod file_chunk;
 mod format;
-mod free_index;
-mod free_slot;
-mod header;
-mod host_path;
 mod index;
-mod key_derivation;
-mod key_directory;
-mod key_slot;
-mod key_wrap;
-mod list_iter;
-mod list_options;
+mod keys;
 mod lockbox;
-mod lockbox_id;
-mod logical_path;
-mod manifest_codec;
-mod manifest_entry;
-mod memory_pressure;
-mod node_kind;
-mod page;
-mod page_cache;
-mod page_inspection;
-mod payload;
-mod record;
-mod recovery_report;
-mod recovery_report_options;
+mod model;
+mod paths;
 mod scan;
-mod secret_bytes;
 mod security;
 mod storage;
-mod symlink;
-mod toc_btree;
+mod toc;
+
+pub(crate) use format::{commit_root, header, key_directory, page, page_inspection, payload};
+pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_bytes};
+pub(crate) use model::{
+    entry, extract_policy, extracted_file, extracted_node, extracted_symlink, file_chunk,
+    list_iter, list_options, lockbox_id, node_kind, record, recovery_report,
+    recovery_report_options,
+};
+pub(crate) use paths::{host_path, logical_path, symlink};
+pub(crate) use storage::{cache_options, free_index, free_slot, memory_pressure, page_cache};
+pub(crate) use toc::{manifest_codec, manifest_entry, toc_btree};
 
 pub use cache_options::{CacheLimit, CacheStats, LockboxOptions};
 pub use entry::{Entry, EntryKind};
