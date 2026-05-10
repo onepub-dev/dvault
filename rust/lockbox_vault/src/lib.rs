@@ -5,7 +5,7 @@ use std::path::Path;
 
 mod vault_directory;
 
-pub use vault_directory::{StoredTrustedRecipient, VaultDirectory};
+pub use vault_directory::{default_vault_dir, StoredTrustedRecipient, VaultDirectory};
 
 const PROTOCOL_VERSION: &str = "LBX1";
 const MAX_REQUEST_BYTES: usize = 128 * 1024;
@@ -32,6 +32,10 @@ mod platform {
             io::ErrorKind::Unsupported,
             "lockbox agent is not supported on this platform",
         ))
+    }
+
+    pub(crate) fn verify_agent_transport_security() -> io::Result<()> {
+        Ok(())
     }
 
     pub(crate) fn get(_lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
@@ -223,6 +227,10 @@ fn io_to_core(err: io::Error) -> Error {
 
 pub fn serve_agent() -> io::Result<()> {
     platform::serve_agent()
+}
+
+pub fn verify_agent_transport_security() -> io::Result<()> {
+    platform::verify_agent_transport_security()
 }
 
 pub fn get(lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {

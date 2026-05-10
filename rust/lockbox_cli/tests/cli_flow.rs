@@ -69,6 +69,24 @@ fn cli_env_rename_and_visualize_flow() {
     assert!(!visualize.contains("DATABASE_URL"));
     assert!(!visualize.contains("/archive/docs/a.txt"));
     assert!(visualize.contains("recovery scan:"));
+
+    let vault_public = dir.join("default.pub");
+    run(
+        bin,
+        &["vault", "keygen", "default", vault_public.to_str().unwrap()],
+    );
+    run(
+        bin,
+        &["vault", "trust", "default", vault_public.to_str().unwrap()],
+    );
+    let vault_list = run_output(bin, &["vault", "list"]);
+    assert_success(&vault_list);
+    let vault_list = String::from_utf8_lossy(&vault_list.stdout);
+    assert!(vault_list.contains("private\tdefault"));
+    assert!(vault_list.contains("trusted\tdefault"));
+
+    let vault_dir = unique_dir().join("vault").join("key_directories");
+    assert!(fs::read_dir(vault_dir).unwrap().next().is_some());
 }
 
 fn run(bin: &str, args: &[&str]) {
@@ -81,6 +99,7 @@ fn run_output(bin: &str, args: &[&str]) -> Output {
         .args(args)
         .env("LOCKBOX_KEY", "test-key")
         .env("LOCKBOX_AGENT_DIR", unique_dir().join("agent"))
+        .env("LOCKBOX_VAULT_DIR", unique_dir().join("vault"))
         .output()
         .unwrap()
 }

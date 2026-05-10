@@ -1,6 +1,6 @@
 use crate::secret_prompt::prompt_secret;
-use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock};
-use lockbox_vault::{decode_hex, local_vault, NoopStore, SecretString, Vault};
+use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair};
+use lockbox_vault::{decode_hex, local_vault, NoopStore, SecretString, Vault, VaultDirectory};
 use std::env;
 use std::path::Path;
 
@@ -47,11 +47,16 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> Result<Lockbox, Err
     } else {
         match access {
             Access::RawKey(key) => {
-                Vault::new(NoopStore).create_lockbox(path, LockboxCreate::RawKey(key.clone()))
+                let lockbox = Vault::new(NoopStore)
+                    .create_lockbox(path, LockboxCreate::RawKey(key.clone()))?;
+                mirror_key_directory(&lockbox)?;
+                Ok(lockbox)
             }
             Access::PromptPassword => {
                 let password = read_new_password().map_err(|err| Error::Io(err.to_string()))?;
-                local_vault().create_lockbox_with_password(path, &password)
+                let lockbox = local_vault().create_lockbox_with_password(path, &password)?;
+                mirror_key_directory(&lockbox)?;
+                Ok(lockbox)
             }
             Access::CacheOnly => Err(Error::InvalidKey),
         }
@@ -97,4 +102,27 @@ pub(crate) fn read_new_password() -> CliResult<SecretString> {
 pub(crate) fn read_hex_file(path: &str) -> CliResult<Vec<u8>> {
     let text = std::fs::read_to_string(path)?;
     Ok(decode_hex(text.trim())?)
+}
+
+pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
+    VaultDirectory::open_default()
+}
+
+pub(crate) fn mirror_key_directory(lockbox: &Lockbox) -> Result<(), Error> {
+    let vault = default_vault()?;
+    vault.store_key_directory_backup(
+        lockbox.lockbox_id(),
+        &lockbox.export_key_directory_backup()?,
+    )
+}
+
+pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<MlKemKeyPair> {
+    let vault = default_vault()?;
+    let name_or_path = arg.unwrap_or(VaultDirectory::DEFAULT_KEY_NAME);
+    if std::path::Path::new(name_or_path).exists() {
+        return Ok(MlKemKeyPair::from_seed_bytes(&read_hex_file(
+            name_or_path,
+        )?)?);
+    }
+    Ok(vault.load_private_key(name_or_path)?)
 }

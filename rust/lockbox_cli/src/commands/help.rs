@@ -18,7 +18,11 @@ pub(crate) fn usage(verbose: bool) {
   lockbox open-key <lockbox> <private-key>
   lockbox add-recipient <lockbox> <public-key>
   lockbox list-keys <lockbox>
-  lockbox remove-key <lockbox> <slot-id>"
+  lockbox remove-key <lockbox> <slot-id>
+  lockbox vault init
+  lockbox vault keygen [name] [public-key-output]
+  lockbox vault trust <name> <public-key>
+  lockbox vault list"
     );
 
     if verbose {
@@ -26,10 +30,13 @@ pub(crate) fn usage(verbose: bool) {
             "
 developer/testing:
   lockbox visualize <lockbox>
+  lockbox vault path
+  lockbox vault export-public [name] <public-key-output>
   lockbox --key <raw-content-key> <command> ...
   LOCKBOX_KEY=<raw-content-key> lockbox <command> ...
   LOCKBOX_PASSWORD=<password> lockbox open <lockbox>
   LOCKBOX_AGENT_DIR=<dir> lockbox <command> ...
+  LOCKBOX_VAULT_DIR=<dir> lockbox <command> ...
 
 help:
   lockbox --help --verbose"

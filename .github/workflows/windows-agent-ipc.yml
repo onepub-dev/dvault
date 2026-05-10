@@ -52,3 +52,6 @@ jobs:
 
       - name: Run agent IPC smoke
         run: cargo test -p lockbox_cli --test agent_flow -- --ignored --nocapture
+
+      - name: Verify agent transport security
+        run: cargo run -p lockbox_cli -- __agent_security_check

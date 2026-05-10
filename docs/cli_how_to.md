@@ -384,6 +384,36 @@ should identify intact files even if the latest manifest is damaged.
 
 ## Recipient Keys
 
+Initialize the local vault directory:
+
+```bash
+lockbox vault init
+```
+
+Generate the default local recipient keypair and export its public key:
+
+```bash
+lockbox vault keygen default alice.pub
+```
+
+Trust another recipient public key in the local vault:
+
+```bash
+lockbox vault trust bob bob.pub
+```
+
+List local vault records:
+
+```bash
+lockbox vault list
+```
+
+The default vault location is platform-specific and can be overridden:
+
+```bash
+LOCKBOX_VAULT_DIR=/secure/local/vault lockbox vault init
+```
+
 Generate a recipient keypair:
 
 ```bash
@@ -418,8 +448,19 @@ Unlock with a private key:
 lockbox open-key secrets.lbox alice.key
 ```
 
+If no private key path is supplied, `open-key` uses the default private key in
+the local vault:
+
+```bash
+lockbox open-key secrets.lbox
+```
+
 The current Rust CLI stores key files as hex-encoded ML-KEM seed/public-key
 material. Private-key file encryption is still planned.
+
+Commands that create, unlock, or change lockbox key slots mirror the current
+key directory into the local vault as a recovery aid. The lockbox remains the
+portable source of truth; the local mirror is user-local convenience state.
 
 ## Safety Summary
 

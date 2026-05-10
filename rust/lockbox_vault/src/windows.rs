@@ -71,6 +71,12 @@ pub(crate) fn serve_agent() -> io::Result<()> {
     }
 }
 
+pub(crate) fn verify_agent_transport_security() -> io::Result<()> {
+    let _security = PipeSecurity::current_owner_only()?;
+    let _sid = current_process_user_sid()?;
+    Ok(())
+}
+
 pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
     let response = request(&encode_get(lockbox_id))?;
     if response == "MISS" {
@@ -466,4 +472,12 @@ fn sanitize_name(name: &str) -> String {
 
 fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn pipe_security_descriptor_can_be_built() {
+        super::verify_agent_transport_security().unwrap();
+    }
 }

@@ -53,6 +53,10 @@ pub(crate) fn serve_agent() -> io::Result<()> {
     }
 }
 
+pub(crate) fn verify_agent_transport_security() -> io::Result<()> {
+    Ok(())
+}
+
 pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
     let response = request(&encode_get(lockbox_id))?;
     if response == "MISS" {

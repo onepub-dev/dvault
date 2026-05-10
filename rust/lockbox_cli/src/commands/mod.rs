@@ -4,6 +4,7 @@ mod files;
 mod help;
 mod keys;
 mod recovery;
+mod vault;
 mod visualize;
 
 use context::{read_access, remove_global_flag, CliResult};
@@ -12,6 +13,9 @@ pub(crate) fn run() -> CliResult<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("__agent") {
         return Ok(lockbox_vault::serve_agent()?);
+    }
+    if args.first().map(String::as_str) == Some("__agent_security_check") {
+        return Ok(lockbox_vault::verify_agent_transport_security()?);
     }
 
     let verbose_help =
@@ -41,6 +45,7 @@ pub(crate) fn run() -> CliResult<()> {
         "add-recipient" => keys::add_recipient(&args, &access)?,
         "list-keys" => keys::list_keys(&args, &access)?,
         "remove-key" => keys::remove_key(&args, &access)?,
+        "vault" => vault::run(&args)?,
         "add" => files::add(&args, &access)?,
         "extract" => files::extract(&args, &access)?,
         "cat" => files::cat(&args, &access)?,

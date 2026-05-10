@@ -1,4 +1,5 @@
 use lockbox_core::{Error, LockboxId, MlKemKeyPair, MlKemRecipientKey, Result};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,6 +17,12 @@ pub struct VaultDirectory {
 }
 
 impl VaultDirectory {
+    pub const DEFAULT_KEY_NAME: &'static str = "default";
+
+    pub fn open_default() -> Result<Self> {
+        Self::open(default_vault_dir()?)
+    }
+
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         create_private_dir(&root)?;
@@ -37,6 +44,14 @@ impl VaultDirectory {
     pub fn load_private_key(&self, name: &str) -> Result<MlKemKeyPair> {
         let bytes = read_hex_file(&self.private_key_path(name)?)?;
         MlKemKeyPair::from_seed_bytes(&bytes)
+    }
+
+    pub fn private_key_exists(&self, name: &str) -> Result<bool> {
+        Ok(self.private_key_path(name)?.exists())
+    }
+
+    pub fn list_private_keys(&self) -> Result<Vec<String>> {
+        list_record_names(&self.root.join("private_keys"), "key")
     }
 
     pub fn store_trusted_recipient(&self, name: &str, key: &MlKemRecipientKey) -> Result<()> {
@@ -104,6 +119,66 @@ impl VaultDirectory {
             .join("key_directories")
             .join(format!("{lockbox_id}.keydir"))
     }
+}
+
+pub fn default_vault_dir() -> Result<PathBuf> {
+    if let Ok(path) = env::var("LOCKBOX_VAULT_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    default_vault_dir_for_os()
+}
+
+#[cfg(target_os = "windows")]
+fn default_vault_dir_for_os() -> Result<PathBuf> {
+    let base = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::Io("LOCALAPPDATA is not set".to_string()))?;
+    Ok(base.join("Lockbox").join("vault"))
+}
+
+#[cfg(target_os = "macos")]
+fn default_vault_dir_for_os() -> Result<PathBuf> {
+    let home = home_dir()?;
+    Ok(home
+        .join("Library")
+        .join("Application Support")
+        .join("Lockbox")
+        .join("vault"))
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn default_vault_dir_for_os() -> Result<PathBuf> {
+    if let Ok(path) = env::var("XDG_DATA_HOME") {
+        return Ok(PathBuf::from(path).join("lockbox").join("vault"));
+    }
+    Ok(home_dir()?
+        .join(".local")
+        .join("share")
+        .join("lockbox")
+        .join("vault"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn home_dir() -> Result<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::Io("HOME is not set".to_string()))
+}
+
+fn list_record_names(dir: &Path, extension: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|err| Error::Io(err.to_string()))? {
+        let entry = entry.map_err(|err| Error::Io(err.to_string()))?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some(extension) {
+            continue;
+        }
+        if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
+            out.push(stem.to_string());
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 fn read_hex_file(path: &Path) -> Result<Vec<u8>> {
