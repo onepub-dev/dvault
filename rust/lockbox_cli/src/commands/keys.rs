@@ -3,40 +3,43 @@ use super::context::{
     read_hex_file, read_new_password, read_password, require_arg, Access, CliResult,
 };
 use crate::cache;
-use lockbox_core::{Lockbox, MlKemKeyPair, MlKemRecipientKey};
+use lockbox_core::{Lockbox, LockboxCreate, MlKemKeyPair, MlKemRecipientKey};
 use std::fs;
 
 pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let (mut lb, password) = match access {
-        Access::RawKey(key) => (Lockbox::create(key), None),
+    let (lb, password) = match access {
+        Access::RawKey(key) => (
+            Lockbox::create_file(lockbox_path, LockboxCreate::RawKey(key.clone()))?,
+            None,
+        ),
         Access::PromptPassword => {
             let password = read_new_password()?;
             (
-                Lockbox::create_with_password(password.as_bytes())?,
+                Lockbox::create_file(
+                    lockbox_path,
+                    LockboxCreate::Password(password.as_bytes().to_vec()),
+                )?,
                 Some(password),
             )
         }
         Access::CacheOnly => return Err("create requires an unlock method".into()),
     };
-    lb.commit()?;
     match (access, password) {
         (Access::RawKey(key), _) => cache::put(lb.lockbox_id(), key)?,
         (_, Some(password)) => {
-            let unlocked = Lockbox::unlock_with_password(&lb.to_bytes(), password.as_bytes())?;
+            let unlocked = Lockbox::unlock_path_with_password(lockbox_path, password.as_bytes())?;
             cache::put(unlocked.lockbox_id, unlocked.key())?;
         }
         _ => {}
     }
-    fs::write(lockbox_path, lb.to_bytes())?;
     Ok(())
 }
 
 pub(crate) fn open(args: &[String]) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let bytes = fs::read(lockbox_path)?;
     let password = read_password("Password: ")?;
-    let unlocked = Lockbox::unlock_with_password(&bytes, password.as_bytes())?;
+    let unlocked = Lockbox::unlock_path_with_password(lockbox_path, password.as_bytes())?;
     cache::put(unlocked.lockbox_id, unlocked.key())?;
     Ok(())
 }
@@ -46,8 +49,7 @@ pub(crate) fn lock(args: &[String]) -> CliResult<()> {
         cache::forget_all()?;
     } else {
         let lockbox_path = require_arg(args, 0, "lockbox")?;
-        let bytes = fs::read(lockbox_path)?;
-        cache::forget(Lockbox::read_lockbox_id(&bytes)?)?;
+        cache::forget(Lockbox::read_lockbox_id_path(lockbox_path)?)?;
     }
     Ok(())
 }
@@ -67,9 +69,8 @@ pub(crate) fn keygen(args: &[String]) -> CliResult<()> {
 pub(crate) fn open_key(args: &[String]) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let private_path = require_arg(args, 1, "private key path")?;
-    let bytes = fs::read(lockbox_path)?;
     let keypair = MlKemKeyPair::from_seed_bytes(&read_hex_file(private_path)?)?;
-    let unlocked = Lockbox::unlock_with_recipient(&bytes, &keypair)?;
+    let unlocked = Lockbox::unlock_path_with_recipient(lockbox_path, &keypair)?;
     cache::put(unlocked.lockbox_id, unlocked.key())?;
     Ok(())
 }
@@ -81,7 +82,6 @@ pub(crate) fn add_recipient(args: &[String], access: &Access) -> CliResult<()> {
     let mut lb = open_existing(lockbox_path, access)?;
     lb.add_recipient_key(&recipient)?;
     lb.commit()?;
-    fs::write(lockbox_path, lb.to_bytes())?;
     Ok(())
 }
 
@@ -98,8 +98,8 @@ pub(crate) fn remove_key(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let slot_id = require_arg(args, 1, "slot id")?.parse::<u64>()?;
     let mut lb = open_existing(lockbox_path, access)?;
-    lb.remove_key_slot_and_compact(slot_id)?;
-    fs::write(lockbox_path, lb.to_bytes())?;
+    lb.delete_key_slot(slot_id)?;
+    lb.commit()?;
     Ok(())
 }
 

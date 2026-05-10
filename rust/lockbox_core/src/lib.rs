@@ -37,7 +37,7 @@ pub use key_slot::{KeySlotInfo, KeySlotKind};
 pub use key_wrap::{MlKemKeyPair, MlKemRecipientKey, MlKemWrappedKey};
 pub use list_iter::ListIter;
 pub use list_options::ListOptions;
-pub use lockbox::{Lockbox, UnlockedContentKey};
+pub use lockbox::{Lockbox, LockboxCreate, LockboxUnlock, UnlockedContentKey};
 pub use lockbox_id::LockboxId;
 pub use page_inspection::{PageInspection, PageObjectInspection};
 pub use recovery_report::RecoveryReport;

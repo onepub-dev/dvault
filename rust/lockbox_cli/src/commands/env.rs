@@ -1,6 +1,5 @@
 use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
 use super::help::usage;
-use std::fs;
 
 pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
     let subcommand = require_arg(args, 0, "env command")?;
@@ -12,7 +11,6 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
             let mut lb = open_or_create(lockbox_path, access)?;
             lb.set_env(name, value)?;
             lb.commit()?;
-            fs::write(lockbox_path, lb.to_bytes())?;
         }
         "get" => {
             let name = require_arg(args, 2, "name")?;
@@ -36,9 +34,8 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
         "rm" => {
             let name = require_arg(args, 2, "name")?;
             let mut lb = open_existing(lockbox_path, access)?;
-            lb.remove_env(name)?;
+            lb.delete_env_var(name)?;
             lb.commit()?;
-            fs::write(lockbox_path, lb.to_bytes())?;
         }
         _ => usage(false),
     }

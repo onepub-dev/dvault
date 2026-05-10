@@ -161,6 +161,14 @@ impl Lockbox {
         Ok(())
     }
 
+    pub fn extract_all_to(
+        &self,
+        destination: impl AsRef<Path>,
+        policy: &ExtractPolicy,
+    ) -> Result<()> {
+        self.extract_to_directory(destination, policy)
+    }
+
     fn extract_entries_to_directory(
         &self,
         destination: &Path,

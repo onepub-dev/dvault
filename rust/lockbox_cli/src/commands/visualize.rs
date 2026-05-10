@@ -1,18 +1,16 @@
 use super::context::{open_existing, require_arg, Access, CliResult};
 use lockbox_core::{ListOptions, Lockbox};
-use std::fs;
 
 pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let bytes = fs::read(lockbox_path)?;
     let lb = open_existing(lockbox_path, access)?;
-    print_lockbox_visualization(&lb, &bytes, access)
+    print_lockbox_visualization(&lb)
 }
 
-fn print_lockbox_visualization(lb: &Lockbox, bytes: &[u8], access: &Access) -> CliResult<()> {
+fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
     println!("Lockbox");
     println!("  id: {}", lb.lockbox_id());
-    println!("  size: {} bytes", bytes.len());
+    println!("  size: {} bytes", lb.storage_len()?);
 
     let key_slot_count = lb.list_key_slots().len();
     let env_count = lb.list_env().len();
@@ -65,21 +63,12 @@ fn print_lockbox_visualization(lb: &Lockbox, bytes: &[u8], access: &Access) -> C
         }
     }
 
-    if let Access::RawKey(key) = access {
-        let report = Lockbox::recover(bytes.to_vec(), key);
-        println!("  recovery scan:");
-        println!("    intact files: {}", report.intact_file_count);
-        println!("    partial files: {}", report.partial_files);
-        println!("    corrupt records/pages: {}", report.corrupt_records);
-        println!("    manifest recovered: {}", report.manifest_recovered);
-    } else {
-        let report = lb.recover_current();
-        println!("  recovery scan:");
-        println!("    intact files: {}", report.intact_file_count);
-        println!("    partial files: {}", report.partial_files);
-        println!("    corrupt records/pages: {}", report.corrupt_records);
-        println!("    manifest recovered: {}", report.manifest_recovered);
-    }
+    let report = lb.recover_current();
+    println!("  recovery scan:");
+    println!("    intact files: {}", report.intact_file_count);
+    println!("    partial files: {}", report.partial_files);
+    println!("    corrupt records/pages: {}", report.corrupt_records);
+    println!("    manifest recovered: {}", report.manifest_recovered);
 
     Ok(())
 }

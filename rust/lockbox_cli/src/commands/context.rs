@@ -1,7 +1,6 @@
 use crate::cache;
-use lockbox_core::{Error, Lockbox};
+use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock};
 use std::env;
-use std::fs;
 use std::path::Path;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -31,29 +30,17 @@ pub(crate) fn read_access(args: &mut Vec<String>) -> CliResult<Access> {
         })
 }
 
-pub(crate) fn create_lockbox(access: &Access) -> Result<Lockbox, Error> {
-    match access {
-        Access::RawKey(key) => Ok(Lockbox::create(key)),
-        Access::PromptPassword => {
-            let password = read_new_password().map_err(|err| Error::Io(err.to_string()))?;
-            Lockbox::create_with_password(password.as_bytes())
-        }
-        Access::CacheOnly => Err(Error::InvalidKey),
-    }
-}
-
 pub(crate) fn open_existing(path: &str, access: &Access) -> Result<Lockbox, Error> {
-    let bytes = fs::read(path).map_err(|err| Error::Io(err.to_string()))?;
     match access {
-        Access::RawKey(key) => Lockbox::open(bytes, key),
+        Access::RawKey(key) => Lockbox::open_file(path, LockboxUnlock::RawKey(key.clone())),
         Access::PromptPassword => Err(Error::InvalidKey),
         Access::CacheOnly => {
-            let lockbox_id = Lockbox::read_lockbox_id(&bytes)?;
+            let lockbox_id = Lockbox::read_lockbox_id_path(path)?;
             let Some(key) = cache::get(lockbox_id).map_err(|err| Error::Io(err.to_string()))?
             else {
                 return Err(Error::InvalidKey);
             };
-            Lockbox::open(bytes, key)
+            Lockbox::open_file(path, LockboxUnlock::RawKey(key))
         }
     }
 }
@@ -62,7 +49,14 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> Result<Lockbox, Err
     if Path::new(path).exists() {
         open_existing(path, access)
     } else {
-        create_lockbox(access)
+        match access {
+            Access::RawKey(key) => Lockbox::create_file(path, LockboxCreate::RawKey(key.clone())),
+            Access::PromptPassword => {
+                let password = read_new_password().map_err(|err| Error::Io(err.to_string()))?;
+                Lockbox::create_file(path, LockboxCreate::Password(password.into_bytes()))
+            }
+            Access::CacheOnly => Err(Error::InvalidKey),
+        }
     }
 }
 
@@ -101,6 +95,6 @@ pub(crate) fn read_new_password() -> CliResult<String> {
 }
 
 pub(crate) fn read_hex_file(path: &str) -> CliResult<Vec<u8>> {
-    let text = fs::read_to_string(path)?;
+    let text = std::fs::read_to_string(path)?;
     Ok(cache::decode_hex(text.trim())?)
 }

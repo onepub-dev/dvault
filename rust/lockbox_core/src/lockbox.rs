@@ -34,7 +34,7 @@ mod mutation;
 mod recovery;
 mod symlinks;
 
-pub use key_management::UnlockedContentKey;
+pub use key_management::{LockboxCreate, LockboxUnlock, UnlockedContentKey};
 
 #[derive(Debug, Clone)]
 pub struct Lockbox {
@@ -231,6 +231,10 @@ impl Lockbox {
 
     pub fn lockbox_id(&self) -> LockboxId {
         self.lockbox_id
+    }
+
+    pub fn storage_len(&self) -> Result<u64> {
+        self.storage.len()
     }
 
     pub fn read_lockbox_id(bytes: &[u8]) -> Result<LockboxId> {

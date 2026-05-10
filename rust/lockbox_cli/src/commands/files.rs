@@ -1,6 +1,6 @@
 use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
 use lockbox_core::{ExtractPolicy, ListOptions, Lockbox};
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -11,7 +11,6 @@ pub(crate) fn add(args: &[String], access: &Access) -> CliResult<()> {
     let mut lb = open_or_create(lockbox_path, access)?;
     add_source_path(&mut lb, Path::new(source), path)?;
     lb.commit()?;
-    fs::write(lockbox_path, lb.to_bytes())?;
     Ok(())
 }
 
@@ -21,12 +20,11 @@ pub(crate) fn extract(args: &[String], access: &Access) -> CliResult<()> {
     if args.get(1).map(String::as_str) == Some("--to") {
         let dest = require_arg(args, 2, "destination")?;
         let policy = extract_policy_from_args(&args[3..]);
-        lb.extract_to_directory(dest, &policy)?;
+        lb.extract_all_to(dest, &policy)?;
     } else {
         let path = require_arg(args, 1, "lockbox path")?;
         let dest = require_arg(args, 2, "destination")?;
-        let mut file = File::create(dest)?;
-        lb.write_file_to(path, &mut file)?;
+        lb.extract_file_to(path, dest)?;
     }
     Ok(())
 }
@@ -37,7 +35,7 @@ pub(crate) fn cat(args: &[String], access: &Access) -> CliResult<()> {
     let lb = open_existing(lockbox_path, access)?;
     let stdout = io::stdout();
     let mut lock = stdout.lock();
-    lb.write_file_to(path, &mut lock)?;
+    lb.extract_file_to_writer(path, &mut lock)?;
     Ok(())
 }
 
@@ -58,7 +56,6 @@ pub(crate) fn remove(args: &[String], access: &Access) -> CliResult<()> {
     let mut lb = open_existing(lockbox_path, access)?;
     lb.delete(path)?;
     lb.commit()?;
-    fs::write(lockbox_path, lb.to_bytes())?;
     Ok(())
 }
 
@@ -69,7 +66,6 @@ pub(crate) fn rename(args: &[String], access: &Access) -> CliResult<()> {
     let mut lb = open_existing(lockbox_path, access)?;
     lb.rename(from, to)?;
     lb.commit()?;
-    fs::write(lockbox_path, lb.to_bytes())?;
     Ok(())
 }
 
@@ -95,8 +91,7 @@ fn extract_policy_from_args(args: &[String]) -> ExtractPolicy {
 
 fn add_source_path(lockbox: &mut Lockbox, source: &Path, lockbox_root: &str) -> CliResult<()> {
     if source.is_file() {
-        let file = File::open(source)?;
-        lockbox.put_file_from_reader(lockbox_root, file)?;
+        lockbox.add_file(source, lockbox_root)?;
         return Ok(());
     }
     if source.is_dir() {
@@ -121,8 +116,7 @@ fn add_directory(
         } else if file_type.is_file() {
             let relative = path.strip_prefix(root)?;
             let logical_path = join_logical_path(lockbox_root, relative)?;
-            let file = File::open(&path)?;
-            lockbox.put_file_from_reader(&logical_path, file)?;
+            lockbox.add_file(&path, &logical_path)?;
         }
     }
     Ok(())

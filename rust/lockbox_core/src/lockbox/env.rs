@@ -51,6 +51,10 @@ impl Lockbox {
         Ok(())
     }
 
+    pub fn delete_env_var(&mut self, name: &str) -> Result<()> {
+        self.remove_env(name)
+    }
+
     fn schedule_env_page_redactions(&mut self, name: &str) -> Result<()> {
         let pages = self.inspect_pages()?;
         for page in pages {

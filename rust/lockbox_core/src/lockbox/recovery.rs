@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use super::Lockbox;
 use crate::commit_root::decode_commit_root;
@@ -13,6 +14,19 @@ use crate::record::{DecodedRecord, RecordKind};
 use crate::{Entry, RecoveryReport, Result};
 
 impl Lockbox {
+    pub fn recover_path(path: impl AsRef<Path>, key: impl AsRef<[u8]>) -> RecoveryReport {
+        match std::fs::read(path.as_ref()) {
+            Ok(bytes) => Self::recover(bytes, key),
+            Err(_) => RecoveryReport {
+                intact_files: Vec::new(),
+                intact_file_count: 0,
+                partial_files: 0,
+                corrupt_records: 1,
+                manifest_recovered: false,
+            },
+        }
+    }
+
     pub fn recover(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
         let key = key.as_ref().to_vec();
         let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);

@@ -1,4 +1,5 @@
 use std::io::{Cursor, Read, Write};
+use std::path::Path;
 use std::sync::Arc;
 
 use super::Lockbox;
@@ -38,6 +39,16 @@ impl Lockbox {
 
     pub fn put_file_from_reader(&mut self, path: &str, reader: impl Read) -> Result<()> {
         self.put_file_from_reader_with_permissions(path, reader, DEFAULT_FILE_PERMISSIONS)
+    }
+
+    pub fn add_file_from_reader(&mut self, path: &str, reader: impl Read) -> Result<()> {
+        self.put_file_from_reader(path, reader)
+    }
+
+    pub fn add_file(&mut self, source: impl AsRef<Path>, destination: &str) -> Result<()> {
+        let file = std::fs::File::open(source.as_ref())
+            .map_err(|err| Error::Io(format!("open {}: {err}", source.as_ref().display())))?;
+        self.add_file_from_reader(destination, file)
     }
 
     pub fn put_file_from_reader_with_permissions(
@@ -117,11 +128,15 @@ impl Lockbox {
 
     pub fn get_file(&self, path: &str) -> Result<Vec<u8>> {
         let mut out = Vec::new();
-        self.write_file_to(path, &mut out)?;
+        self.extract_file_to_writer(path, &mut out)?;
         Ok(out)
     }
 
     pub fn write_file_to(&self, path: &str, mut writer: impl Write) -> Result<()> {
+        self.extract_file_to_writer(path, &mut writer)
+    }
+
+    pub fn extract_file_to_writer(&self, path: &str, mut writer: impl Write) -> Result<()> {
         let path = canonicalize_path(path, false)?;
         let entry = self
             .manifest
@@ -149,6 +164,13 @@ impl Lockbox {
                 .map_err(|err| Error::Io(err.to_string()))?;
         }
         Ok(())
+    }
+
+    pub fn extract_file_to(&self, source: &str, destination: impl AsRef<Path>) -> Result<()> {
+        let mut file = std::fs::File::create(destination.as_ref()).map_err(|err| {
+            Error::Io(format!("create {}: {err}", destination.as_ref().display()))
+        })?;
+        self.extract_file_to_writer(source, &mut file)
     }
 
     pub fn permissions(&self, path: &str) -> Option<u32> {
