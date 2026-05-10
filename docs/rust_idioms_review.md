@@ -17,9 +17,8 @@ This review covers the current Rust implementation shape.
 - `Lockbox::create` currently panics if the system random source fails while
   generating a lockbox UUID. Prefer `try_create` or make `create` return
   `Result<Self>` before stabilizing the public API.
-- CLI command behavior now lives under `lockbox_cli/src/commands/`, with
-  `main.rs` kept as the binary entrypoint. The command module can still be split
-  further by command family as the CLI grows.
+- CLI command behavior now lives under command-family modules in
+  `lockbox_cli/src/commands/`, with `main.rs` kept as the binary entrypoint.
 - Agent request handling is duplicated between Unix and Windows. The shared
   parser is now factored out, but response handling can be shared further.
 - The core has raw-key APIs for test/developer use. Consider naming them
@@ -44,9 +43,9 @@ This review covers the current Rust implementation shape.
 - Keep `lockbox/` as the public operation facade, but consider grouping its
   modules as `lockbox/io.rs`, `lockbox/mutate.rs`, `lockbox/extract.rs`,
   `lockbox/recover.rs`, and `lockbox/keys.rs` once the API names settle.
-- Split `lockbox_cli/src/commands/mod.rs` into command-family modules once the
-  syntax stabilizes further. The current move keeps behavior unchanged while
-  removing command handling from `main.rs`.
+- Keep `lockbox_cli/src/commands/mod.rs` as dispatch-only and continue moving
+  shared code from command-family modules into focused helpers as repeated
+  patterns emerge.
 - Move agent cache state and request execution into shared code used by both
   transports.
 - Introduce `LockboxBuilder` or explicit constructors before API stabilization.
