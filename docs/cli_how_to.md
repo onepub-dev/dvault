@@ -396,6 +396,10 @@ Generate the default local recipient keypair and export its public key:
 lockbox vault keygen default alice.pub
 ```
 
+Private keys in the local vault are encrypted with a private-key password. For
+automation, `LOCKBOX_PRIVATE_KEY_PASSWORD` can supply that password; interactive
+use prompts for it.
+
 Trust another recipient public key in the local vault:
 
 ```bash
@@ -406,6 +410,13 @@ List local vault records:
 
 ```bash
 lockbox vault list
+```
+
+Remove local vault records:
+
+```bash
+lockbox vault remove-key default
+lockbox vault remove-trusted bob
 ```
 
 The default vault location is platform-specific and can be overridden:
@@ -455,12 +466,16 @@ the local vault:
 lockbox open-key secrets.lbox
 ```
 
-The current Rust CLI stores key files as hex-encoded ML-KEM seed/public-key
-material. Private-key file encryption is still planned.
+Private keys stored in the local vault are encrypted with the private-key
+password. If you pass an explicit private-key file path to `open-key`, that file
+is treated as an external hex-encoded ML-KEM seed file and remains outside the
+local vault protection model.
 
 Commands that create, unlock, or change lockbox key slots mirror the current
 key directory into the local vault as a recovery aid. The lockbox remains the
 portable source of truth; the local mirror is user-local convenience state.
+When the lockbox header is intact but embedded key-directory copies are damaged,
+`open` and `open-key` can use the local mirror to unwrap the content key.
 
 ## Safety Summary
 

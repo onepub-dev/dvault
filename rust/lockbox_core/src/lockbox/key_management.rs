@@ -1,7 +1,8 @@
 use super::Lockbox;
 use crate::format::read_header;
 use crate::key_directory::{
-    best_key_directory, encode_key_directory, read_key_directory, scan_key_directories,
+    best_key_directory, encode_key_directory, read_key_directory, read_key_directory_backup,
+    scan_key_directories,
 };
 use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, KeySlotInfo};
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey};
@@ -143,6 +144,23 @@ impl Lockbox {
         Err(Error::InvalidKey)
     }
 
+    pub fn unlock_key_directory_backup_with_password(
+        bytes: &[u8],
+        password: &[u8],
+    ) -> Result<UnlockedContentKey> {
+        let directory = read_key_directory_backup(bytes)?;
+        for slot in directory.slots {
+            let Ok(key) = slot.try_password(password) else {
+                continue;
+            };
+            return Ok(UnlockedContentKey {
+                lockbox_id: directory.lockbox_id,
+                key: SecretBytes::new(key),
+            });
+        }
+        Err(Error::InvalidKey)
+    }
+
     pub fn create_with_recipient(recipient: &MlKemKeyPair) -> Result<Self> {
         Self::create_with_recipient_key(&recipient.recipient_key())
     }
@@ -192,6 +210,23 @@ impl Lockbox {
                     key: SecretBytes::new(key),
                 });
             }
+        }
+        Err(Error::InvalidKey)
+    }
+
+    pub fn unlock_key_directory_backup_with_recipient(
+        bytes: &[u8],
+        recipient: &MlKemKeyPair,
+    ) -> Result<UnlockedContentKey> {
+        let directory = read_key_directory_backup(bytes)?;
+        for slot in directory.slots {
+            let Ok(key) = slot.try_ml_kem(recipient) else {
+                continue;
+            };
+            return Ok(UnlockedContentKey {
+                lockbox_id: directory.lockbox_id,
+                key: SecretBytes::new(key),
+            });
         }
         Err(Error::InvalidKey)
     }

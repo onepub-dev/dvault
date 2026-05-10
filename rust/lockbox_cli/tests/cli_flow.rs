@@ -87,6 +87,34 @@ fn cli_env_rename_and_visualize_flow() {
 
     let vault_dir = unique_dir().join("vault").join("key_directories");
     assert!(fs::read_dir(vault_dir).unwrap().next().is_some());
+
+    let encrypted_key = fs::read(
+        unique_dir()
+            .join("vault")
+            .join("private_keys")
+            .join("default.key"),
+    )
+    .unwrap();
+    assert!(encrypted_key.starts_with(b"LBXVKEY1"));
+    assert!(!String::from_utf8_lossy(&encrypted_key).contains("test-password"));
+
+    let public_export = dir.join("exported.pub");
+    run(
+        bin,
+        &[
+            "vault",
+            "export-public",
+            "default",
+            public_export.to_str().unwrap(),
+        ],
+    );
+    assert!(public_export.exists());
+
+    run(bin, &["vault", "remove-trusted", "default"]);
+    run(bin, &["vault", "remove-key", "default"]);
+    let vault_list = run_output(bin, &["vault", "list"]);
+    assert_success(&vault_list);
+    assert!(!String::from_utf8_lossy(&vault_list.stdout).contains("default"));
 }
 
 fn run(bin: &str, args: &[&str]) {
@@ -115,5 +143,7 @@ fn assert_success(output: &Output) {
 }
 
 fn unique_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("lockbox-cli-flow-{}", std::process::id()))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/test-tmp")
+        .join(format!("lockbox-cli-flow-{}", std::process::id()))
 }

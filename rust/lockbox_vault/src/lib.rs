@@ -158,13 +158,13 @@ impl<S: ContentKeyStore> Vault<S> {
                 Ok(lockbox)
             }
             LockboxUnlock::Password(password) => {
-                let unlocked = Lockbox::unlock_path_with_password(path, &password)?;
+                let unlocked = unlock_path_or_backup_with_password(path, &password)?;
                 self.store
                     .put_content_key(unlocked.lockbox_id, unlocked.key())?;
                 Lockbox::open_file(path, LockboxUnlock::RawKey(unlocked.into_key_bytes()))
             }
             LockboxUnlock::RecipientKey(recipient) => {
-                let unlocked = Lockbox::unlock_path_with_recipient(path, &recipient)?;
+                let unlocked = unlock_path_or_backup_with_recipient(path, &recipient)?;
                 self.store
                     .put_content_key(unlocked.lockbox_id, unlocked.key())?;
                 Lockbox::open_file(path, LockboxUnlock::RawKey(unlocked.into_key_bytes()))
@@ -182,6 +182,42 @@ impl<S: ContentKeyStore> Vault<S> {
 
     pub fn lock_all(&self) -> Result<()> {
         self.store.forget_all_content_keys()
+    }
+}
+
+fn unlock_path_or_backup_with_password(
+    path: &Path,
+    password: &[u8],
+) -> Result<lockbox_core::UnlockedContentKey> {
+    match Lockbox::unlock_path_with_password(path, password) {
+        Ok(unlocked) => Ok(unlocked),
+        Err(primary_err) => {
+            let lockbox_id =
+                Lockbox::read_lockbox_id_path(path).map_err(|_| primary_err.clone())?;
+            let backup = VaultDirectory::open_default()
+                .and_then(|vault| vault.load_key_directory_backup(lockbox_id))
+                .map_err(|_| primary_err.clone())?;
+            Lockbox::unlock_key_directory_backup_with_password(&backup, password)
+                .map_err(|_| primary_err)
+        }
+    }
+}
+
+fn unlock_path_or_backup_with_recipient(
+    path: &Path,
+    recipient: &lockbox_core::MlKemKeyPair,
+) -> Result<lockbox_core::UnlockedContentKey> {
+    match Lockbox::unlock_path_with_recipient(path, recipient) {
+        Ok(unlocked) => Ok(unlocked),
+        Err(primary_err) => {
+            let lockbox_id =
+                Lockbox::read_lockbox_id_path(path).map_err(|_| primary_err.clone())?;
+            let backup = VaultDirectory::open_default()
+                .and_then(|vault| vault.load_key_directory_backup(lockbox_id))
+                .map_err(|_| primary_err.clone())?;
+            Lockbox::unlock_key_directory_backup_with_recipient(&backup, recipient)
+                .map_err(|_| primary_err)
+        }
     }
 }
 

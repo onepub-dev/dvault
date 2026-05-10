@@ -86,6 +86,28 @@ pub(crate) fn read_key_directory(
     })
 }
 
+pub(crate) fn read_key_directory_backup(bytes: &[u8]) -> Result<DecodedKeyDirectory> {
+    if bytes.len() < KEY_DIR_HEADER_LEN || &bytes[0..8] != KEY_DIR_MAGIC {
+        return Err(Error::CorruptHeader);
+    }
+    let header = decode_key_directory_header(&bytes[0..KEY_DIR_HEADER_LEN], None)?;
+    let total_len = header.total_len;
+    if total_len < KEY_DIR_HEADER_LEN || total_len > bytes.len() {
+        return Err(Error::Truncated);
+    }
+    let payload = &bytes[KEY_DIR_HEADER_LEN..total_len];
+    if crate::crypto::strong_checksum(payload) != header.payload_digest {
+        return Err(Error::CorruptHeader);
+    }
+    Ok(DecodedKeyDirectory {
+        offset: 0,
+        lockbox_id: header.lockbox_id,
+        generation: header.generation,
+        copy_index: header.copy_index,
+        slots: decode_key_slots(payload)?,
+    })
+}
+
 pub(crate) fn read_key_directory_from_storage(
     storage: &impl Storage,
     offset: u64,

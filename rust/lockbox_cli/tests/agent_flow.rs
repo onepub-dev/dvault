@@ -126,5 +126,7 @@ fn command(bin: &str, agent_dir: &PathBuf, vault_dir: &PathBuf, args: &[&str]) -
 }
 
 fn unique_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("lockbox-agent-flow-{}", std::process::id()))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/test-tmp")
+        .join(format!("lockbox-agent-flow-{}", std::process::id()))
 }

@@ -85,6 +85,13 @@ pub(crate) fn read_password(prompt: &str) -> CliResult<SecretString> {
     Ok(prompt_secret(prompt)?)
 }
 
+pub(crate) fn read_private_key_password() -> CliResult<SecretString> {
+    if let Ok(password) = env::var("LOCKBOX_PRIVATE_KEY_PASSWORD") {
+        return Ok(SecretString::from_bytes(password.into_bytes()));
+    }
+    read_password("Private key password: ")
+}
+
 pub(crate) fn read_new_password() -> CliResult<SecretString> {
     if let Ok(password) = env::var("LOCKBOX_PASSWORD") {
         return Ok(SecretString::from_bytes(password.into_bytes()));
@@ -124,5 +131,6 @@ pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<MlKemKey
             name_or_path,
         )?)?);
     }
-    Ok(vault.load_private_key(name_or_path)?)
+    let password = read_private_key_password()?;
+    Ok(vault.load_private_key(name_or_path, &password)?)
 }

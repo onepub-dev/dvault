@@ -10,7 +10,10 @@ name = "lockbox_vault"
 path = "src/lib.rs"
 
 [dependencies]
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
 lockbox_core = { path = "../lockbox_core" }
+zeroize = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

@@ -1,9 +1,12 @@
 use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair, Result};
-use lockbox_vault::{ContentKeyStore, Vault, VaultDirectory};
+use lockbox_vault::{ContentKeyStore, SecretString, Vault, VaultDirectory};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Default)]
 struct MemoryStore {
@@ -83,9 +86,15 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
     let root = unique_dir("directory");
     let vault = VaultDirectory::open(&root).unwrap();
     let keypair = MlKemKeyPair::generate();
+    let passphrase = SecretString::from_bytes(b"private-key-password".to_vec());
 
-    vault.store_private_key("default", &keypair).unwrap();
-    let loaded = vault.load_private_key("default").unwrap();
+    vault
+        .store_private_key("default", &keypair, &passphrase)
+        .unwrap();
+    let encrypted = fs::read(root.join("private_keys").join("default.key")).unwrap();
+    assert!(encrypted.starts_with(b"LBXVKEY1"));
+    assert!(!String::from_utf8_lossy(&encrypted).contains("private-key-password"));
+    let loaded = vault.load_private_key("default", &passphrase).unwrap();
     assert_eq!(loaded.to_seed_bytes(), keypair.to_seed_bytes());
 
     vault
@@ -112,16 +121,54 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn vault_unlock_uses_key_directory_backup_when_embedded_directory_is_corrupt() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
+    let path = unique_path("backup-fallback");
+    let vault_root = unique_dir("backup-fallback-vault");
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(&vault_root);
+
+    std::env::set_var("LOCKBOX_VAULT_DIR", &vault_root);
+
+    let password = b"shared password".to_vec();
+    let mut lockbox = Lockbox::create_file(&path, LockboxCreate::Password(password.clone()))
+        .expect("create password lockbox");
+    lockbox.put_file("/secret.txt", b"bravo").unwrap();
+    lockbox.commit().unwrap();
+    VaultDirectory::open(&vault_root)
+        .unwrap()
+        .store_key_directory_backup(
+            lockbox.lockbox_id(),
+            &lockbox.export_key_directory_backup().unwrap(),
+        )
+        .unwrap();
+
+    corrupt_key_directories(&path);
+
+    let vault = Vault::new(MemoryStore::default());
+    let opened = vault
+        .unlock_lockbox(&path, LockboxUnlock::Password(password))
+        .unwrap();
+    assert_eq!(opened.get_file("/secret.txt").unwrap(), b"bravo");
+
+    std::env::remove_var("LOCKBOX_VAULT_DIR");
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir_all(vault_root);
+}
+
 fn unique_path(label: &str) -> PathBuf {
     unique_dir(label).join("test.lbox")
 }
 
 fn unique_dir(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "lockbox-vault-api-{label}-{}-{}.lbox",
-        std::process::id(),
-        monotonic_suffix()
-    ))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/test-tmp")
+        .join(format!(
+            "lockbox-vault-api-{label}-{}-{}.lbox",
+            std::process::id(),
+            monotonic_suffix()
+        ))
 }
 
 fn monotonic_suffix() -> u128 {
@@ -129,4 +176,19 @@ fn monotonic_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
+}
+
+fn corrupt_key_directories(path: &PathBuf) {
+    let mut bytes = fs::read(path).unwrap();
+    let magic = b"LBX2KEY\0";
+    let mut offset = 0usize;
+    while offset + magic.len() <= bytes.len() {
+        if &bytes[offset..offset + magic.len()] == magic {
+            bytes[offset] ^= 0x55;
+            offset += magic.len();
+        } else {
+            offset += 1;
+        }
+    }
+    fs::write(path, bytes).unwrap();
 }

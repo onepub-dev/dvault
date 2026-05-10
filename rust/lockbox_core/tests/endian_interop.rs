@@ -11,8 +11,9 @@ fn lockbox_artifact_round_trips_across_architectures() {
     let create_path = std::env::var_os("LOCKBOX_INTEROP_CREATE_PATH").map(PathBuf::from);
 
     if verify_path.is_none() && create_path.is_none() {
-        let path =
-            std::env::temp_dir().join(format!("lockbox-endian-interop-{}.lbx", std::process::id()));
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/test-tmp")
+            .join(format!("lockbox-endian-interop-{}.lbx", std::process::id()));
         create_fixture(&path);
         verify_fixture(&path);
         let _ = std::fs::remove_file(path);

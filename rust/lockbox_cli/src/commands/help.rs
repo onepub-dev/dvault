@@ -22,7 +22,9 @@ pub(crate) fn usage(verbose: bool) {
   lockbox vault init
   lockbox vault keygen [name] [public-key-output]
   lockbox vault trust <name> <public-key>
-  lockbox vault list"
+  lockbox vault list
+  lockbox vault remove-key [name]
+  lockbox vault remove-trusted <name>"
     );
 
     if verbose {
@@ -32,9 +34,12 @@ developer/testing:
   lockbox visualize <lockbox>
   lockbox vault path
   lockbox vault export-public [name] <public-key-output>
+  lockbox vault keygen --overwrite [name] [public-key-output]
+  lockbox vault trust --overwrite <name> <public-key>
   lockbox --key <raw-content-key> <command> ...
   LOCKBOX_KEY=<raw-content-key> lockbox <command> ...
   LOCKBOX_PASSWORD=<password> lockbox open <lockbox>
+  LOCKBOX_PRIVATE_KEY_PASSWORD=<password> lockbox open-key <lockbox>
   LOCKBOX_AGENT_DIR=<dir> lockbox <command> ...
   LOCKBOX_VAULT_DIR=<dir> lockbox <command> ...
 

@@ -207,7 +207,8 @@ impl Lockbox {
             toc_root_offset = commit_root.toc_root_offset;
         }
         lockbox.key_slots = lockbox
-            .read_best_key_directory_slots(scanned_key_directory.as_ref())?
+            .read_best_key_directory_slots(scanned_key_directory.as_ref())
+            .unwrap_or(None)
             .unwrap_or_default();
 
         if toc_root_offset > 0 {

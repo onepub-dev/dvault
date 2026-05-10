@@ -231,6 +231,12 @@ These records are local recovery and convenience data. They are not required for
 a password-shared lockbox to be portable, and they are not the canonical copy of
 lockbox metadata.
 
+Local vault private keys are encrypted with a private-key password before they
+are written to disk. The CLI prompts for that password interactively, or reads
+`LOCKBOX_PRIVATE_KEY_PASSWORD` for automation. Trusted public keys and
+key-directory backups are stored as local vault records with owner-only file
+permissions.
+
 ## CLI Shape
 
 Current/target commands:

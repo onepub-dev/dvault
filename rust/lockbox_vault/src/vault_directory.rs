@@ -1,9 +1,19 @@
-use lockbox_core::{Error, LockboxId, MlKemKeyPair, MlKemRecipientKey, Result};
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use getrandom::getrandom;
+use lockbox_core::{
+    derive_key_from_password, Error, LockboxId, MlKemKeyPair, MlKemRecipientKey, Result,
+    SecretString,
+};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use zeroize::Zeroize;
 
 use crate::{decode_hex, encode_hex};
+
+const PRIVATE_KEY_MAGIC: &[u8; 8] = b"LBXVKEY1";
+const PRIVATE_KEY_AAD: &[u8] = b"lockbox-vault-private-key/v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredTrustedRecipient {
@@ -36,14 +46,22 @@ impl VaultDirectory {
         &self.root
     }
 
-    pub fn store_private_key(&self, name: &str, keypair: &MlKemKeyPair) -> Result<()> {
+    pub fn store_private_key(
+        &self,
+        name: &str,
+        keypair: &MlKemKeyPair,
+        passphrase: &SecretString,
+    ) -> Result<()> {
         let path = self.private_key_path(name)?;
-        write_private_file(&path, encode_hex(&keypair.to_seed_bytes()).as_bytes())
+        let encrypted = encrypt_private_key_seed(&keypair.to_seed_bytes(), passphrase)?;
+        write_private_file(&path, &encrypted)
     }
 
-    pub fn load_private_key(&self, name: &str) -> Result<MlKemKeyPair> {
-        let bytes = read_hex_file(&self.private_key_path(name)?)?;
-        MlKemKeyPair::from_seed_bytes(&bytes)
+    pub fn load_private_key(&self, name: &str, passphrase: &SecretString) -> Result<MlKemKeyPair> {
+        let bytes =
+            fs::read(self.private_key_path(name)?).map_err(|err| Error::Io(err.to_string()))?;
+        let seed = decrypt_private_key_seed(&bytes, passphrase)?;
+        MlKemKeyPair::from_seed_bytes(&seed)
     }
 
     pub fn private_key_exists(&self, name: &str) -> Result<bool> {
@@ -54,6 +72,14 @@ impl VaultDirectory {
         list_record_names(&self.root.join("private_keys"), "key")
     }
 
+    pub fn delete_private_key(&self, name: &str) -> Result<()> {
+        let path = self.private_key_path(name)?;
+        if path.exists() {
+            fs::remove_file(path).map_err(|err| Error::Io(err.to_string()))?;
+        }
+        Ok(())
+    }
+
     pub fn store_trusted_recipient(&self, name: &str, key: &MlKemRecipientKey) -> Result<()> {
         let path = self.trusted_recipient_path(name)?;
         write_private_file(&path, encode_hex(&key.to_bytes()).as_bytes())
@@ -62,6 +88,18 @@ impl VaultDirectory {
     pub fn load_trusted_recipient(&self, name: &str) -> Result<MlKemRecipientKey> {
         let bytes = read_hex_file(&self.trusted_recipient_path(name)?)?;
         MlKemRecipientKey::from_bytes(&bytes)
+    }
+
+    pub fn trusted_recipient_exists(&self, name: &str) -> Result<bool> {
+        Ok(self.trusted_recipient_path(name)?.exists())
+    }
+
+    pub fn delete_trusted_recipient(&self, name: &str) -> Result<()> {
+        let path = self.trusted_recipient_path(name)?;
+        if path.exists() {
+            fs::remove_file(path).map_err(|err| Error::Io(err.to_string()))?;
+        }
+        Ok(())
     }
 
     pub fn list_trusted_recipients(&self) -> Result<Vec<StoredTrustedRecipient>> {
@@ -119,6 +157,54 @@ impl VaultDirectory {
             .join("key_directories")
             .join(format!("{lockbox_id}.keydir"))
     }
+}
+
+fn encrypt_private_key_seed(seed: &[u8], passphrase: &SecretString) -> Result<Vec<u8>> {
+    let mut salt = [0u8; 16];
+    let mut nonce = [0u8; 12];
+    getrandom(&mut salt).map_err(|err| Error::Io(err.to_string()))?;
+    getrandom(&mut nonce).map_err(|err| Error::Io(err.to_string()))?;
+    let mut key = derive_key_from_password(passphrase.expose_bytes(), &salt)?;
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+    let ciphertext = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: seed,
+                aad: PRIVATE_KEY_AAD,
+            },
+        )
+        .map_err(|_| Error::InvalidKey)?;
+    key.zeroize();
+    let mut out =
+        Vec::with_capacity(PRIVATE_KEY_MAGIC.len() + salt.len() + nonce.len() + ciphertext.len());
+    out.extend_from_slice(PRIVATE_KEY_MAGIC);
+    out.extend_from_slice(&salt);
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+fn decrypt_private_key_seed(bytes: &[u8], passphrase: &SecretString) -> Result<Vec<u8>> {
+    if bytes.len() < PRIVATE_KEY_MAGIC.len() + 16 + 12 || &bytes[0..8] != PRIVATE_KEY_MAGIC {
+        return Err(Error::InvalidKey);
+    }
+    let salt = &bytes[8..24];
+    let nonce = &bytes[24..36];
+    let ciphertext = &bytes[36..];
+    let mut key = derive_key_from_password(passphrase.expose_bytes(), salt)?;
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+    let seed = cipher
+        .decrypt(
+            Nonce::from_slice(nonce),
+            Payload {
+                msg: ciphertext,
+                aad: PRIVATE_KEY_AAD,
+            },
+        )
+        .map_err(|_| Error::InvalidKey)?;
+    key.zeroize();
+    Ok(seed)
 }
 
 pub fn default_vault_dir() -> Result<PathBuf> {
