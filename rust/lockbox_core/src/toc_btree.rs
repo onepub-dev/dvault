@@ -1,4 +1,4 @@
-use crate::constants::{DEFAULT_MAX_SEGMENT_BODY_BYTES, HEADER_LEN};
+use crate::constants::{DEFAULT_MAX_PAGE_BODY_BYTES, HEADER_LEN};
 use crate::manifest_codec::{decode_manifest_entries, encode_manifest_entries};
 use crate::manifest_entry::ManifestEntry;
 use crate::{Error, Result};
@@ -81,9 +81,9 @@ pub(crate) fn encode_toc_leaf(entries: &[ManifestEntry]) -> Result<Vec<u8>> {
     out.push(TOC_NODE_VERSION);
     out.push(TOC_LEAF);
     out.extend_from_slice(&encode_manifest_entries(entries));
-    if out.len() > DEFAULT_MAX_SEGMENT_BODY_BYTES {
+    if out.len() > DEFAULT_MAX_PAGE_BODY_BYTES {
         return Err(Error::SecurityLimitExceeded(
-            "TOC leaf exceeds maximum segment size".to_string(),
+            "TOC leaf exceeds maximum page size".to_string(),
         ));
     }
     Ok(out)
@@ -99,9 +99,9 @@ pub(crate) fn encode_toc_internal(children: &[TocChild]) -> Result<Vec<u8>> {
         out.extend_from_slice(child.first_path.as_bytes());
         out.extend_from_slice(&child.offset.to_le_bytes());
     }
-    if out.len() > DEFAULT_MAX_SEGMENT_BODY_BYTES {
+    if out.len() > DEFAULT_MAX_PAGE_BODY_BYTES {
         return Err(Error::SecurityLimitExceeded(
-            "TOC internal node exceeds maximum segment size".to_string(),
+            "TOC internal node exceeds maximum page size".to_string(),
         ));
     }
     Ok(out)
@@ -116,7 +116,7 @@ pub(crate) fn toc_child_groups(children: &[TocChild]) -> Result<Vec<&[TocChild]>
 }
 
 pub(crate) fn toc_leaf_fill_percent(entries: &[ManifestEntry]) -> usize {
-    encoded_leaf_len(entries).saturating_mul(100) / DEFAULT_MAX_SEGMENT_BODY_BYTES
+    encoded_leaf_len(entries).saturating_mul(100) / DEFAULT_MAX_PAGE_BODY_BYTES
 }
 
 pub(crate) fn encoded_leaf_len(entries: &[ManifestEntry]) -> usize {
@@ -141,12 +141,12 @@ fn group_by_encoded_size<T>(
     let mut current_len = base_len;
     for (index, item) in items.iter().enumerate() {
         let len = item_len(item);
-        if base_len + len > DEFAULT_MAX_SEGMENT_BODY_BYTES {
+        if base_len + len > DEFAULT_MAX_PAGE_BODY_BYTES {
             return Err(Error::SecurityLimitExceeded(
-                "TOC item exceeds maximum segment size".to_string(),
+                "TOC item exceeds maximum page size".to_string(),
             ));
         }
-        if index > start && current_len + len > DEFAULT_MAX_SEGMENT_BODY_BYTES {
+        if index > start && current_len + len > DEFAULT_MAX_PAGE_BODY_BYTES {
             groups.push(&items[start..index]);
             start = index;
             current_len = base_len;
@@ -397,7 +397,7 @@ mod tests {
         let groups = toc_leaf_groups(&entries).unwrap();
         assert!(!groups.is_empty());
         for group in groups {
-            assert!(encode_toc_leaf(group).unwrap().len() <= DEFAULT_MAX_SEGMENT_BODY_BYTES);
+            assert!(encode_toc_leaf(group).unwrap().len() <= DEFAULT_MAX_PAGE_BODY_BYTES);
         }
     }
 

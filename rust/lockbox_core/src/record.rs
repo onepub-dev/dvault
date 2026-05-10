@@ -4,7 +4,7 @@ pub(crate) enum RecordKind {
     Symlink = 4,
     Env = 5,
     EnvDelete = 6,
-    FileSegment = 7,
+    FilePage = 7,
     TocNode = 8,
     CommitRoot = 9,
     FreeIndex = 10,

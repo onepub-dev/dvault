@@ -7,10 +7,10 @@ lockbox expansion/extraction.
 
 - File content APIs stream through `Read`/`Write` for add and extract.
 - Single-file range reads are chunk-aware and avoid materializing the whole
-  file for segmented entries.
+  file for pageed entries.
 - The CLI can recursively add a source directory without requiring callers to
   enumerate files themselves.
-- Content is segmented at bounded sizes instead of solid-compressing the whole
+- Content is pageed at bounded sizes instead of solid-compressing the whole
   lockbox.
 - Records are independently compressed/encrypted, which keeps random access and
   partial recovery practical.
@@ -20,7 +20,7 @@ lockbox expansion/extraction.
   directly to disk, which avoids materializing the whole lockbox for normal CLI
   access.
 - Full extraction caches decoded packed-file records per extraction pass, so a
-  packed segment is not decrypted/decompressed once per contained file.
+  packed page is not decrypted/decompressed once per contained file.
 - Directory extraction streams file content to disk. When the destination does
   not already exist, extraction is staged into a sibling temporary directory and
   completed with an OS rename/move (`std::fs::rename`) after all files have been
@@ -33,10 +33,10 @@ lockbox expansion/extraction.
   ancestors, but split/merge-heavy workloads need more profiling.
 - Free-slot lookup now uses ordered offset and size indexes in memory. The
   format persists that free-space state through a commit-root-referenced
-  free-index segment page so reopening does not lose reusable regions.
+  free-index page so reopening does not lose reusable regions.
 - Commit roots, free-space index checkpoints, TOC nodes, file data, symlinks,
   delete markers, and environment records are now written as fixed-size
-  encrypted segment pages.
+  encrypted pages.
 - Full expansion currently walks manifest entries serially. It should support a
   bounded worker pool for independent records.
 - The convenience extraction APIs still return owned `Vec<u8>` values. That is
@@ -126,7 +126,7 @@ Detailed benchmark run history is kept in
 benchmarks are run for a meaningful implementation or format change.
 
 Small-file overhead was the dominant problem in the first benchmark pass. The
-current write path stages small files and writes them into packed file-segment
+current write path stages small files and writes them into packed file-page
 pages during commit, instead of writing one padded page per file and
 repacking later.
 
@@ -181,14 +181,14 @@ Current small-file extraction profile:
   files.
 - 50,000 x 1 KiB files with 20 repeated in-memory extraction passes:
   previously ~4.35s, then ~3.35s after ASCII path validation fast paths, then
-  ~1.5s after flattening the packed-segment extraction cache, and now roughly
+  ~1.5s after flattening the packed-page extraction cache, and now roughly
   ~1.37s after using the TOC-validated fast iterator for extraction.
 - The current user-space flamegraph is dominated by allocation/copying,
-  `decode_file_segment_payload`, default `HashMap` hashing, ASCII path
-  validation, and Zstd decompression. Segment crypto is not currently a top
+  `decode_file_page_payload`, default `HashMap` hashing, ASCII path
+  validation, and Zstd decompression. Page crypto is not currently a top
   small-file extraction hotspot.
 
-The remaining extraction hotspot is therefore not segment crypto; it is per-file
+The remaining extraction hotspot is therefore not page crypto; it is per-file
 allocation/copying for memory extraction and filesystem output for directory
 extraction. The next useful optimization is reducing per-file filesystem calls
 and testing bounded parallel writes for large directory expansions.

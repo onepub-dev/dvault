@@ -3,7 +3,7 @@ name = "lockbox_cli"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Prototype CLI for Lockbox vaults"
+description = "CLI for Lockbox encrypted archives"
 
 [[bin]]
 name = "lockbox"

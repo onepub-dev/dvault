@@ -13,7 +13,7 @@ pub(crate) fn decode_index_record(record: &DecodedRecord) -> Result<Option<Manif
 
 pub(crate) fn decode_index_records(record: &DecodedRecord) -> Result<Vec<ManifestEntry>> {
     match record.header.kind {
-        RecordKind::FileSegment => {
+        RecordKind::FilePage => {
             let chunk = decode_file_fragment_payload(&record.payload)?;
             Ok(vec![ManifestEntry {
                 path: chunk.path,

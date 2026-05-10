@@ -112,7 +112,7 @@ The key-directory header includes the lockbox UUID, generation, copy index, a
 SHA-256 payload checksum, and a SHA-256 public-header checksum. If the fixed
 header or primary key-directory copy is damaged, the library can scan the
 lockbox for mirror copies, try the password or recipient key against those
-slots, recover the lockbox UUID and content key, and then scan encrypted segment
+slots, recover the lockbox UUID and content key, and then scan encrypted
 pages for the latest valid commit root.
 
 The Rust implementation caps the encoded key directory at 1 MiB. That is enough
@@ -219,7 +219,7 @@ options. Normal users should not type or manage raw content keys.
 ## Format Requirements
 
 - The content key must be random and unique per lockbox.
-- Content segments must be encrypted with keys derived from the content key.
+- Content pages must be encrypted with keys derived from the content key.
 - Passwords must never be used directly as content keys.
 - Password slots must use Argon2id with stored parameters and salt.
 - Public-key slots should use ML-KEM-1024 for post-quantum key wrapping.
@@ -231,6 +231,6 @@ options. Normal users should not type or manage raw content keys.
 ## Non-Goals
 
 - One keypair per lockbox by default.
-- User-visible segment or chunk management.
+- User-visible page or chunk management.
 - Required labels for key slots.
 - Broad user-selectable crypto modes.

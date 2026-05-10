@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::Lockbox;
-use crate::format::{encode_env_delete_payload, encode_env_payload, scan_env_records};
+use crate::format::{
+    decode_env_payload, encode_env_delete_payload, encode_env_payload, scan_env_records,
+};
 use crate::record::RecordKind;
 use crate::security::{validate_env_name, validate_env_value};
 use crate::Result;
@@ -36,6 +38,7 @@ impl Lockbox {
 
     pub fn remove_env(&mut self, name: &str) -> Result<()> {
         let name = validate_env_name(name)?;
+        self.schedule_env_page_redactions(&name)?;
         self.sequence += 1;
         let payload = encode_env_delete_payload(&name);
         self.write_object_page(RecordKind::EnvDelete, self.sequence, payload)?;
@@ -45,6 +48,27 @@ impl Lockbox {
             .as_mut()
             .expect("env vars loaded")
             .remove(&name);
+        Ok(())
+    }
+
+    fn schedule_env_page_redactions(&mut self, name: &str) -> Result<()> {
+        let pages = self.inspect_pages()?;
+        for page in pages {
+            let decoded = self.read_page(page.offset)?;
+            for object in decoded.objects {
+                if object.kind == crate::page::PageObjectKind::EnvSet
+                    && decode_env_payload(&object.payload)
+                        .map(|(stored_name, _)| stored_name == name)
+                        .unwrap_or(false)
+                {
+                    self.schedule_page_object_redaction(
+                        page.offset,
+                        crate::page::DEFAULT_PAGE_BYTES as u64,
+                        object.id,
+                    );
+                }
+            }
+        }
         Ok(())
     }
 

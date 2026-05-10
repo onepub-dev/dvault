@@ -1,5 +1,5 @@
 use super::Lockbox;
-use crate::constants::DEFAULT_MAX_SEGMENT_BODY_BYTES;
+use crate::constants::DEFAULT_MAX_PAGE_BODY_BYTES;
 use crate::format::encode_delete_payloads;
 use crate::logical_path::canonicalize_api_path as canonicalize_path;
 use crate::manifest_entry::ManifestEntry;
@@ -20,7 +20,7 @@ impl Lockbox {
         if old.record_len != 0 || !old.chunks.is_empty() {
             self.pending_deletes.push(path.clone());
         }
-        self.free_entry_slots(old.clone());
+        self.free_entry_slots(old.clone())?;
         let dirty_path = old.path.clone();
         self.manifest.remove(path.as_str());
         self.mark_toc_dirty(&dirty_path);
@@ -37,7 +37,7 @@ impl Lockbox {
         let mut batch_size = 0usize;
         for path in pending {
             let entry_size = 2 + path.len();
-            if !batch.is_empty() && batch_size + entry_size > DEFAULT_MAX_SEGMENT_BODY_BYTES {
+            if !batch.is_empty() && batch_size + entry_size > DEFAULT_MAX_PAGE_BODY_BYTES {
                 self.write_delete_batch(&batch)?;
                 batch.clear();
                 batch_size = 0;

@@ -10,7 +10,7 @@ cryptographic review.
 - `..`, Windows drive syntax, UNC-like roots, backslashes, controls, dangerous
   Unicode controls, and non-canonical Unicode metadata are rejected.
 - Symlink paths and targets use the same logical-path rules.
-- Fixed-size segment pages are encrypted and authenticated with
+- Fixed-size pages are encrypted and authenticated with
   ChaCha20-Poly1305. Each page stores a unique nonce in the page header and
   authenticates page identity through AEAD AAD.
 - Password slots use Argon2id with per-slot salts.
@@ -23,7 +23,7 @@ cryptographic review.
   internal separators, invalid child offsets, and invalid stored paths before
   extraction trusts TOC metadata.
 - Current commits now publish an authenticated commit-root object inside a
-  fixed-size encrypted segment page. The commit root points at the live TOC root
+  fixed-size encrypted page. The commit root points at the live TOC root
   and the persisted free-space index.
 - The committed TOC is live-only; deletes are represented in recovery history,
   not as tombstones in the current namespace.
@@ -43,12 +43,12 @@ cryptographic review.
   help only and should be discouraged for real use.
 - The core still exposes raw-key APIs for developer/testing use. Normal bindings
   should guide callers toward password/recipient unlock APIs.
-- The live storage path now uses fixed-size encrypted segment pages. Format
+- The live storage path now uses fixed-size encrypted pages. Format
   review should treat `docs/format.md` as the current contract and continue to
-  audit that all normal reads and writes pass through the segment cache.
+  audit that all normal reads and writes pass through the page cache.
 - Memory locking is best effort. It can fail due to OS limits; zeroization is
   still the reliable baseline.
-- Compression-ratio and decompression-bomb tests cover the core segment body
+- Compression-ratio and decompression-bomb tests cover the core page body
   decoder and extraction limits; they should continue expanding with fuzz
   corpus cases.
 - Filesystem extraction needs a platform-specific hardening pass before it is
@@ -65,7 +65,7 @@ cryptographic review.
 
 - Third-party cryptographic review.
 - Continue auditing that all normal storage reads and writes pass through the
-  segment cache.
+  page cache.
 - Extend fuzz corpus coverage for multi-page free-space indexes.
 - Fuzzing harnesses and corpus.
 - Windows/macOS/Linux agent IPC tests in CI, including explicit Windows DACL

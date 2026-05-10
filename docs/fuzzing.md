@@ -6,7 +6,7 @@ Targets:
 
 - `header`: fixed-header and lockbox-id parsing.
 - `key_directory`: password-slot/key-directory open path.
-- `pages_recovery`: segment-page scanning, recovery, and salvage.
+- `pages_recovery`: page scanning, recovery, and salvage.
 - `paths`: logical path, symlink, and listing API inputs.
 
 Run locally with:

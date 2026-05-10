@@ -2,22 +2,21 @@ use std::io::{Cursor, Read, Write};
 
 use super::Lockbox;
 use crate::compression::{decode_file_frame, encode_file_frame};
-use crate::constants::{DEFAULT_FILE_PERMISSIONS, DEFAULT_MAX_SEGMENT_BODY_BYTES};
+use crate::constants::{DEFAULT_FILE_PERMISSIONS, DEFAULT_MAX_PAGE_BODY_BYTES};
 use crate::file_chunk::{FileChunk, FileFragment, PendingFileChunk};
 use crate::format::{decode_file_fragment_payload, encode_file_fragment_payload};
 use crate::logical_path::{canonicalize_api_path as canonicalize_path, LogicalPath};
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
-use crate::security::validate_permissions;
-use crate::segment_page::{
-    encoded_object_len, uncompressed_objects_fit, SegmentObject, SegmentObjectKind,
-    DEFAULT_SEGMENT_PAGE_BYTES,
+use crate::page::{
+    encoded_object_len, uncompressed_objects_fit, PageObject, PageObjectKind, DEFAULT_PAGE_BYTES,
 };
+use crate::security::validate_permissions;
 use crate::{Error, Result};
 
 const SMALL_FILE_PACKING_LIMIT: usize = 1024 * 1024;
 const FILE_FRAME_BYTES: usize = 1020 * 1024;
-const MAX_FRAGMENT_BYTES: usize = DEFAULT_MAX_SEGMENT_BODY_BYTES - 64 * 1024;
+const MAX_FRAGMENT_BYTES: usize = DEFAULT_MAX_PAGE_BODY_BYTES - 64 * 1024;
 
 impl Lockbox {
     pub fn put_file(&mut self, path: &str, data: &[u8]) -> Result<()> {
@@ -50,7 +49,7 @@ impl Lockbox {
         let permissions = validate_permissions(permissions)?;
         self.pending_small_files.remove(&path);
         if let Some(old) = self.manifest.get(path.as_str()).cloned() {
-            self.free_entry_slots(old);
+            self.free_entry_slots(old)?;
         }
 
         let mut chunks = Vec::new();
@@ -100,7 +99,7 @@ impl Lockbox {
                 .and_then(|chunk| chunk.fragments.first())
                 .map(|fragment| fragment.page_offset)
                 .unwrap_or(0),
-            record_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
+            record_len: DEFAULT_PAGE_BYTES as u64,
             deleted: false,
             node_kind: NodeKind::File,
             permissions,
@@ -208,7 +207,7 @@ impl Lockbox {
     ) -> Result<Vec<u8>> {
         let mut stored = vec![0u8; chunk.compressed_len as usize];
         for fragment in &chunk.fragments {
-            let object = self.read_segment_object(fragment.page_offset, fragment.object_id)?;
+            let object = self.read_page_object(fragment.page_offset, fragment.object_id)?;
             let decoded = decode_file_fragment_payload(&object.payload)?;
             if decoded.path != expected_path
                 || (decoded.total_len != 0 && decoded.total_len != expected_total_len)
@@ -239,7 +238,7 @@ impl Lockbox {
         let path = canonicalize_path(path, false)?;
         let permissions = validate_permissions(permissions)?;
         if let Some(old) = self.manifest.get(path.as_str()).cloned() {
-            self.free_entry_slots(old);
+            self.free_entry_slots(old)?;
         }
 
         self.pending_small_files.insert(
@@ -305,7 +304,7 @@ impl Lockbox {
                     .and_then(|chunk| chunk.fragments.first())
                     .map(|fragment| fragment.page_offset)
                     .unwrap_or(0);
-                entry.record_len = DEFAULT_SEGMENT_PAGE_BYTES as u64;
+                entry.record_len = DEFAULT_PAGE_BYTES as u64;
                 entry.len = total_len;
                 entry.permissions = permissions;
                 entry.chunks = chunks;
@@ -320,7 +319,7 @@ impl Lockbox {
         Ok(())
     }
 
-    pub(crate) fn pack_small_file_segments(&mut self) -> Result<()> {
+    pub(crate) fn pack_small_file_pages(&mut self) -> Result<()> {
         let mut candidates = Vec::new();
         for entry in self.manifest.values() {
             if entry.deleted || entry.node_kind != NodeKind::File || entry.len > 1024 * 1024 {
@@ -335,7 +334,7 @@ impl Lockbox {
         }
 
         for (_, _, _, old) in &candidates {
-            self.free_entry_slots(old.clone());
+            self.free_entry_slots(old.clone())?;
         }
 
         let mut writer = FilePageWriter::new(self);
@@ -367,7 +366,7 @@ impl Lockbox {
                     .and_then(|chunk| chunk.fragments.first())
                     .map(|fragment| fragment.page_offset)
                     .unwrap_or(0);
-                entry.record_len = DEFAULT_SEGMENT_PAGE_BYTES as u64;
+                entry.record_len = DEFAULT_PAGE_BYTES as u64;
                 entry.len = len;
                 entry.permissions = permissions;
                 entry.chunks = chunks;
@@ -444,7 +443,7 @@ struct PendingPageObject {
     chunk_index: usize,
     fragment_offset: u64,
     fragment_len: u64,
-    object: SegmentObject,
+    object: PageObject,
 }
 
 struct FilePageWriter<'a> {
@@ -562,8 +561,8 @@ impl<'a> FilePageWriter<'a> {
             compressed_len,
             fragment_offset,
         );
-        let object = SegmentObject {
-            kind: SegmentObjectKind::FileData,
+        let object = PageObject {
+            kind: PageObjectKind::FileData,
             id: object_id,
             payload,
         };
@@ -580,13 +579,13 @@ impl<'a> FilePageWriter<'a> {
         }
         if !self.fits_with(encoded_len)? {
             return Err(Error::SecurityLimitExceeded(
-                "file fragment does not fit in a segment page".to_string(),
+                "file fragment does not fit in a page".to_string(),
             ));
         }
         self.pending_object_stream_len = self
             .pending_object_stream_len
             .checked_add(encoded_len)
-            .ok_or_else(|| Error::SecurityLimitExceeded("segment page is too large".to_string()))?;
+            .ok_or_else(|| Error::SecurityLimitExceeded("page is too large".to_string()))?;
         self.pending.push(pending);
         Ok(())
     }
@@ -599,30 +598,27 @@ impl<'a> FilePageWriter<'a> {
         let stream_len = self
             .pending_object_stream_len
             .checked_add(encoded_len)
-            .ok_or_else(|| Error::SecurityLimitExceeded("segment page is too large".to_string()))?;
-        Ok(uncompressed_objects_fit(
-            DEFAULT_SEGMENT_PAGE_BYTES,
-            stream_len,
-        ))
+            .ok_or_else(|| Error::SecurityLimitExceeded("page is too large".to_string()))?;
+        Ok(uncompressed_objects_fit(DEFAULT_PAGE_BYTES, stream_len))
     }
 
     fn flush(&mut self, chunks: &mut [FileChunk]) -> Result<()> {
         if self.pending.is_empty() {
             return Ok(());
         }
-        let page_offset = self.lockbox.allocate_segment_page_offset()?;
+        let page_offset = self.lockbox.allocate_page_offset()?;
         let objects = self
             .pending
             .iter()
             .map(|pending| pending.object.clone())
             .collect::<Vec<_>>();
         self.lockbox
-            .write_decoded_segment_page_at(page_offset, self.lockbox.sequence, objects)?;
+            .write_decoded_page_at(page_offset, self.lockbox.sequence, objects)?;
         for pending in self.pending.drain(..) {
             if let Some(chunk) = chunks.get_mut(pending.chunk_index) {
                 chunk.fragments.push(FileFragment {
                     page_offset,
-                    page_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
+                    page_len: DEFAULT_PAGE_BYTES as u64,
                     object_id: pending.object.id,
                     fragment_offset: pending.fragment_offset,
                     fragment_len: pending.fragment_len,

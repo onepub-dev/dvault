@@ -43,29 +43,28 @@ applications should embed the core crate through platform bindings.
 
 ## Format Model
 
-Lockbox v2 uses a small cleartext segment frame plus encrypted private segment
-bodies.
+Lockbox v2 uses a small cleartext page frame plus encrypted private page bodies.
 
 ```text
 [ Header ]
-[ Segment: file metadata + content, encrypted body ]
-[ Segment: delete/tombstone, encrypted body ]
-[ Segment: manifest checkpoint, encrypted body ]
+[ Page: file metadata + content, encrypted body ]
+[ Page: delete/tombstone, encrypted body ]
+[ Page: manifest checkpoint, encrypted body ]
 ...
 ```
 
-Cleartext segment headers contain only scanner-safe framing:
+Cleartext page headers contain only scanner-safe framing:
 
 ```text
 magic
-segment page version
+page version
 sequence
 encrypted body length
 SHA-256 public header checksum
 ```
 
 Paths, file names, content, lengths-by-path, and manifest entries are inside
-fixed-size encrypted segment pages. Pages are currently 8 MiB, and normal
+fixed-size encrypted pages. Pages are currently 8 MiB, and normal
 storage reads and writes operate on whole pages. This hides the true size of
 tiny files, env vars, symlinks, and metadata from the backing store and from a
 range-request based web service.
@@ -76,8 +75,8 @@ Normal open uses the header's latest manifest checkpoint. The manifest is the
 current filesystem view: path lookup, file metadata, and physical record
 locations.
 
-Recovery does not trust the header or manifest. It scans fixed-size segment
-pages, verifies payloads, decrypts metadata, and rebuilds the best available
+Recovery does not trust the header or manifest. It scans fixed-size pages,
+verifies payloads, decrypts metadata, and rebuilds the best available
 manifest. If the latest manifest is corrupt but file pages are intact, files are
 still
 recoverable. If a file record is corrupt but the manifest survives, recovery
@@ -133,7 +132,7 @@ is written to a cache file.
 
 See [docs/key_management.md](docs/key_management.md) for design intent and CLI
 direction. See [docs/format.md](docs/format.md) for the current header,
-key-directory, and fixed segment-page layout.
+key-directory, and fixed page layout.
 
 ## Rust API
 
@@ -164,6 +163,19 @@ Current tested APIs:
 
 - `create`
 - `open`
+- `create_with_password`
+- `open_with_password`
+- `unlock_with_password`
+- `create_with_recipient`
+- `open_with_recipient`
+- `unlock_with_recipient`
+- `add_password_slot`
+- `add_recipient`
+- `add_recipient_key`
+- `change_password`
+- `remove_key_slot`
+- `remove_key_slot_and_compact`
+- `list_key_slots`
 - `to_bytes`
 - `put_file`
 - `put_file_with_permissions`
@@ -194,18 +206,22 @@ Current tested APIs:
 - `recover`
 - `salvage`
 
-### Segment Cache
+Environment variables are stored as encrypted env objects inside normal pages.
+They are not file entries, do not appear in directory listings, and are loaded
+only when `get_env`, `list_env`, or `get_all_env` is called.
 
-The core library uses a unified decoded-segment cache for pages read from the
-lockbox. TOC nodes, file segments, symlinks, env objects, and free-index objects
+### Page Cache
+
+The core library uses a unified decoded-page cache for pages read from the
+lockbox. TOC nodes, file pages, symlinks, env objects, and free-index objects
 share one weighted LRU budget keyed by page offset. The cache is a performance
 layer only: correctness does not require the full TOC or full lockbox to fit in
 memory.
 
 The default cache limit is `Auto`. On native platforms this uses a
-segment-aware minimum and a best-effort memory-pressure target:
+page-aware minimum and a best-effort memory-pressure target:
 
-- minimum useful cache: the larger of eight maximum-size segments or 64 MiB
+- minimum useful cache: the larger of eight maximum-size pages or 64 MiB
 - target: about 15% of currently available/reclaimable memory
 - native cap: 4 GiB unless the caller overrides it
 - WASM default: 64 MiB, because reliable free-memory information is not
@@ -226,12 +242,16 @@ lockbox.trim_cache_to(64 * 1024 * 1024);
 let stats = lockbox.cache_stats();
 ```
 
-## Segment Reuse
+## Page Reuse
 
 Lockbox should not rely on compaction as the normal way to manage archive
 growth. Deleted or replaced pages become reusable slots. New pages reuse
 available slots when they fit, while metadata updates remain checkpointed and
 crash-safe.
+
+Deletes and replacements redact old physical pages during commit. If a page also
+contains live objects, those objects are relocated first, then the old page is
+zeroed so stale ciphertext is not left recoverable through COW history.
 
 Compaction should remain a maintenance operation for heavily fragmented
 archives, not the default write path.
@@ -275,8 +295,8 @@ Default rules:
 
 The Rust implementation currently enforces strict logical and Unicode path
 validation, symlink-path validation, private path/content storage, parser
-rejection of tampered paths in encrypted metadata, fixed-size encrypted segment
-pages, random AEAD nonces for encrypted pages, zstd segment compression,
+rejection of tampered paths in encrypted metadata, fixed-size encrypted pages,
+random AEAD nonces for encrypted pages, zstd page compression,
 Argon2id password KDF, ML-KEM-1024 key wrapping, and bounded in-memory
 `extract_all`.
 Production work still needs published crypto test vectors, stronger zstd
@@ -289,6 +309,7 @@ Current review notes:
 - [Security audit](docs/security_audit.md)
 - [Rust idioms review](docs/rust_idioms_review.md)
 - [Fuzzing](docs/fuzzing.md)
+- [CI secret storage comparison](docs/ci_secret_storage_comparison.md)
 
 ## Browser And Web Service Access
 
@@ -315,11 +336,11 @@ remote.list("/docs").await?
 The Rust implementation now includes:
 
 - ChaCha20-Poly1305 or XChaCha20-Poly1305 with 256-bit content keys for
-  segment-body encryption. The current code uses ChaCha20-Poly1305.
+  page-body encryption. The current code uses ChaCha20-Poly1305.
 - Argon2id password key derivation, or a caller-supplied raw content key.
 - NIST ML-KEM-1024/FIPS 203 for post-quantum public-key wrapping when content
   keys need to be shared or stored for recipients.
-- Zstandard as the default segment compression engine.
+- Zstandard as the default page compression engine.
 - The core uses a pure-Rust zstd backend so embedders do not need a C zstd
   toolchain on desktop, mobile, or WASM targets.
 - Independent compressed chunks for large files so random access and corruption

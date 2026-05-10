@@ -1,21 +1,20 @@
 use crate::cache_options::{cache_limit_bytes, CacheLimit, CacheStats};
 use crate::fast_hash::FastBuildHasher;
 use crate::lockbox_id::LockboxId;
-use crate::segment_page::{
-    decode_segment_page, encode_segment_page, DecodedSegmentPage, SegmentObject,
-};
+use crate::page::{decode_page, encode_page, DecodedPage, PageObject};
 use crate::storage::Storage;
 use crate::Result;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 const AUTO_RESIZE_INTERVAL: u64 = 256;
 
 #[derive(Debug, Clone)]
-pub(crate) struct SegmentManager {
+pub(crate) struct PageCache {
     limit: CacheLimit,
     limit_bytes: u64,
     used_bytes: u64,
     pages: HashMap<u64, CachedPage, FastBuildHasher>,
+    dirty_offsets: BTreeSet<u64>,
     recent: VecDeque<u64>,
     hits: u64,
     misses: u64,
@@ -24,19 +23,20 @@ pub(crate) struct SegmentManager {
 
 #[derive(Debug, Clone)]
 struct CachedPage {
-    page: DecodedSegmentPage,
+    page: DecodedPage,
     object_positions: HashMap<u64, usize, FastBuildHasher>,
     weight: u64,
     generation: u64,
 }
 
-impl SegmentManager {
+impl PageCache {
     pub(crate) fn new(limit: CacheLimit) -> Self {
         Self {
             limit,
             limit_bytes: cache_limit_bytes(limit),
             used_bytes: 0,
             pages: HashMap::with_hasher(FastBuildHasher::default()),
+            dirty_offsets: BTreeSet::new(),
             recent: VecDeque::new(),
             hits: 0,
             misses: 0,
@@ -44,24 +44,24 @@ impl SegmentManager {
         }
     }
 
-    pub(crate) fn read_segment_page(
+    pub(crate) fn read_page(
         &mut self,
         storage: &impl Storage,
         offset: u64,
         page_size: usize,
         lockbox_id: LockboxId,
         key: &[u8],
-    ) -> Result<DecodedSegmentPage> {
+    ) -> Result<DecodedPage> {
         if let Some(page) = self.get_page(offset) {
             return Ok(page);
         }
         let bytes = storage.read_at(offset, page_size)?;
-        let page = decode_segment_page(&bytes, lockbox_id, key)?;
+        let page = decode_page(&bytes, lockbox_id, key)?;
         self.insert_page(offset, page.clone(), page_size as u64);
         Ok(page)
     }
 
-    pub(crate) fn read_segment_object(
+    pub(crate) fn read_page_object(
         &mut self,
         storage: &impl Storage,
         offset: u64,
@@ -69,12 +69,12 @@ impl SegmentManager {
         page_size: usize,
         lockbox_id: LockboxId,
         key: &[u8],
-    ) -> Result<SegmentObject> {
+    ) -> Result<PageObject> {
         if let Some(object) = self.get_page_object(offset, object_id) {
             return Ok(object);
         }
         let bytes = storage.read_at(offset, page_size)?;
-        let page = decode_segment_page(&bytes, lockbox_id, key)?;
+        let page = decode_page(&bytes, lockbox_id, key)?;
         let object = page
             .objects
             .iter()
@@ -85,36 +85,75 @@ impl SegmentManager {
         Ok(object)
     }
 
-    pub(crate) fn write_decoded_segment_page(
+    pub(crate) fn write_decoded_page(
         &mut self,
         storage: &mut impl Storage,
         offset: u64,
         page_size: usize,
         lockbox_id: LockboxId,
         key: &[u8],
-        page: DecodedSegmentPage,
+        page: DecodedPage,
     ) -> Result<()> {
-        let encoded = encode_segment_page(
-            page_size,
-            lockbox_id,
-            page.page_id,
-            page.sequence,
-            key,
-            &page.objects,
-        )?;
-        if offset == storage.len()? {
-            let appended = storage.append(&encoded)?;
-            if appended != offset {
-                return Err(crate::Error::CorruptRecord);
-            }
-        } else {
-            storage.write_at(offset, &encoded)?;
-        }
-        self.insert_page(offset, page, page_size as u64);
+        let _ = (storage, lockbox_id, key);
+        self.insert_dirty_page(offset, page, page_size as u64);
         Ok(())
     }
 
-    pub(crate) fn get_page(&mut self, offset: u64) -> Option<DecodedSegmentPage> {
+    pub(crate) fn flush_dirty_pages(
+        &mut self,
+        storage: &mut impl Storage,
+        page_size: usize,
+        lockbox_id: LockboxId,
+        key: &[u8],
+    ) -> Result<()> {
+        let dirty_offsets = self.dirty_offsets.iter().copied().collect::<Vec<_>>();
+        for offset in dirty_offsets {
+            let page = self
+                .pages
+                .get(&offset)
+                .map(|entry| entry.page.clone())
+                .ok_or(crate::Error::CorruptRecord)?;
+            let encoded = encode_page(
+                page_size,
+                lockbox_id,
+                page.page_id,
+                page.sequence,
+                key,
+                &page.objects,
+            )?;
+            while offset > storage.len()? {
+                storage.append(&vec![0; page_size])?;
+            }
+            if offset == storage.len()? {
+                let appended = storage.append(&encoded)?;
+                if appended != offset {
+                    return Err(crate::Error::CorruptRecord);
+                }
+            } else {
+                storage.write_at(offset, &encoded)?;
+            }
+            self.dirty_offsets.remove(&offset);
+            if self.limit_bytes == 0 {
+                self.evict(offset);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn virtual_len(&self, storage_len: u64, page_size: usize) -> u64 {
+        self.dirty_offsets
+            .iter()
+            .map(|offset| offset.saturating_add(page_size as u64))
+            .max()
+            .unwrap_or(storage_len)
+            .max(storage_len)
+    }
+
+    pub(crate) fn has_dirty_pages(&self) -> bool {
+        !self.dirty_offsets.is_empty()
+    }
+
+    pub(crate) fn get_page(&mut self, offset: u64) -> Option<DecodedPage> {
         self.refresh_limit_if_needed();
         let Some(entry) = self.pages.get_mut(&offset) else {
             self.misses = self.misses.saturating_add(1);
@@ -126,7 +165,7 @@ impl SegmentManager {
         Some(entry.page.clone())
     }
 
-    pub(crate) fn get_page_object(&mut self, offset: u64, object_id: u64) -> Option<SegmentObject> {
+    pub(crate) fn get_page_object(&mut self, offset: u64, object_id: u64) -> Option<PageObject> {
         self.refresh_limit_if_needed();
         let Some(entry) = self.pages.get_mut(&offset) else {
             self.misses = self.misses.saturating_add(1);
@@ -139,9 +178,24 @@ impl SegmentManager {
         entry.page.objects.get(index).cloned()
     }
 
-    pub(crate) fn insert_page(&mut self, offset: u64, page: DecodedSegmentPage, weight: u64) {
+    pub(crate) fn insert_page(&mut self, offset: u64, page: DecodedPage, weight: u64) {
+        self.insert_page_with_policy(offset, page, weight, false);
+    }
+
+    fn insert_dirty_page(&mut self, offset: u64, page: DecodedPage, weight: u64) {
+        self.dirty_offsets.insert(offset);
+        self.insert_page_with_policy(offset, page, weight, true);
+    }
+
+    fn insert_page_with_policy(
+        &mut self,
+        offset: u64,
+        page: DecodedPage,
+        weight: u64,
+        force: bool,
+    ) {
         self.refresh_limit_if_needed();
-        if self.limit_bytes == 0 || weight > self.limit_bytes {
+        if !force && (self.limit_bytes == 0 || weight > self.limit_bytes) {
             return;
         }
         if let Some(old) = self.pages.remove(&offset) {
@@ -170,7 +224,15 @@ impl SegmentManager {
     pub(crate) fn clear(&mut self) {
         self.used_bytes = 0;
         self.pages.clear();
+        self.dirty_offsets.clear();
         self.recent.clear();
+    }
+
+    pub(crate) fn evict(&mut self, offset: u64) {
+        if let Some(old) = self.pages.remove(&offset) {
+            self.used_bytes = self.used_bytes.saturating_sub(old.weight);
+        }
+        self.dirty_offsets.remove(&offset);
     }
 
     pub(crate) fn set_limit(&mut self, limit: CacheLimit) {
@@ -221,6 +283,10 @@ impl SegmentManager {
             let Some(page) = self.pages.get_mut(&offset) else {
                 continue;
             };
+            if self.dirty_offsets.contains(&offset) {
+                self.recent.push_back(offset);
+                break;
+            }
             if page.generation > 0 {
                 page.generation -= 1;
                 self.recent.push_back(offset);
@@ -238,11 +304,11 @@ impl SegmentManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::segment_page::DecodedSegmentPage;
+    use crate::page::DecodedPage;
 
     #[test]
     fn evicts_by_weight() {
-        let mut cache = SegmentManager::new(CacheLimit::Bytes(1_100));
+        let mut cache = PageCache::new(CacheLimit::Bytes(1_100));
         cache.insert_page(1, page(1), 500);
         cache.insert_page(2, page(2), 500);
         cache.insert_page(3, page(3), 500);
@@ -253,15 +319,15 @@ mod tests {
 
     #[test]
     fn explicit_trim_reduces_usage() {
-        let mut cache = SegmentManager::new(CacheLimit::Bytes(2_000));
+        let mut cache = PageCache::new(CacheLimit::Bytes(2_000));
         cache.insert_page(1, page(1), 500);
         cache.insert_page(2, page(2), 500);
         cache.trim_to(400);
         assert!(cache.stats().used_bytes <= 400);
     }
 
-    fn page(page_id: u64) -> DecodedSegmentPage {
-        DecodedSegmentPage {
+    fn page(page_id: u64) -> DecodedPage {
+        DecodedPage {
             page_id,
             sequence: page_id,
             objects: Vec::new(),

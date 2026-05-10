@@ -14,10 +14,10 @@ by transferring lockbox fixtures between Linux x64, Linux arm64, macOS arm64,
 and an emulated big-endian `s390x` environment. The big-endian job reads a
 little-endian-created fixture and emits a fixture that Linux x64 reads back.
 
-The physical unit of the lockbox is a fixed-size encrypted segment page. Higher
+The physical unit of the lockbox is a fixed-size encrypted page. Higher
 level structures such as TOC nodes, file chunks, environment variables, key
 directories, free-space indexes, and commit roots are encoded as objects inside
-segment pages. Public APIs must not expose segment-page management.
+pages. Public APIs must not expose page management.
 
 ## Fixed Header
 
@@ -30,7 +30,7 @@ offset  size  field
 8       2     version: 3
 10      2     header flags
 12      4     header length: 96
-16      8     latest commit-root segment page offset, or 0
+16      8     latest commit-root page offset, or 0
 24      8     latest commit sequence
 32      8     latest public key-directory offset, or 0
 40      16    public lockbox UUID
@@ -44,23 +44,23 @@ content, recipients, or passwords.
 
 The header checksum is a domain-separated SHA-256 digest. It detects torn or
 malformed header updates. It is not a security boundary. Security decisions must
-be based on authenticated segment pages and authenticated commit roots.
+be based on authenticated pages and authenticated commit roots.
 
 The key-directory pointer remains in the fixed header because users need the key
 directory before the content key is unlocked. The key directory stores only
 unlock metadata and must not contain private file metadata.
 
-## Segment Pages
+## Pages
 
-Every segment page has the same physical size. The default page size is 8 MiB.
+Every page has the same physical size. The default page size is 8 MiB.
 Implementations may read and write whole pages for native storage. Browser/WASM
 clients may fetch page ranges over HTTP using the TOC offsets, but decryption
 still authenticates a whole page.
 
 ```text
 offset  size  field
-0       8     magic: "LBX2SEG\0"
-8       2     segment header version: 2
+0       8     magic: "LBX2PAG\0"
+8       2     page header version: 2
 10      2     public flags
 12      4     header length
 16      8     page id
@@ -76,15 +76,15 @@ H+m     p     zero padding to the fixed page size
 The nonce is generated per page write and must be unique for the content key. It
 must not be derived only from record kind, object kind, or commit sequence.
 
-Only the segment page header is public. Object kinds, object lengths, logical
+Only the page header is public. Object kinds, object lengths, logical
 paths, symlink targets, environment variable names, permissions, compression
 selection, and file contents are inside the encrypted body.
 
-Segment page public-header checksums are generated and verified at the segment
+Page public-header checksums are generated and verified at the page
 cache/page-codec boundary. Higher-level TOC, file, recovery, and extraction code
-must not bypass the segment cache for normal page reads or writes.
+must not bypass the page cache for normal page reads or writes.
 
-Segment page AEAD associated data includes:
+Page AEAD associated data includes:
 
 - lockbox format domain string
 - fixed header version
@@ -94,13 +94,13 @@ Segment page AEAD associated data includes:
 - public flags
 - encrypted body length
 
-## Segment Body
+## Page Body
 
-The decrypted segment body is an object container.
+The decrypted page body is an object container.
 
 ```text
 offset  size  field
-0       1     segment body version: 1
+0       1     page body version: 1
 1       1     compression algorithm
 2       1     compression profile
 3       1     reserved
@@ -109,7 +109,7 @@ offset  size  field
 16      n     compressed or uncompressed object stream
 ```
 
-Compression is chosen by the core per segment body:
+Compression is chosen by the core per page body:
 
 - default writes try zstd with the normal profile
 - if compression is larger or not useful, the body is stored uncompressed
@@ -158,19 +158,19 @@ when early frames are written; the TOC is authoritative when available, and
 recovery can still infer a best-effort length from intact frames.
 
 Paths remain private because both TOC entries and fragment metadata are inside
-encrypted segment page bodies. They are exposed only after the caller has
+encrypted page bodies. They are exposed only after the caller has
 unlocked the content key.
 
 ## Page Cache Boundary
 
-Encryption and decryption are owned by the segment page cache. Higher layers
-construct or consume decoded `SegmentObject` values and are otherwise oblivious
+Encryption and decryption are owned by the page cache. Higher layers
+construct or consume decoded page objects and are otherwise oblivious
 to encryption. On read, the cache loads fixed encrypted bytes from storage,
 authenticates and decrypts the page once, then caches the decoded page. On
 write, callers submit decoded page objects; the cache encodes, compresses,
 encrypts, writes one fixed page to storage, and stores the decoded page in cache.
 
-Raw segment encode/decode helpers are format primitives. Production read/write
+Raw page encode/decode helpers are format primitives. Production read/write
 paths should route through the cache boundary. Direct raw decoding is reserved
 for recovery scans and low-level format tests, where the caller starts from
 untrusted bytes rather than from an opened lockbox.
@@ -178,7 +178,7 @@ untrusted bytes rather than from an opened lockbox.
 ## Objects
 
 The object stream contains typed objects. Object headers are encrypted because
-they are part of the segment body.
+they are part of the page body.
 
 ```text
 offset  size  field
@@ -212,7 +212,7 @@ Initial object kinds:
 
 ## Commit Root
 
-The fixed header points to the latest commit-root segment page offset. The
+The fixed header points to the latest commit-root page offset. The
 commit root is an encrypted object inside that page.
 
 The commit root payload contains:
@@ -235,7 +235,7 @@ commit flags
 
 Opening a lockbox reads the header, decrypts the commit-root page, validates
 the commit root, then opens the referenced TOC and free-space indexes. If the
-header is corrupt or stale, recovery may scan segment pages for valid commit
+header is corrupt or stale, recovery may scan pages for valid commit
 roots and choose the highest valid sequence.
 
 Rollback attacks on a standalone copied file cannot be fully prevented without an
@@ -285,7 +285,7 @@ The index is maintained in two logical orders:
 
 The free-space index is a performance and space-reuse structure, not the source
 of user-visible truth. If it is corrupt, tools may rebuild it by scanning valid
-segment pages and comparing reachable objects from the latest valid TOC and
+pages and comparing reachable objects from the latest valid TOC and
 commit root.
 
 The root object may be either a `free index leaf` or a `free index internal`
@@ -348,7 +348,7 @@ use the highest generation that successfully unwraps the content key.
 The fixed header is therefore a fast path, not the only path. If the header is
 corrupt, password/public-key unlock can recover the lockbox UUID and content key
 from a scanned key-directory mirror, then use those values to authenticate and
-decrypt segment pages while scanning for the latest valid commit root.
+decrypt pages while scanning for the latest valid commit root.
 
 Removing a password or recipient is not just a metadata delete. Because old COW
 history may contain old key directories or data pages, the CLI must treat key
@@ -360,15 +360,29 @@ removal as a conservative maintenance operation:
 3. compact unreachable old pages
 4. commit the new key directory and free-space index
 
-## Segment Page Cache
+## Page Cache
 
-The core uses a unified segment-page cache for reads and dirty writes. Clean
-decoded pages are held in a weighted LRU cache. Dirty pages are not visible to
-readers until `commit()` writes them and publishes a new commit root.
+The core uses a unified page cache for reads and dirty writes. Clean decoded
+pages are held in a weighted LRU cache. Dirty pages stay in the cache and are
+visible to reads from the same opened lockbox, but they are not written to the
+backing store until `commit()` flushes them and publishes a new commit root.
+There is no background writer.
 
-`CacheLimit::Auto` is segment-aware:
+Copy-on-write happens at commit time. This allows the same dirty page to absorb
+multiple logical mutations before the library allocates and writes replacement
+pages.
 
-- minimum native cache: max of eight segment pages or 64 MiB
+When a file, symlink, or environment variable is deleted or replaced, the commit
+path must redact the physical page that held the old encrypted object. If the
+old page also contains live objects, those live objects are relocated to a new
+page first; then the old physical page is overwritten with zeros and removed
+from the decoded-page cache. This is required because old COW pages may still
+contain decryptable ciphertext even after the live TOC no longer references
+them.
+
+`CacheLimit::Auto` is page-aware:
+
+- minimum native cache: max of eight pages or 64 MiB
 - native target: about 15% of currently available/reclaimable memory
 - native cap: 4 GiB by default
 - WASM default: 64 MiB unless the embedder supplies an explicit limit
@@ -378,12 +392,12 @@ traversal, recovery, and extraction must all work when the cache is disabled.
 
 ## Recovery
 
-Recovery scans segment pages from after the fixed header. It does not require a
+Recovery scans pages from after the fixed header. It does not require a
 valid fixed header, TOC, or free-space index.
 
 Recovery can:
 
-- authenticate and decrypt intact segment pages independently
+- authenticate and decrypt intact pages independently
 - locate valid commit roots
 - rebuild a best-effort live view from the highest valid commit root
 - salvage file objects whose metadata can still be associated with paths

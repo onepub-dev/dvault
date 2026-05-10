@@ -8,18 +8,15 @@ use crate::format::{
 use crate::lockbox_id::LockboxId;
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
+use crate::page::{decode_page, scan_page_records, PageObjectKind, DEFAULT_PAGE_BYTES, PAGE_MAGIC};
 use crate::record::{DecodedRecord, RecordKind};
-use crate::segment_page::{
-    decode_segment_page, scan_segment_page_records, SegmentObjectKind, DEFAULT_SEGMENT_PAGE_BYTES,
-    SEGMENT_PAGE_MAGIC,
-};
 use crate::{Entry, RecoveryReport, Result};
 
 impl Lockbox {
     pub fn recover(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
         let key = key.as_ref().to_vec();
         let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);
-        let scan = scan_segment_page_records(&bytes, lockbox_id, &key);
+        let scan = scan_page_records(&bytes, lockbox_id, &key);
         let mut manifest = BTreeMap::new();
         let mut corrupt_records = scan.corrupt_records;
         let mut manifest_recovered = false;
@@ -27,15 +24,15 @@ impl Lockbox {
         if let Ok((root_offset, _, _, _)) = read_header(&bytes) {
             if root_offset > 0 {
                 let toc_root = bytes
-                    .get(root_offset as usize..root_offset as usize + DEFAULT_SEGMENT_PAGE_BYTES)
-                    .filter(|page| page.get(..8) == Some(SEGMENT_PAGE_MAGIC.as_slice()))
+                    .get(root_offset as usize..root_offset as usize + DEFAULT_PAGE_BYTES)
+                    .filter(|page| page.get(..8) == Some(PAGE_MAGIC.as_slice()))
                     .ok_or(crate::Error::CorruptRecord)
                     .and_then(|page| {
-                        let decoded = decode_segment_page(page, lockbox_id, &key)?;
+                        let decoded = decode_page(page, lockbox_id, &key)?;
                         let Some(commit_root_object) = decoded
                             .objects
                             .iter()
-                            .find(|object| object.kind == SegmentObjectKind::CommitRoot)
+                            .find(|object| object.kind == PageObjectKind::CommitRoot)
                         else {
                             return Err(crate::Error::CorruptRecord);
                         };
@@ -78,7 +75,7 @@ impl Lockbox {
                 continue;
             }
             let complete = match entry.node_kind {
-                NodeKind::File => read_segment_file_bytes(&bytes, entry, &key, lockbox_id).is_ok(),
+                NodeKind::File => read_page_file_bytes(&bytes, entry, &key, lockbox_id).is_ok(),
                 NodeKind::Symlink => {
                     read_record_from_page(&bytes, &key, lockbox_id, entry.record_offset)
                         .ok()
@@ -113,7 +110,7 @@ impl Lockbox {
     pub fn salvage(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Self> {
         let key_bytes = key.as_ref().to_vec();
         let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);
-        let scan = scan_segment_page_records(&bytes, lockbox_id, &key_bytes);
+        let scan = scan_page_records(&bytes, lockbox_id, &key_bytes);
         let mut recovered = Self::create(&key_bytes);
         let mut latest_paths = BTreeMap::new();
 
@@ -131,9 +128,9 @@ impl Lockbox {
                 read_record_from_page(&bytes, &key_bytes, lockbox_id, entry.record_offset)
             {
                 match record.header.kind {
-                    RecordKind::FileSegment => {
+                    RecordKind::FilePage => {
                         if let Ok(file_bytes) =
-                            read_segment_file_bytes(&bytes, entry, &key_bytes, lockbox_id)
+                            read_page_file_bytes(&bytes, entry, &key_bytes, lockbox_id)
                         {
                             recovered.put_file_with_permissions(
                                 &entry.path,
@@ -205,15 +202,15 @@ fn read_toc_node_payload_from_bytes(
     lockbox_id: crate::LockboxId,
     offset: u64,
 ) -> Result<Vec<u8>> {
-    if bytes.get(offset as usize..offset as usize + 8) == Some(SEGMENT_PAGE_MAGIC.as_slice()) {
+    if bytes.get(offset as usize..offset as usize + 8) == Some(PAGE_MAGIC.as_slice()) {
         let page = bytes
-            .get(offset as usize..offset as usize + DEFAULT_SEGMENT_PAGE_BYTES)
+            .get(offset as usize..offset as usize + DEFAULT_PAGE_BYTES)
             .ok_or(crate::Error::Truncated)?;
-        let decoded = decode_segment_page(page, lockbox_id, key)?;
+        let decoded = decode_page(page, lockbox_id, key)?;
         let Some(toc_object) = decoded.objects.iter().find(|object| {
             matches!(
                 object.kind,
-                SegmentObjectKind::TocLeaf | SegmentObjectKind::TocInternal
+                PageObjectKind::TocLeaf | PageObjectKind::TocInternal
             )
         }) else {
             return Err(crate::Error::CorruptRecord);
@@ -223,7 +220,7 @@ fn read_toc_node_payload_from_bytes(
     Err(crate::Error::CorruptRecord)
 }
 
-fn read_segment_file_bytes(
+fn read_page_file_bytes(
     bytes: &[u8],
     entry: &crate::manifest_entry::ManifestEntry,
     key: &[u8],
@@ -238,10 +235,10 @@ fn read_segment_file_bytes(
             let page = bytes
                 .get(
                     fragment.page_offset as usize
-                        ..fragment.page_offset as usize + DEFAULT_SEGMENT_PAGE_BYTES,
+                        ..fragment.page_offset as usize + DEFAULT_PAGE_BYTES,
                 )
                 .ok_or(crate::Error::Truncated)?;
-            let decoded_page = decode_segment_page(page, lockbox_id, key)?;
+            let decoded_page = decode_page(page, lockbox_id, key)?;
             let Some(object) = decoded_page
                 .objects
                 .iter()
@@ -285,30 +282,28 @@ fn read_record_from_page(
     offset: u64,
 ) -> Result<DecodedRecord> {
     let page = bytes
-        .get(offset as usize..offset as usize + DEFAULT_SEGMENT_PAGE_BYTES)
+        .get(offset as usize..offset as usize + DEFAULT_PAGE_BYTES)
         .ok_or(crate::Error::Truncated)?;
-    let decoded = decode_segment_page(page, lockbox_id, key)?;
+    let decoded = decode_page(page, lockbox_id, key)?;
     let Some(object) = decoded.objects.first() else {
         return Err(crate::Error::CorruptRecord);
     };
     let kind = match object.kind {
-        SegmentObjectKind::PackedFileData | SegmentObjectKind::FileData => RecordKind::FileSegment,
-        SegmentObjectKind::Symlink => RecordKind::Symlink,
-        SegmentObjectKind::EnvSet => RecordKind::Env,
-        SegmentObjectKind::EnvDelete => RecordKind::EnvDelete,
-        SegmentObjectKind::Delete => RecordKind::Delete,
-        SegmentObjectKind::TocLeaf | SegmentObjectKind::TocInternal => RecordKind::TocNode,
-        SegmentObjectKind::CommitRoot => RecordKind::CommitRoot,
-        SegmentObjectKind::FreeIndexLeaf | SegmentObjectKind::FreeIndexInternal => {
-            RecordKind::FreeIndex
-        }
-        SegmentObjectKind::KeyDirectory => return Err(crate::Error::CorruptRecord),
+        PageObjectKind::PackedFileData | PageObjectKind::FileData => RecordKind::FilePage,
+        PageObjectKind::Symlink => RecordKind::Symlink,
+        PageObjectKind::EnvSet => RecordKind::Env,
+        PageObjectKind::EnvDelete => RecordKind::EnvDelete,
+        PageObjectKind::Delete => RecordKind::Delete,
+        PageObjectKind::TocLeaf | PageObjectKind::TocInternal => RecordKind::TocNode,
+        PageObjectKind::CommitRoot => RecordKind::CommitRoot,
+        PageObjectKind::FreeIndexLeaf | PageObjectKind::FreeIndexInternal => RecordKind::FreeIndex,
+        PageObjectKind::KeyDirectory => return Err(crate::Error::CorruptRecord),
     };
     Ok(DecodedRecord {
         header: crate::record::RecordHeader {
             kind,
             sequence: decoded.sequence,
-            total_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
+            total_len: DEFAULT_PAGE_BYTES as u64,
         },
         offset,
         object_id: object.id,

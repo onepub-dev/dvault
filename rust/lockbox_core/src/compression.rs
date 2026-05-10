@@ -1,15 +1,15 @@
-use crate::constants::DEFAULT_MAX_SEGMENT_LOGICAL_BYTES;
+use crate::constants::DEFAULT_MAX_PAGE_LOGICAL_BYTES;
 use crate::{Error, Result};
 
 pub(crate) const COMPRESSION_NONE: u8 = 0;
 pub(crate) const COMPRESSION_ZSTD: u8 = 1;
-const MAX_DECOMPRESSED_SEGMENT_BODY_BYTES: u64 = DEFAULT_MAX_SEGMENT_LOGICAL_BYTES as u64;
+const MAX_DECOMPRESSED_PAGE_BODY_BYTES: u64 = DEFAULT_MAX_PAGE_LOGICAL_BYTES as u64;
 const MIN_INCOMPRESSIBLE_CHECK_BYTES: usize = 64 * 1024;
 const INCOMPRESSIBLE_SAMPLE_BYTES: usize = 16 * 1024;
 const HIGH_ENTROPY_BITS_PER_BYTE: f64 = 7.80;
 const ZSTD_DEFAULT_LEVEL: i32 = 1;
 
-pub(crate) fn encode_segment_body(payload: &[u8]) -> Vec<u8> {
+pub(crate) fn encode_page_body(payload: &[u8]) -> Vec<u8> {
     let (algorithm, stored) = if looks_incompressible(payload) {
         (COMPRESSION_NONE, payload.to_vec())
     } else {
@@ -29,14 +29,14 @@ pub(crate) fn encode_segment_body(payload: &[u8]) -> Vec<u8> {
     body
 }
 
-pub(crate) fn decode_segment_body(body: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn decode_page_body(body: &[u8]) -> Result<Vec<u8>> {
     if body.len() < 17 {
         return Err(Error::CorruptRecord);
     }
     let real_len = u64::from_le_bytes(body[0..8].try_into().unwrap());
-    if real_len > MAX_DECOMPRESSED_SEGMENT_BODY_BYTES {
+    if real_len > MAX_DECOMPRESSED_PAGE_BODY_BYTES {
         return Err(Error::SecurityLimitExceeded(format!(
-            "segment body expands to {real_len} bytes"
+            "page body expands to {real_len} bytes"
         )));
     }
     let algorithm = body[8];
@@ -146,12 +146,12 @@ mod tests {
     #[test]
     fn rejects_declared_decompression_bomb_before_allocating() {
         let mut body = Vec::new();
-        body.extend_from_slice(&(MAX_DECOMPRESSED_SEGMENT_BODY_BYTES + 1).to_le_bytes());
+        body.extend_from_slice(&(MAX_DECOMPRESSED_PAGE_BODY_BYTES + 1).to_le_bytes());
         body.push(COMPRESSION_NONE);
         body.extend_from_slice(&0u64.to_le_bytes());
 
         assert!(matches!(
-            decode_segment_body(&body),
+            decode_page_body(&body),
             Err(Error::SecurityLimitExceeded(_))
         ));
     }
@@ -164,10 +164,7 @@ mod tests {
         body.extend_from_slice(&2u64.to_le_bytes());
         body.push(b'x');
 
-        assert!(matches!(
-            decode_segment_body(&body),
-            Err(Error::CorruptRecord)
-        ));
+        assert!(matches!(decode_page_body(&body), Err(Error::CorruptRecord)));
     }
 
     #[test]
@@ -178,30 +175,27 @@ mod tests {
         body.extend_from_slice(&1u64.to_le_bytes());
         body.push(b'x');
 
-        assert!(matches!(
-            decode_segment_body(&body),
-            Err(Error::CorruptRecord)
-        ));
+        assert!(matches!(decode_page_body(&body), Err(Error::CorruptRecord)));
     }
 
     #[test]
     fn repeated_payload_is_compressed() {
         let payload = vec![b'x'; MIN_INCOMPRESSIBLE_CHECK_BYTES * 2];
-        let body = encode_segment_body(&payload);
+        let body = encode_page_body(&payload);
 
         assert_eq!(body[8], COMPRESSION_ZSTD);
         assert!(body.len() < payload.len());
-        assert_eq!(decode_segment_body(&body).unwrap(), payload);
+        assert_eq!(decode_page_body(&body).unwrap(), payload);
     }
 
     #[test]
     fn high_entropy_payload_skips_zstd_probe() {
         let mut payload = vec![0u8; MIN_INCOMPRESSIBLE_CHECK_BYTES * 2];
         fill_randomish(&mut payload);
-        let body = encode_segment_body(&payload);
+        let body = encode_page_body(&payload);
 
         assert_eq!(body[8], COMPRESSION_NONE);
-        assert_eq!(decode_segment_body(&body).unwrap(), payload);
+        assert_eq!(decode_page_body(&body).unwrap(), payload);
     }
 
     fn fill_randomish(buf: &mut [u8]) {

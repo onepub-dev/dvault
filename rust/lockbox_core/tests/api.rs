@@ -9,7 +9,7 @@ use std::io::Cursor;
 const KEY: &[u8] = b"correct horse battery staple";
 const HEADER_LEN: usize = 96;
 const HEADER_CHECKSUM_START: usize = 64;
-const SEGMENT_PAGE_BYTES: usize = 8 * 1024 * 1024;
+const PAGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[test]
 fn create_put_get_list_stat_commit_open() {
@@ -95,19 +95,26 @@ fn small_files_are_staged_until_commit_then_packed() {
     lb.commit().unwrap();
     let after = lb.to_bytes().len();
 
-    assert!(after - before <= 4 * SEGMENT_PAGE_BYTES);
+    assert!(after - before <= 4 * PAGE_BYTES);
     assert_eq!(lb.get_file("/tiny.txt").unwrap(), b"x");
 }
 
 #[test]
-fn small_env_segments_are_padded_to_minimum_size() {
+fn small_env_pages_are_padded_to_minimum_size() {
     let mut lb = Lockbox::create(KEY);
     let before = lb.to_bytes().len();
 
     lb.set_env("TOKEN", "x").unwrap();
+
+    lb.commit().unwrap();
+    assert!(lb.inspect_pages().unwrap().iter().any(|page| {
+        page.objects
+            .iter()
+            .any(|object| object.kind == "env-set" && object.payload_len > 0)
+    }));
     let after = lb.to_bytes().len();
 
-    assert_eq!(after - before, SEGMENT_PAGE_BYTES);
+    assert!(after >= before + PAGE_BYTES);
     assert_eq!(lb.get_env("TOKEN").unwrap().as_deref(), Some("x"));
 }
 
@@ -423,14 +430,14 @@ fn oversized_key_directories_are_rejected() {
 }
 
 #[test]
-fn compressible_segment_content_uses_less_space_than_raw_chunks() {
+fn compressible_page_content_uses_less_space_than_raw_chunks() {
     let mut lb = Lockbox::create(KEY);
     let compressible = vec![b'a'; 2 * 1024 * 1024];
 
     lb.put_file("/compressible.bin", &compressible).unwrap();
     let vault_len = lb.to_bytes().len();
 
-    assert!(vault_len < 4 * SEGMENT_PAGE_BYTES);
+    assert!(vault_len < 4 * PAGE_BYTES);
     assert_eq!(lb.get_file("/compressible.bin").unwrap(), compressible);
 }
 
@@ -455,7 +462,7 @@ fn compressible_large_file_uses_fewer_pages_than_incompressible_large_file() {
     let compressible_len = compressible_box.to_bytes().len();
     let incompressible_len = incompressible_box.to_bytes().len();
     assert!(
-        compressible_len + SEGMENT_PAGE_BYTES <= incompressible_len,
+        compressible_len + PAGE_BYTES <= incompressible_len,
         "compressible vault should save at least one fixed page: {compressible_len} vs {incompressible_len}"
     );
     assert_eq!(
@@ -469,7 +476,7 @@ fn compressible_large_file_uses_fewer_pages_than_incompressible_large_file() {
 }
 
 #[test]
-fn many_small_files_are_packed_into_shared_segments_after_commit() {
+fn many_small_files_are_packed_into_shared_pages_after_commit() {
     let mut lb = Lockbox::create(KEY);
     let initial_len = lb.to_bytes().len();
     for i in 0..20 {
@@ -482,19 +489,51 @@ fn many_small_files_are_packed_into_shared_segments_after_commit() {
 
     let bytes = lb.to_bytes();
     let len_after_first_commit = bytes.len();
-    assert!(len_after_first_commit <= initial_len + 4 * SEGMENT_PAGE_BYTES);
+    assert!(len_after_first_commit <= initial_len + 4 * PAGE_BYTES);
 
     for i in 20..30 {
         lb.put_file(&format!("/packed/file-{i}.txt"), b"tiny")
             .unwrap();
     }
     lb.commit().unwrap();
-    assert!(lb.to_bytes().len() <= len_after_first_commit + 4 * SEGMENT_PAGE_BYTES);
+    assert!(lb.to_bytes().len() <= len_after_first_commit + 4 * PAGE_BYTES);
 
     let mut damaged = bytes.clone();
     damaged[0..8].fill(0);
     let report = Lockbox::recover(damaged, KEY);
     assert_eq!(report.intact_file_count, 20);
+}
+
+#[test]
+fn deleting_packed_file_redacts_original_page_and_preserves_other_files() {
+    let mut lb = Lockbox::create(KEY);
+    lb.put_file("/packed/a.txt", b"alpha").unwrap();
+    lb.put_file("/packed/b.txt", b"bravo").unwrap();
+    lb.commit().unwrap();
+    let before = lb.to_bytes();
+    let packed_pages_before = count_pages(&before);
+
+    lb.delete("/packed/a.txt").unwrap();
+    lb.commit().unwrap();
+
+    let after = lb.to_bytes();
+    assert_eq!(
+        Lockbox::open(after.clone(), KEY)
+            .unwrap()
+            .get_file("/packed/b.txt")
+            .unwrap(),
+        b"bravo"
+    );
+    assert!(matches!(
+        Lockbox::open(after.clone(), KEY)
+            .unwrap()
+            .get_file("/packed/a.txt"),
+        Err(Error::NotFound(_))
+    ));
+    assert!(count_pages(&after) >= packed_pages_before);
+    assert!(page_offsets(&before)
+        .into_iter()
+        .any(|offset| after[offset..offset + 8].iter().all(|byte| *byte == 0)));
 }
 
 fn fill_randomish(buf: &mut [u8]) {
@@ -507,8 +546,26 @@ fn fill_randomish(buf: &mut [u8]) {
     }
 }
 
+fn count_pages(bytes: &[u8]) -> usize {
+    page_offsets(bytes).len()
+}
+
+fn page_offsets(bytes: &[u8]) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    let mut index = 0usize;
+    while index + 8 <= bytes.len() {
+        if bytes.get(index..index + 8) == Some(b"LBX2PAG\0".as_slice()) {
+            offsets.push(index);
+            index = index.saturating_add(PAGE_BYTES);
+        } else {
+            index += 1;
+        }
+    }
+    offsets
+}
+
 #[test]
-fn manifest_round_trips_when_toc_payload_exceeds_minimum_segment_body() {
+fn manifest_round_trips_when_toc_payload_exceeds_minimum_page_body() {
     let mut lb = Lockbox::create(KEY);
     let payload = b"x";
 
@@ -530,7 +587,7 @@ fn manifest_round_trips_when_toc_payload_exceeds_minimum_segment_body() {
         .unwrap();
 
     assert_eq!(entries.len(), 220);
-    assert!(reopened.to_bytes().len() > SEGMENT_PAGE_BYTES);
+    assert!(reopened.to_bytes().len() > PAGE_BYTES);
     assert_eq!(
         reopened
             .get_file(&format!("/toc-overflow/file-219-{}.txt", "x".repeat(220)))
@@ -694,11 +751,11 @@ fn deleted_file_space_can_be_reused_by_appended_content() {
         reopened.get_file("/docs/replacement.bin").unwrap(),
         [2; 1024]
     );
-    assert!(reopened.to_bytes().len() <= len_after_first_commit + 5 * SEGMENT_PAGE_BYTES);
+    assert!(reopened.to_bytes().len() <= len_after_first_commit + 5 * PAGE_BYTES);
 }
 
 #[test]
-fn decoded_segment_cache_records_hits_and_can_be_trimmed() {
+fn decoded_page_cache_records_hits_and_can_be_trimmed() {
     let mut lb = Lockbox::create_with_options(
         KEY,
         LockboxOptions {
@@ -727,7 +784,7 @@ fn decoded_segment_cache_records_hits_and_can_be_trimmed() {
 }
 
 #[test]
-fn decoded_segment_cache_can_be_disabled() {
+fn decoded_page_cache_can_be_disabled() {
     let mut lb = Lockbox::create_with_options(
         KEY,
         LockboxOptions {
@@ -1027,6 +1084,29 @@ fn env_vars_can_be_removed_and_replaced() {
 }
 
 #[test]
+fn removing_env_var_redacts_original_env_page() {
+    let mut lb = Lockbox::create(KEY);
+    lb.set_env("KEEP_ME", "still-here").unwrap();
+    lb.set_env("REMOVE_ME", "gone").unwrap();
+    lb.commit().unwrap();
+    let before = lb.to_bytes();
+
+    lb.remove_env("REMOVE_ME").unwrap();
+    lb.commit().unwrap();
+
+    let after = lb.to_bytes();
+    let reopened = Lockbox::open(after.clone(), KEY).unwrap();
+    assert_eq!(
+        reopened.get_env("KEEP_ME").unwrap().as_deref(),
+        Some("still-here")
+    );
+    assert_eq!(reopened.get_env("REMOVE_ME").unwrap(), None);
+    assert!(page_offsets(&before)
+        .into_iter()
+        .any(|offset| after[offset..offset + 8].iter().all(|byte| *byte == 0)));
+}
+
+#[test]
 fn env_names_and_values_are_validated() {
     let mut lb = Lockbox::create(KEY);
 
@@ -1163,7 +1243,7 @@ fn reuses_deleted_record_space_when_possible() {
     lb.commit().unwrap();
     let after_reuse = lb.to_bytes().len();
 
-    assert!(after_reuse <= after_large + 5 * SEGMENT_PAGE_BYTES);
+    assert!(after_reuse <= after_large + 5 * PAGE_BYTES);
     assert_eq!(lb.get_file("/docs/small.txt").unwrap(), b"small");
 }
 

@@ -57,19 +57,19 @@ baseline:
 Conclusion:
 
 - Pure-Rust zstd removes the C dependency successfully, but write-heavy paths
-  are substantially slower because compression dominates segment creation.
+  are substantially slower because compression dominates page creation.
 - Read/extract/list paths are flat to materially faster in this run, especially
   the large-file range read.
 - The next performance step should profile compression during commit and decide
   whether to tune `oxiarc-zstd`, skip compression for incompressible/high-entropy
-  file segments earlier, or make compression level/strategy configurable while
+  file pages earlier, or make compression level/strategy configurable while
   still defaulting to a C-free backend.
 
 ## 2026-05-09 - High-Entropy Compression Skip
 
 Description: profiled the large low-compressibility write path with
 `cargo flamegraph`; the resolved samples were dominated by
-`oxiarc_zstd::lz77::MatchFinder`. Added a segment-body precheck that samples
+`oxiarc_zstd::lz77::MatchFinder`. Added a page-body precheck that samples
 large payloads and stores high-entropy bodies uncompressed instead of first
 running zstd and then discarding the larger result.
 
@@ -111,7 +111,7 @@ Conclusion:
 
 - The entropy skip is a material win for incompressible large-file ingestion and
   avoids the worst pure-Rust zstd regression while keeping the C-free backend.
-- Compressible small-file packing remains intentionally unchanged; those segment
+- Compressible small-file packing remains intentionally unchanged; those page
   bodies still compress well.
 - Several small read/extract results moved backward in this run. Those paths do
   not execute the new entropy check while reading, so treat them as a signal for
@@ -119,14 +119,14 @@ Conclusion:
 - The next step is to profile the post-optimization large write path and the
   mixed-tree commit path to identify the remaining dominant cost.
 
-## 2026-05-09 - Deterministic File-Segment Offsets
+## 2026-05-09 - Deterministic File-Page Offsets
 
 Description: after the entropy skip, the large low-compressibility profile
-shifted from zstd to file writes, page encoding, stream generation, and segment
-crypto. Removed a write-side round trip where file segment pages were read back
+shifted from zstd to file writes, page encoding, stream generation, and page
+crypto. Removed a write-side round trip where file pages were read back
 through storage/decrypt/decode immediately after writing only to recover
-`segment_inner_offset` values. Those offsets are deterministic from the file
-segment payload layout, so they are now computed before writing.
+`page_inner_offset` values. Those offsets are deterministic from the file
+page payload layout, so they are now computed before writing.
 
 Command:
 
@@ -174,11 +174,11 @@ Conclusion:
   copies or improving file-backed storage writes; zstd is no longer the main
   low-compressibility write bottleneck.
 
-## 2026-05-09 - Explicit Write-Through Segment Cache
+## 2026-05-09 - Explicit Write-Through Page Cache
 
 Description: the deterministic-offset change removed an accidental readback
-that had been warming the segment cache. Added explicit cache insertion for
-newly written decoded segment pages. This keeps writes going through the segment
+that had been warming the page cache. Added explicit cache insertion for
+newly written decoded pages. This keeps writes going through the page
 cache intentionally, without rereading encrypted bytes from storage.
 
 Command:
@@ -195,7 +195,7 @@ Environment:
 - Rust: `rustc 1.94.1 (e408947bf 2026-03-25)`
 - Benchmark harness: Criterion, sample size 10 per benchmark
 - Baseline source: local Criterion `target/criterion/*/new/estimates.json`
-  saved after deterministic file-segment offsets and before write-through cache
+  saved after deterministic file-page offsets and before write-through cache
 
 Results:
 
@@ -228,7 +228,7 @@ Conclusion:
 
 Description: the current small-file write profile still showed pure-Rust zstd
 as a visible cost for highly compressible packed pages. Changed the default
-segment compression level from zstd level 3 to level 1 and benchmarked the
+page compression level from zstd level 3 to level 1 and benchmarked the
 effect. This keeps zstd compression enabled by default; it only changes the
 speed/ratio point.
 
@@ -246,7 +246,7 @@ Environment:
 - Rust: `rustc 1.94.1 (e408947bf 2026-03-25)`
 - Benchmark harness: Criterion, sample size 10 per benchmark
 - Baseline source: local Criterion `target/criterion/*/new/estimates.json`
-  saved after explicit write-through segment caching
+  saved after explicit write-through page caching
 - Profile artifact: `rust/target/flamegraph-small-write-cache.svg`
 
 Results:
@@ -269,7 +269,7 @@ Results:
 Conclusion:
 
 - Level 1 is a net win across the current benchmark set, especially for
-  write-heavy paths that still compress segment bodies.
+  write-heavy paths that still compress page bodies.
 - `toc_structure/separator_update_5000` regressed in this run, so future TOC
   profiling should verify whether that is noise, cache state, or a real
   compression-level interaction.
@@ -281,9 +281,9 @@ Conclusion:
 Description: ran the file-backed performance example against production-sized
 inputs after profiling. The initial 1 GiB check showed that compression was not
 reducing lockbox size for large files because chunks were sized by uncompressed
-payload and every physical segment page is fixed at 8 MiB. Added a stronger
+payload and every physical page is fixed at 8 MiB. Added a stronger
 test that compares fixed-page usage for compressible and high-entropy large
-files, then changed large-file chunking so a compressed segment page can
+files, then changed large-file chunking so a compressed page can
 represent up to 64 MiB of logical file data. High-entropy data and known
 already-compressed extensions still use normal page-sized chunks.
 
@@ -557,3 +557,109 @@ Conclusion:
   with `cargo run --release -p lockbox_core --example compression_corpus --
   .ci-compression-corpus`, then runs the ignored regression tests against that
   cached corpus.
+
+## 2026-05-10 - Commit-Time Dirty Pages and Redaction
+
+Description: measured the disk-backed path after moving dirty page writes to
+commit time, renaming page terminology, adding visualization support, and
+adding delete/env redaction that zeroes the original page data before freed
+pages are reused. This run used the file backend rather than the memory backend.
+
+Validation before profiling:
+
+```bash
+cd rust
+cargo fmt --all
+cargo test --workspace
+```
+
+The workspace test suite passed. The agent IPC, compression regression, and
+endian interop tests remain explicitly ignored unless their dedicated CI jobs
+run them.
+
+Disk-backed benchmark commands:
+
+```bash
+cd rust
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=small \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_FILES=50000 \
+LOCKBOX_PERF_FILE_BYTES=1024 \
+LOCKBOX_PERF_EXTRACT=memory \
+LOCKBOX_PERF_EXTRACT_REPEAT=5 \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=append-delete \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_INITIAL_FILES=50000 \
+LOCKBOX_PERF_APPEND_FILES=10000 \
+LOCKBOX_PERF_FILE_BYTES=2048 \
+cargo run -p lockbox_core --example perf --release
+
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_SCENARIO=large \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_LARGE_BYTES=134217728 \
+LOCKBOX_PERF_PATTERN=randomish \
+LOCKBOX_PERF_EXTRACT=memory \
+cargo run -p lockbox_core --example perf --release
+```
+
+Results:
+
+| Scenario | Logical bytes | Lockbox bytes | Add | Commit | List | Extract/Delete | Range read | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 50k x 1 KiB files, 5 memory extracts | 51,200,000 | 25,165,920 | 123.538ms | 706.034ms | 5.018ms | 385.768ms | n/a | 0.492 |
+| 50k initial + 10k append/delete/replace | 122,880,000 | 75,497,568 | 21.743ms | 546.710ms | 6.815ms | 24.471ms | n/a | 0.614 |
+| 128 MiB randomish large file | 134,217,728 | 159,383,648 | 265.514ms | 492.412ms | n/a | 87.854ms | 904.272us | 1.188 |
+
+Profiling command:
+
+```bash
+cd rust
+LOCKBOX_PERF_DIR="$PWD/.tmp-bench" \
+LOCKBOX_PERF_BACKEND=file \
+LOCKBOX_PERF_SCENARIO=small \
+LOCKBOX_PERF_EXTRACT=memory \
+LOCKBOX_PERF_EXTRACT_REPEAT=5 \
+LOCKBOX_PERF_FILES=20000 \
+LOCKBOX_PERF_FILE_BYTES=1024 \
+cargo flamegraph -p lockbox_core --example perf --release \
+  -o target/flamegraph-file-small-20k-dirty-pages.svg
+```
+
+The profiling run produced
+`rust/target/flamegraph-file-small-20k-dirty-pages.svg`. The measured 20k-file
+profile run produced:
+
+| Scenario | Logical bytes | Lockbox bytes | Add | Commit | List | Extract/Delete | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 20k x 1 KiB files, 5 memory extracts | 20,480,000 | 25,165,920 | 43.697ms | 270.149ms | 2.028ms | 133.617ms | 1.229 |
+
+The flamegraph was captured without full dependency debuginfo and with kernel
+symbol restrictions, so the percentages should be treated as directional. The
+visible hotspots were:
+
+- zstd hashing/compression paths (`xxhash`, `ZstdEncoder`, match finder).
+- `BTreeMap` subtree cloning.
+- memory pressure sampling.
+- dirty page flushing, which was visible but not dominant in the small profile.
+
+Conclusion:
+
+- The dirty page cache now has the intended transaction shape: modified pages
+  are staged in memory, COW happens at commit, and pages are written once when
+  commit flushes the dirty set.
+- Redaction adds real work to commits because deleted/replaced file and env data
+  is zeroed before the old physical page is returned to the free index. That is
+  the right production behavior, but it raises commit cost compared with the
+  earlier less secure path.
+- Small-file list/extract times are still low. Commit is the main area to keep
+  tuning because it now includes packing, TOC updates, free-index updates,
+  redaction, page checksum/encryption, and final header publication.
+- Next performance candidates are reducing `BTreeMap` cloning during commit,
+  coalescing dirty page flush ordering more aggressively, sampling memory
+  pressure less often, and improving compression skip heuristics for data that
+  zstd cannot shrink meaningfully.

@@ -1,4 +1,4 @@
-use crate::constants::DEFAULT_SEGMENT_PAGE_BYTES;
+use crate::constants::DEFAULT_PAGE_BYTES;
 
 const MIB: u64 = 1024 * 1024;
 const DEFAULT_NATIVE_MAX_CACHE_BYTES: u64 = 4 * 1024 * MIB;
@@ -57,6 +57,6 @@ pub(crate) fn auto_cache_limit_bytes() -> u64 {
 }
 
 fn minimum_useful_cache_bytes() -> u64 {
-    let by_segment = (DEFAULT_SEGMENT_PAGE_BYTES as u64).saturating_mul(8);
-    by_segment.max(64 * MIB)
+    let by_page = (DEFAULT_PAGE_BYTES as u64).saturating_mul(8);
+    by_page.max(64 * MIB)
 }

@@ -40,7 +40,7 @@ contents, passwords, keys, or recipients.
 
 ## Content Key
 
-Each lockbox has a random content-encryption key. Segment pages are encrypted
+Each lockbox has a random content-encryption key. Pages are encrypted
 with keys derived from that content key. Password slots and recipient slots wrap
 the content key.
 

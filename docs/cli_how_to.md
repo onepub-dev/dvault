@@ -146,6 +146,24 @@ Names that start with a number or contain spaces, dashes, dots, NUL bytes, or
 other unsafe characters are rejected. Values are encrypted and bounded; NUL and
 control characters are rejected.
 
+## Visualize A Lockbox
+
+Use `visualize` when developing, diagnosing corruption, or checking what a
+lockbox contains without extracting it:
+
+```bash
+lockbox visualize secrets.lbox
+```
+
+The command is intentionally hidden from normal help; use
+`lockbox --help --verbose` to show it.
+
+The command prints public lockbox identity, summary counts for files, symlinks,
+environment variables, key slots, logical file bytes, per-page metadata, page
+object kinds, and a recovery-scan summary. It does not print file paths, file
+contents, environment variable names, or environment variable values. Use
+`lockbox list` and `lockbox env list` for those details.
+
 ## List Files
 
 List a directory:
@@ -361,7 +379,7 @@ lockbox salvage damaged.lbox clean.lbox
 `salvage` runs recovery and writes intact files into a new valid lockbox. It
 should skip partial or corrupt files by default and include them in the report.
 
-Recovery scans fixed-size encrypted segment pages and encrypted metadata. It
+Recovery scans fixed-size encrypted pages and encrypted metadata. It
 should identify intact files even if the latest manifest is damaged.
 
 ## Recipient Keys

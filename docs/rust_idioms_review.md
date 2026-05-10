@@ -33,8 +33,16 @@ This review covers the current Rust implementation shape.
 
 ## Suggested Near-Term Refactors
 
-- Add storage traits for file-backed operation.
-- Add `commands/` modules for CLI commands.
+- Move the many root-level format files into domain subdirectories:
+  `format/` for header, page, payload, commit root, key directory, and codecs;
+  `paths/` for logical and host paths; `keys/` for derivation, wrapping, slots,
+  and secret bytes; `toc/` for manifest entries/codecs and BTree code; and
+  `storage/` for storage, page cache, free space, and free index.
+- Keep `lockbox/` as the public operation facade, but consider grouping its
+  modules as `lockbox/io.rs`, `lockbox/mutate.rs`, `lockbox/extract.rs`,
+  `lockbox/recover.rs`, and `lockbox/keys.rs` once the API names settle.
+- Add `commands/` modules for CLI commands. `main.rs` is now carrying routing,
+  parsing, output formatting, and command behavior.
 - Move agent cache state and request execution into shared code used by both
   transports.
 - Introduce `LockboxBuilder` or explicit constructors before API stabilization.

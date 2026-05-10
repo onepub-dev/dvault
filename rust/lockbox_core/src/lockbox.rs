@@ -17,13 +17,10 @@ use crate::key_slot::KeySlot;
 use crate::lockbox_id::LockboxId;
 use crate::logical_path::LogicalPath;
 use crate::manifest_entry::ManifestEntry;
+use crate::page::{DecodedPage, PageObject, PageObjectKind, DEFAULT_PAGE_BYTES, PAGE_MAGIC};
+use crate::page_cache::PageCache;
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::secret_bytes::SecretBytes;
-use crate::segment_cache::SegmentManager;
-use crate::segment_page::{
-    DecodedSegmentPage, SegmentObject, SegmentObjectKind, DEFAULT_SEGMENT_PAGE_BYTES,
-    SEGMENT_PAGE_MAGIC,
-};
 use crate::storage::{Storage, StorageBackend};
 use crate::{CacheLimit, CacheStats, Error, LockboxOptions, Result};
 
@@ -56,9 +53,11 @@ pub struct Lockbox {
     toc_leaves: Vec<TocLeaf>,
     dirty_toc_paths: BTreeSet<LogicalPath>,
     env_vars: RefCell<Option<BTreeMap<String, String>>>,
-    segment_manager: RefCell<SegmentManager>,
+    page_manager: RefCell<PageCache>,
     free_space: FreeSpace,
     record_ref_counts: std::collections::HashMap<u64, usize, FastBuildHasher>,
+    pending_redactions: BTreeMap<u64, PendingRedaction>,
+    redacted_free_slots: Vec<FreeSlot>,
     pending_small_files: BTreeMap<String, PendingFileChunk>,
     pending_deletes: Vec<String>,
     needs_packing: bool,
@@ -105,9 +104,11 @@ impl Lockbox {
             toc_leaves: Vec::new(),
             dirty_toc_paths: BTreeSet::new(),
             env_vars: RefCell::new(Some(BTreeMap::new())),
-            segment_manager: RefCell::new(SegmentManager::new(options.cache_limit)),
+            page_manager: RefCell::new(PageCache::new(options.cache_limit)),
             free_space: FreeSpace::default(),
             record_ref_counts: std::collections::HashMap::with_hasher(FastBuildHasher::default()),
+            pending_redactions: BTreeMap::new(),
+            redacted_free_slots: Vec::new(),
             pending_small_files: BTreeMap::new(),
             pending_deletes: Vec::new(),
             needs_packing: false,
@@ -166,9 +167,11 @@ impl Lockbox {
             toc_leaves: Vec::new(),
             dirty_toc_paths: BTreeSet::new(),
             env_vars: RefCell::new(None),
-            segment_manager: RefCell::new(SegmentManager::new(options.cache_limit)),
+            page_manager: RefCell::new(PageCache::new(options.cache_limit)),
             free_space: FreeSpace::default(),
             record_ref_counts: std::collections::HashMap::with_hasher(FastBuildHasher::default()),
+            pending_redactions: BTreeMap::new(),
+            redacted_free_slots: Vec::new(),
             pending_small_files: BTreeMap::new(),
             pending_deletes: Vec::new(),
             needs_packing: false,
@@ -266,11 +269,7 @@ impl Lockbox {
     }
 
     pub(crate) fn read_record(&self, offset: u64) -> Result<DecodedRecord> {
-        let magic = self.storage.read_at(offset, 8)?;
-        if magic.as_slice() != SEGMENT_PAGE_MAGIC {
-            return Err(Error::CorruptRecord);
-        }
-        let decoded = self.read_segment_page(offset)?;
+        let decoded = self.read_page(offset)?;
         let Some(object) = decoded.objects.first() else {
             return Err(Error::CorruptRecord);
         };
@@ -279,7 +278,7 @@ impl Lockbox {
             header: RecordHeader {
                 kind,
                 sequence: decoded.sequence,
-                total_len: DEFAULT_SEGMENT_PAGE_BYTES as u64,
+                total_len: DEFAULT_PAGE_BYTES as u64,
             },
             offset,
             object_id: object.id,
@@ -293,84 +292,108 @@ impl Lockbox {
         sequence: u64,
         payload: Vec<u8>,
     ) -> Result<u64> {
-        let page_offset = self.allocate_segment_page_offset()?;
-        let object = SegmentObject {
+        let page_offset = self.allocate_page_offset()?;
+        let object = PageObject {
             kind: object_kind_from_record_kind(kind)?,
             id: sequence,
             payload,
         };
-        self.write_decoded_segment_page_at(page_offset, sequence, vec![object])?;
+        self.write_decoded_page_at(page_offset, sequence, vec![object])?;
         Ok(page_offset)
     }
 
-    pub(crate) fn read_segment_page(
-        &self,
-        offset: u64,
-    ) -> Result<crate::segment_page::DecodedSegmentPage> {
-        self.segment_manager.borrow_mut().read_segment_page(
+    pub(crate) fn read_page(&self, offset: u64) -> Result<crate::page::DecodedPage> {
+        self.page_manager.borrow_mut().read_page(
             &self.storage,
             offset,
-            DEFAULT_SEGMENT_PAGE_BYTES,
+            DEFAULT_PAGE_BYTES,
             self.lockbox_id,
             self.key.expose(),
         )
     }
 
-    pub(crate) fn read_segment_object(&self, offset: u64, object_id: u64) -> Result<SegmentObject> {
-        self.segment_manager.borrow_mut().read_segment_object(
+    pub(crate) fn read_page_object(&self, offset: u64, object_id: u64) -> Result<PageObject> {
+        self.page_manager.borrow_mut().read_page_object(
             &self.storage,
             offset,
             object_id,
-            DEFAULT_SEGMENT_PAGE_BYTES,
+            DEFAULT_PAGE_BYTES,
             self.lockbox_id,
             self.key.expose(),
         )
     }
 
-    pub(crate) fn allocate_segment_page_offset(&mut self) -> Result<u64> {
-        if let Some(slot) = self.free_space.allocate(DEFAULT_SEGMENT_PAGE_BYTES as u64) {
+    pub(crate) fn allocate_page_offset(&mut self) -> Result<u64> {
+        if let Some(slot) = self.free_space.allocate(DEFAULT_PAGE_BYTES as u64) {
             Ok(slot.offset)
         } else {
-            self.storage.len()
+            self.next_append_page_offset()
         }
     }
 
-    pub(crate) fn write_decoded_segment_page_at(
+    pub(crate) fn next_append_page_offset(&self) -> Result<u64> {
+        Ok(self
+            .page_manager
+            .borrow()
+            .virtual_len(self.storage.len()?, DEFAULT_PAGE_BYTES))
+    }
+
+    pub(crate) fn write_decoded_page_at(
         &mut self,
         offset: u64,
         sequence: u64,
-        objects: Vec<SegmentObject>,
+        objects: Vec<PageObject>,
     ) -> Result<()> {
-        self.segment_manager
-            .borrow_mut()
-            .write_decoded_segment_page(
-                &mut self.storage,
-                offset,
-                DEFAULT_SEGMENT_PAGE_BYTES,
-                self.lockbox_id,
-                self.key.expose(),
-                DecodedSegmentPage {
-                    page_id: offset,
-                    sequence,
-                    objects,
-                },
-            )
+        self.page_manager.borrow_mut().write_decoded_page(
+            &mut self.storage,
+            offset,
+            DEFAULT_PAGE_BYTES,
+            self.lockbox_id,
+            self.key.expose(),
+            DecodedPage {
+                page_id: offset,
+                sequence,
+                objects,
+            },
+        )
+    }
+
+    pub(crate) fn flush_dirty_pages(&mut self) -> Result<()> {
+        self.page_manager.borrow_mut().flush_dirty_pages(
+            &mut self.storage,
+            DEFAULT_PAGE_BYTES,
+            self.lockbox_id,
+            self.key.expose(),
+        )
+    }
+
+    pub(crate) fn has_dirty_pages(&self) -> bool {
+        self.page_manager.borrow().has_dirty_pages()
     }
 
     pub fn set_cache_limit(&self, limit: CacheLimit) {
-        self.segment_manager.borrow_mut().set_limit(limit);
+        self.page_manager.borrow_mut().set_limit(limit);
     }
 
     pub fn trim_cache(&self) {
-        self.segment_manager.borrow_mut().clear();
+        self.page_manager.borrow_mut().clear();
     }
 
     pub fn trim_cache_to(&self, bytes: u64) {
-        self.segment_manager.borrow_mut().trim_to(bytes);
+        self.page_manager.borrow_mut().trim_to(bytes);
     }
 
     pub fn cache_stats(&self) -> CacheStats {
-        self.segment_manager.borrow().stats()
+        self.page_manager.borrow().stats()
+    }
+
+    pub fn inspect_pages(&self) -> Result<Vec<crate::PageInspection>> {
+        let bytes = self.bytes()?;
+        Ok(crate::page::inspect_pages(
+            &bytes,
+            self.lockbox_id,
+            self.key.expose(),
+        ))
     }
 
     pub(crate) fn mark_toc_dirty(&mut self, path: &str) {
@@ -384,17 +407,54 @@ impl Lockbox {
         }
     }
 
-    pub(crate) fn free_entry_slots(&mut self, entry: ManifestEntry) {
-        for (offset, len) in entry_record_slots(&entry) {
-            let Some(count) = self.record_ref_counts.get_mut(&offset) else {
+    pub(crate) fn free_entry_slots(&mut self, entry: ManifestEntry) -> Result<()> {
+        for record in self.entry_record_refs(&entry)? {
+            self.schedule_page_object_redaction(record.offset, record.len, record.object_id);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn schedule_page_object_redaction(&mut self, offset: u64, len: u64, object_id: u64) {
+        let redaction = self
+            .pending_redactions
+            .entry(offset)
+            .or_insert_with(|| PendingRedaction {
+                len,
+                object_ids: BTreeSet::new(),
+            });
+        redaction.len = len;
+        redaction.object_ids.insert(object_id);
+    }
+
+    pub(crate) fn apply_pending_redactions(&mut self) -> Result<()> {
+        let pending = std::mem::take(&mut self.pending_redactions);
+        for (offset, redaction) in pending {
+            let count = self
+                .record_ref_counts
+                .get(&offset)
+                .copied()
+                .or_else(|| self.read_page(offset).ok().map(|page| page.objects.len()))
+                .unwrap_or(0);
+            if count == 0 {
                 continue;
-            };
-            *count = count.saturating_sub(1);
-            if *count == 0 {
+            }
+            let remaining = count.saturating_sub(redaction.object_ids.len());
+            if remaining == 0 {
                 self.record_ref_counts.remove(&offset);
-                self.add_free_slot(FreeSlot { offset, len });
+                self.zero_page_and_free(FreeSlot {
+                    offset,
+                    len: redaction.len,
+                })?;
+            } else {
+                self.relocate_page_without_objects(
+                    offset,
+                    redaction.len,
+                    &redaction.object_ids,
+                    remaining,
+                )?;
             }
         }
+        Ok(())
     }
 
     pub(crate) fn add_entry_record_refs(&mut self, entry: &ManifestEntry) {
@@ -437,6 +497,127 @@ impl Lockbox {
 
     fn add_free_slot(&mut self, slot: FreeSlot) {
         self.free_space.add(slot);
+    }
+
+    pub(crate) fn zero_page_and_free(&mut self, slot: FreeSlot) -> Result<()> {
+        let len = usize::try_from(slot.len).map_err(|_| {
+            Error::SecurityLimitExceeded("page length exceeds addressable memory".to_string())
+        })?;
+        self.page_manager.borrow_mut().evict(slot.offset);
+        if slot.offset.saturating_add(slot.len) <= self.storage.len()? {
+            self.storage.write_at(slot.offset, &vec![0; len])?;
+            self.redacted_free_slots.push(slot);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn publish_redacted_free_slots(&mut self) {
+        let slots = std::mem::take(&mut self.redacted_free_slots);
+        for slot in slots {
+            self.add_free_slot(slot);
+        }
+    }
+
+    fn relocate_page_without_objects(
+        &mut self,
+        old_offset: u64,
+        old_len: u64,
+        removed_object_ids: &BTreeSet<u64>,
+        remaining_refs: usize,
+    ) -> Result<()> {
+        let decoded = self.read_page(old_offset)?;
+        let kept_object_ids = decoded
+            .objects
+            .iter()
+            .filter(|object| !removed_object_ids.contains(&object.id))
+            .map(|object| object.id)
+            .collect::<BTreeSet<_>>();
+        let kept_objects = decoded
+            .objects
+            .into_iter()
+            .filter(|object| kept_object_ids.contains(&object.id))
+            .collect::<Vec<_>>();
+        if kept_objects.is_empty() {
+            self.record_ref_counts.remove(&old_offset);
+            self.zero_page_and_free(FreeSlot {
+                offset: old_offset,
+                len: old_len,
+            })?;
+            return Ok(());
+        }
+
+        self.sequence += 1;
+        let new_offset = self.allocate_page_offset()?;
+        self.write_decoded_page_at(new_offset, self.sequence, kept_objects)?;
+        self.repoint_live_entries(old_offset, new_offset, &kept_object_ids);
+        self.record_ref_counts.remove(&old_offset);
+        self.record_ref_counts.insert(new_offset, remaining_refs);
+        self.zero_page_and_free(FreeSlot {
+            offset: old_offset,
+            len: old_len,
+        })?;
+        Ok(())
+    }
+
+    fn repoint_live_entries(
+        &mut self,
+        old_offset: u64,
+        new_offset: u64,
+        kept_object_ids: &BTreeSet<u64>,
+    ) {
+        let mut dirty = Vec::new();
+        for entry in self.manifest.values_mut() {
+            if entry.deleted {
+                continue;
+            }
+            let mut changed = false;
+            if entry.chunks.is_empty() {
+                if entry.record_offset == old_offset {
+                    entry.record_offset = new_offset;
+                    changed = true;
+                }
+            } else {
+                for chunk in &mut entry.chunks {
+                    for fragment in &mut chunk.fragments {
+                        if fragment.page_offset == old_offset
+                            && kept_object_ids.contains(&fragment.object_id)
+                        {
+                            fragment.page_offset = new_offset;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if changed {
+                dirty.push(entry.path.clone());
+            }
+        }
+        self.mark_toc_dirty_paths(dirty.iter().map(String::as_str));
+    }
+
+    fn entry_record_refs(&self, entry: &ManifestEntry) -> Result<Vec<RecordRef>> {
+        if entry.record_len == 0 && entry.chunks.is_empty() {
+            return Ok(Vec::new());
+        }
+        if entry.chunks.is_empty() {
+            let record = self.read_record(entry.record_offset)?;
+            return Ok(vec![RecordRef {
+                offset: entry.record_offset,
+                len: entry.record_len,
+                object_id: record.object_id,
+            }]);
+        }
+        Ok(entry
+            .chunks
+            .iter()
+            .flat_map(|chunk| {
+                chunk.fragments.iter().map(|fragment| RecordRef {
+                    offset: fragment.page_offset,
+                    len: fragment.page_len,
+                    object_id: fragment.object_id,
+                })
+            })
+            .collect())
     }
 
     fn decode_toc_btree(
@@ -502,14 +683,14 @@ impl Lockbox {
 
     fn read_toc_node_payload(&self, offset: u64) -> Result<Vec<u8>> {
         let magic = self.storage.read_at(offset, 8)?;
-        if magic.as_slice() != SEGMENT_PAGE_MAGIC {
+        if magic.as_slice() != PAGE_MAGIC {
             return Err(Error::CorruptRecord);
         }
-        let decoded = self.read_segment_page(offset)?;
+        let decoded = self.read_page(offset)?;
         let Some(toc_object) = decoded.objects.iter().find(|object| {
             matches!(
                 object.kind,
-                SegmentObjectKind::TocLeaf | SegmentObjectKind::TocInternal
+                PageObjectKind::TocLeaf | PageObjectKind::TocInternal
             )
         }) else {
             return Err(Error::CorruptRecord);
@@ -519,14 +700,14 @@ impl Lockbox {
 
     fn read_commit_root_at(&self, offset: u64) -> Result<crate::commit_root::CommitRoot> {
         let magic = self.storage.read_at(offset, 8)?;
-        if magic.as_slice() != SEGMENT_PAGE_MAGIC {
+        if magic.as_slice() != PAGE_MAGIC {
             return Err(Error::CorruptHeader);
         }
-        let decoded = self.read_segment_page(offset)?;
+        let decoded = self.read_page(offset)?;
         let Some(commit_root_object) = decoded
             .objects
             .iter()
-            .find(|object| object.kind == SegmentObjectKind::CommitRoot)
+            .find(|object| object.kind == PageObjectKind::CommitRoot)
         else {
             return Err(Error::CorruptHeader);
         };
@@ -539,10 +720,10 @@ impl Lockbox {
         let mut best = None;
         let mut offset = HEADER_LEN as u64;
         let len = self.storage.len()?;
-        while offset + crate::segment_page::SEGMENT_PAGE_HEADER_LEN as u64 <= len {
+        while offset + crate::page::PAGE_HEADER_LEN as u64 <= len {
             let magic = self.storage.read_at(offset, 8)?;
-            if magic.as_slice() == SEGMENT_PAGE_MAGIC {
-                if offset + DEFAULT_SEGMENT_PAGE_BYTES as u64 > len {
+            if magic.as_slice() == PAGE_MAGIC {
+                if offset + DEFAULT_PAGE_BYTES as u64 > len {
                     break;
                 }
                 if let Ok(commit_root) = self.read_commit_root_at(offset) {
@@ -553,7 +734,7 @@ impl Lockbox {
                     ) {
                         best = Some((offset, commit_root));
                     }
-                    offset += DEFAULT_SEGMENT_PAGE_BYTES as u64;
+                    offset += DEFAULT_PAGE_BYTES as u64;
                     continue;
                 }
             }
@@ -567,21 +748,21 @@ impl Lockbox {
             return Err(Error::CorruptRecord);
         }
         let magic = self.storage.read_at(offset, 8)?;
-        if magic.as_slice() != SEGMENT_PAGE_MAGIC {
+        if magic.as_slice() != PAGE_MAGIC {
             return Err(Error::CorruptHeader);
         }
-        let decoded = self.read_segment_page(offset)?;
+        let decoded = self.read_page(offset)?;
         if let Some(leaf) = decoded
             .objects
             .iter()
-            .find(|object| object.kind == SegmentObjectKind::FreeIndexLeaf)
+            .find(|object| object.kind == PageObjectKind::FreeIndexLeaf)
         {
             return decode_free_index_leaf(&leaf.payload);
         }
         let Some(internal) = decoded
             .objects
             .iter()
-            .find(|object| object.kind == SegmentObjectKind::FreeIndexInternal)
+            .find(|object| object.kind == PageObjectKind::FreeIndexInternal)
         else {
             return Err(Error::CorruptHeader);
         };
@@ -593,34 +774,32 @@ impl Lockbox {
     }
 }
 
-fn object_kind_from_record_kind(kind: RecordKind) -> Result<SegmentObjectKind> {
+fn object_kind_from_record_kind(kind: RecordKind) -> Result<PageObjectKind> {
     match kind {
-        RecordKind::FileSegment => Ok(SegmentObjectKind::PackedFileData),
-        RecordKind::Symlink => Ok(SegmentObjectKind::Symlink),
-        RecordKind::Env => Ok(SegmentObjectKind::EnvSet),
-        RecordKind::EnvDelete => Ok(SegmentObjectKind::EnvDelete),
-        RecordKind::Delete => Ok(SegmentObjectKind::Delete),
+        RecordKind::FilePage => Ok(PageObjectKind::PackedFileData),
+        RecordKind::Symlink => Ok(PageObjectKind::Symlink),
+        RecordKind::Env => Ok(PageObjectKind::EnvSet),
+        RecordKind::EnvDelete => Ok(PageObjectKind::EnvDelete),
+        RecordKind::Delete => Ok(PageObjectKind::Delete),
         RecordKind::TocNode | RecordKind::CommitRoot | RecordKind::FreeIndex => {
             Err(Error::CorruptRecord)
         }
     }
 }
 
-fn record_kind_from_object_kind(kind: SegmentObjectKind) -> Result<RecordKind> {
+fn record_kind_from_object_kind(kind: PageObjectKind) -> Result<RecordKind> {
     match kind {
-        SegmentObjectKind::PackedFileData | SegmentObjectKind::FileData => {
-            Ok(RecordKind::FileSegment)
-        }
-        SegmentObjectKind::Symlink => Ok(RecordKind::Symlink),
-        SegmentObjectKind::EnvSet => Ok(RecordKind::Env),
-        SegmentObjectKind::EnvDelete => Ok(RecordKind::EnvDelete),
-        SegmentObjectKind::Delete => Ok(RecordKind::Delete),
-        SegmentObjectKind::TocLeaf | SegmentObjectKind::TocInternal => Ok(RecordKind::TocNode),
-        SegmentObjectKind::CommitRoot => Ok(RecordKind::CommitRoot),
-        SegmentObjectKind::FreeIndexLeaf | SegmentObjectKind::FreeIndexInternal => {
+        PageObjectKind::PackedFileData | PageObjectKind::FileData => Ok(RecordKind::FilePage),
+        PageObjectKind::Symlink => Ok(RecordKind::Symlink),
+        PageObjectKind::EnvSet => Ok(RecordKind::Env),
+        PageObjectKind::EnvDelete => Ok(RecordKind::EnvDelete),
+        PageObjectKind::Delete => Ok(RecordKind::Delete),
+        PageObjectKind::TocLeaf | PageObjectKind::TocInternal => Ok(RecordKind::TocNode),
+        PageObjectKind::CommitRoot => Ok(RecordKind::CommitRoot),
+        PageObjectKind::FreeIndexLeaf | PageObjectKind::FreeIndexInternal => {
             Ok(RecordKind::FreeIndex)
         }
-        SegmentObjectKind::KeyDirectory => Err(Error::CorruptRecord),
+        PageObjectKind::KeyDirectory => Err(Error::CorruptRecord),
     }
 }
 
@@ -641,6 +820,19 @@ fn entry_record_slots(entry: &ManifestEntry) -> Vec<(u64, u64)> {
                 .map(|fragment| (fragment.page_offset, fragment.page_len))
         })
         .collect()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RecordRef {
+    offset: u64,
+    len: u64,
+    object_id: u64,
+}
+
+#[derive(Debug, Clone)]
+struct PendingRedaction {
+    len: u64,
+    object_ids: BTreeSet<u64>,
 }
 
 #[cfg(test)]

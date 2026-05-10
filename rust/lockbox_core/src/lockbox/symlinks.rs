@@ -17,10 +17,10 @@ impl Lockbox {
         self.sequence += 1;
         let payload = encode_symlink_payload(&path, &target);
         let offset = self.write_object_page(RecordKind::Symlink, self.sequence, payload)?;
-        let record_len = crate::segment_page::DEFAULT_SEGMENT_PAGE_BYTES as u64;
+        let record_len = crate::page::DEFAULT_PAGE_BYTES as u64;
 
         if let Some(old) = self.manifest.get(path.as_str()) {
-            self.free_entry_slots(old.clone());
+            self.free_entry_slots(old.clone())?;
         }
 
         let dirty_path = path.clone();
