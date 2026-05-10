@@ -127,8 +127,14 @@ impl<S: ContentKeyStore> Vault<S> {
                 let lockbox =
                     Lockbox::create_file(path, LockboxCreate::Password(password.clone()))?;
                 let unlocked = Lockbox::unlock_path_with_password(path, &password)?;
-                self.store
-                    .put_content_key(unlocked.lockbox_id, unlocked.key())?;
+                if let Err(err) = self
+                    .store
+                    .put_content_key(unlocked.lockbox_id, unlocked.key())
+                {
+                    if !matches!(err, Error::Io(_)) {
+                        return Err(err);
+                    }
+                }
                 Ok(lockbox)
             }
             LockboxCreate::RecipientKey(recipient) => {

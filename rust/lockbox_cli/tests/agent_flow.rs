@@ -30,6 +30,12 @@ fn open_populates_cache_and_lock_clears_it() {
         bin,
         &agent_dir,
         &vault_dir,
+        &["open", vault.to_str().unwrap()],
+    );
+    run(
+        bin,
+        &agent_dir,
+        &vault_dir,
         &[
             "add",
             vault.to_str().unwrap(),
@@ -127,6 +133,6 @@ fn command(bin: &str, agent_dir: &PathBuf, vault_dir: &PathBuf, args: &[&str]) -
 
 fn unique_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../target/test-tmp")
-        .join(format!("lockbox-agent-flow-{}", std::process::id()))
+        .join("../target/t")
+        .join(format!("ipc-{}", std::process::id()))
 }
