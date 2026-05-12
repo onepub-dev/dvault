@@ -3,8 +3,12 @@ pub use lockbox_core::{SecretBytes, SecretString};
 use std::io;
 use std::path::Path;
 
+mod key_format;
 mod vault_directory;
 
+pub use key_format::{
+    export_private_key, export_public_key, import_private_key, import_public_key, KeyFormat,
+};
 pub use vault_directory::{
     default_vault_dir, default_vault_path, StoredTrustedRecipient, VaultDirectory,
 };

@@ -236,6 +236,28 @@ prompts for that password interactively, or reads `LOCKBOX_VAULT_PASSWORD` for
 automation. Trusted public keys and key-directory backups are records inside
 the vault lockbox.
 
+## Key File Formats
+
+The default import/export format is native Lockbox PEM. It is text armored,
+contains explicit `ML-KEM-1024` metadata, and is intended for CLI users:
+
+```text
+-----BEGIN LOCKBOX PRIVATE KEY-----
+...
+-----END LOCKBOX PRIVATE KEY-----
+```
+
+The CLI also supports JWK and JWKS using a Lockbox ML-KEM-1024 profile for web
+and service integrations. Raw hex remains supported for developer/testing
+compatibility, but should not be the default user-facing format.
+
+Supported `--format` values:
+
+- `lockbox-pem`
+- `jwk`
+- `jwks`
+- `raw-hex`
+
 ## CLI Shape
 
 Current/target commands:

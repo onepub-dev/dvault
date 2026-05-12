@@ -1,6 +1,9 @@
-use super::context::{default_vault, read_hex_file, require_arg, CliResult};
-use lockbox_core::{MlKemKeyPair, MlKemRecipientKey};
-use lockbox_vault::{default_vault_dir, encode_hex, VaultDirectory};
+use super::context::{default_vault, require_arg, CliResult};
+use lockbox_core::MlKemKeyPair;
+use lockbox_vault::{
+    default_vault_dir, export_private_key, export_public_key, import_private_key,
+    import_public_key, KeyFormat, VaultDirectory,
+};
 use std::fs;
 
 pub(crate) fn run(args: &[String]) -> CliResult<()> {
@@ -14,6 +17,7 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "remove-key" => remove_key(&args[1..]),
         "remove-trusted" => remove_trusted(&args[1..]),
         "list" => list(),
+        "export-key" => export_key(&args[1..]),
         "export-public" => export_public(&args[1..]),
         _ => Err(format!("unknown vault command: {command}").into()),
     }
@@ -31,6 +35,7 @@ fn path() -> CliResult<()> {
 }
 
 fn keygen(args: &[String]) -> CliResult<()> {
+    let (args, format) = parse_format(args)?;
     let overwrite = args.iter().any(|arg| arg == "--overwrite");
     let args = args
         .iter()
@@ -50,7 +55,7 @@ fn keygen(args: &[String]) -> CliResult<()> {
     let keypair = MlKemKeyPair::generate();
     vault.store_private_key(name, &keypair)?;
     if let Some(path) = public_path {
-        fs::write(path, encode_hex(&keypair.recipient_key().to_bytes()))?;
+        fs::write(path, export_public_key(&keypair.recipient_key(), format)?)?;
     }
     println!("{name}");
     Ok(())
@@ -69,7 +74,7 @@ fn trust(args: &[String]) -> CliResult<()> {
     if vault.trusted_recipient_exists(name)? && !overwrite {
         return Err(format!("trusted recipient already exists: {name}").into());
     }
-    let recipient = MlKemRecipientKey::from_bytes(&read_hex_file(public_path)?)?;
+    let recipient = import_public_key(&fs::read(public_path)?)?;
     vault.store_trusted_recipient(name, &recipient)?;
     Ok(())
 }
@@ -82,10 +87,13 @@ fn import_key(args: &[String]) -> CliResult<()> {
     if vault.private_key_exists(name)? {
         return Err(format!("vault private key already exists: {name}").into());
     }
-    let keypair = MlKemKeyPair::from_seed_bytes(&read_hex_file(private_path)?)?;
+    let keypair = import_private_key(&fs::read(private_path)?)?;
     vault.store_private_key(name, &keypair)?;
     if let Some(path) = public_path {
-        fs::write(path, encode_hex(&keypair.recipient_key().to_bytes()))?;
+        fs::write(
+            path,
+            export_public_key(&keypair.recipient_key(), KeyFormat::LockboxPem)?,
+        )?;
     }
     Ok(())
 }
@@ -117,12 +125,48 @@ fn list() -> CliResult<()> {
 }
 
 fn export_public(args: &[String]) -> CliResult<()> {
-    let (name, destination) = match args {
+    let (args, format) = parse_format(args)?;
+    let (name, destination) = match args.as_slice() {
         [destination] => (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str()),
         [name, destination, ..] => (name.as_str(), destination.as_str()),
         [] => return Err("missing public key path".into()),
     };
     let keypair = default_vault()?.load_private_key(name)?;
-    fs::write(destination, encode_hex(&keypair.recipient_key().to_bytes()))?;
+    fs::write(
+        destination,
+        export_public_key(&keypair.recipient_key(), format)?,
+    )?;
     Ok(())
+}
+
+fn export_key(args: &[String]) -> CliResult<()> {
+    let (args, format) = parse_format(args)?;
+    let (name, destination) = match args.as_slice() {
+        [destination] => (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str()),
+        [name, destination, ..] => (name.as_str(), destination.as_str()),
+        [] => return Err("missing private key path".into()),
+    };
+    let keypair = default_vault()?.load_private_key(name)?;
+    fs::write(destination, export_private_key(&keypair, format)?)?;
+    Ok(())
+}
+
+fn parse_format(args: &[String]) -> CliResult<(Vec<String>, KeyFormat)> {
+    let mut format = KeyFormat::LockboxPem;
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    while index < args.len() {
+        if args[index] == "--format" {
+            let value = args
+                .get(index + 1)
+                .ok_or("missing --format value")?
+                .as_str();
+            format = KeyFormat::parse(value)?;
+            index += 2;
+        } else {
+            out.push(args[index].clone());
+            index += 1;
+        }
+    }
+    Ok((out, format))
 }

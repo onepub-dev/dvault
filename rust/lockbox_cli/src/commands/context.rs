@@ -1,6 +1,8 @@
 use crate::secret_prompt::prompt_secret;
 use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair, MlKemRecipientKey};
-use lockbox_vault::{decode_hex, local_vault, NoopStore, SecretString, Vault, VaultDirectory};
+use lockbox_vault::{
+    import_public_key, local_vault, NoopStore, SecretString, Vault, VaultDirectory,
+};
 use std::env;
 use std::path::Path;
 
@@ -106,11 +108,6 @@ pub(crate) fn read_new_password() -> CliResult<SecretString> {
     Ok(password)
 }
 
-pub(crate) fn read_hex_file(path: &str) -> CliResult<Vec<u8>> {
-    let text = std::fs::read_to_string(path)?;
-    Ok(decode_hex(text.trim())?)
-}
-
 pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
     let password = read_vault_password().map_err(|err| Error::Io(err.to_string()))?;
     VaultDirectory::open_default(&password)
@@ -132,7 +129,7 @@ pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<MlKemKey
 
 pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<MlKemRecipientKey> {
     if std::path::Path::new(arg).exists() {
-        return Ok(MlKemRecipientKey::from_bytes(&read_hex_file(arg)?)?);
+        return Ok(import_public_key(&std::fs::read(arg)?)?);
     }
     let vault = default_vault()?;
     if let Ok(recipient) = vault.load_trusted_recipient(arg) {

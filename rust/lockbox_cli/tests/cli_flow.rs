@@ -100,6 +100,23 @@ fn cli_env_rename_and_visualize_flow() {
         ],
     );
     assert!(public_export.exists());
+    assert!(String::from_utf8_lossy(&fs::read(&public_export).unwrap())
+        .contains("BEGIN LOCKBOX PUBLIC KEY"));
+
+    let public_jwk = dir.join("exported.jwk");
+    run(
+        bin,
+        &[
+            "vault",
+            "export-public",
+            "--format",
+            "jwk",
+            "default",
+            public_jwk.to_str().unwrap(),
+        ],
+    );
+    let public_jwk_text = String::from_utf8_lossy(&fs::read(&public_jwk).unwrap()).to_string();
+    assert!(public_jwk_text.contains("\"alg\": \"ML-KEM-1024\""));
 
     run(bin, &["vault", "remove-trusted", "default"]);
     run(bin, &["vault", "remove-key", "default"]);

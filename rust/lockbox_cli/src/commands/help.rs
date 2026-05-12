@@ -23,6 +23,7 @@ pub(crate) fn usage(verbose: bool) {
   lockbox vault init
   lockbox vault keygen [name] [public-key-output]
   lockbox vault import-key <name> <private-key> [public-key-output]
+  lockbox vault export-key [name] <private-key-output>
   lockbox vault trust <name> <public-key>
   lockbox vault list
   lockbox vault remove-key [name]
@@ -39,6 +40,8 @@ developer/testing:
   lockbox vault export-public [name] <public-key-output>
   lockbox vault keygen --overwrite [name] [public-key-output]
   lockbox vault trust --overwrite <name> <public-key>
+  lockbox vault export-public --format <lockbox-pem|jwk|jwks|raw-hex> [name] <public-key-output>
+  lockbox vault export-key --format <lockbox-pem|jwk|jwks|raw-hex> [name] <private-key-output>
   lockbox --key <raw-content-key> <command> ...
   LOCKBOX_KEY=<raw-content-key> lockbox <command> ...
   LOCKBOX_PASSWORD=<password> lockbox open <lockbox>

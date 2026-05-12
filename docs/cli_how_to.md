@@ -400,6 +400,14 @@ Generate the default local recipient keypair and export its public key:
 lockbox vault keygen default alice.pub
 ```
 
+The default key file format is native Lockbox PEM:
+
+```text
+-----BEGIN LOCKBOX PUBLIC KEY-----
+...
+-----END LOCKBOX PUBLIC KEY-----
+```
+
 Private keys are stored inside the encrypted local vault lockbox. There is no
 separate private-key password layer.
 
@@ -408,6 +416,30 @@ Import an existing private key file into the vault:
 ```bash
 lockbox vault import-key legacy alice.key alice.pub
 ```
+
+Export a vault-managed private key:
+
+```bash
+lockbox vault export-key legacy legacy.key
+```
+
+Supported key file formats:
+
+- `lockbox-pem`: default text format with `BEGIN LOCKBOX PRIVATE KEY` or
+  `BEGIN LOCKBOX PUBLIC KEY` armor.
+- `jwk`: JSON Web Key using the Lockbox ML-KEM-1024 profile.
+- `jwks`: JSON Web Key Set containing one key.
+- `raw-hex`: legacy/developer hex encoding of the raw ML-KEM seed or recipient
+  key.
+
+Select an export format with `--format`:
+
+```bash
+lockbox vault export-public --format jwk default alice.jwk
+lockbox vault export-key --format lockbox-pem legacy legacy.key
+```
+
+Imports auto-detect native Lockbox PEM, JWK, JWKS, and raw hex.
 
 Trust another recipient public key in the local vault:
 
