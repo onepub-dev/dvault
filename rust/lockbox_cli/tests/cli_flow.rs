@@ -131,18 +131,159 @@ fn cli_env_rename_and_visualize_flow() {
     assert!(doctor.contains("local-vault.lbox"));
 }
 
+#[test]
+fn vault_key_import_export_formats_are_accepted_by_cli() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("key-formats");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let public_default = dir.join("default.pub");
+    run_in(
+        bin,
+        &[
+            "vault",
+            "keygen",
+            "default",
+            public_default.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+
+    let private_exports = [
+        ("pem", None, "BEGIN LOCKBOX PRIVATE KEY"),
+        ("jwk", Some("jwk"), "\"alg\": \"ML-KEM-1024\""),
+        ("jwks", Some("jwks"), "\"keys\""),
+        ("raw", Some("raw-hex"), ""),
+    ];
+    for (name, format, expected) in private_exports {
+        let path = dir.join(format!("private-{name}.key"));
+        let mut args = vec!["vault", "export-key"];
+        if let Some(format) = format {
+            args.extend(["--format", format]);
+        }
+        args.extend(["default", path.to_str().unwrap()]);
+        run_in(bin, &args, &vault_root, &agent_root);
+
+        let text = String::from_utf8_lossy(&fs::read(&path).unwrap()).to_string();
+        if !expected.is_empty() {
+            assert!(text.contains(expected), "{name} private export: {text}");
+        }
+
+        run_in(
+            bin,
+            &[
+                "vault",
+                "import-key",
+                &format!("imported-{name}"),
+                path.to_str().unwrap(),
+            ],
+            &vault_root,
+            &agent_root,
+        );
+    }
+
+    let public_exports = [
+        ("pem", None, "BEGIN LOCKBOX PUBLIC KEY"),
+        ("jwk", Some("jwk"), "\"alg\": \"ML-KEM-1024\""),
+        ("jwks", Some("jwks"), "\"keys\""),
+        ("raw", Some("raw-hex"), ""),
+    ];
+    for (name, format, expected) in public_exports {
+        let path = dir.join(format!("public-{name}.key"));
+        let mut args = vec!["vault", "export-public"];
+        if let Some(format) = format {
+            args.extend(["--format", format]);
+        }
+        args.extend(["default", path.to_str().unwrap()]);
+        run_in(bin, &args, &vault_root, &agent_root);
+
+        let text = String::from_utf8_lossy(&fs::read(&path).unwrap()).to_string();
+        if !expected.is_empty() {
+            assert!(text.contains(expected), "{name} public export: {text}");
+        }
+
+        run_in(
+            bin,
+            &[
+                "vault",
+                "trust",
+                &format!("trusted-{name}"),
+                path.to_str().unwrap(),
+            ],
+            &vault_root,
+            &agent_root,
+        );
+    }
+
+    let invalid_private = dir.join("invalid-private.key");
+    fs::write(&invalid_private, "not a key").unwrap();
+    let output = run_output_in(
+        bin,
+        &[
+            "vault",
+            "import-key",
+            "invalid",
+            invalid_private.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!output.status.success());
+
+    let invalid_public = dir.join("invalid-public.key");
+    fs::write(&invalid_public, "not a public key").unwrap();
+    let output = run_output_in(
+        bin,
+        &[
+            "vault",
+            "trust",
+            "invalid",
+            invalid_public.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!output.status.success());
+
+    let vault_list = run_output_in(bin, &["vault", "list"], &vault_root, &agent_root);
+    assert_success(&vault_list);
+    let vault_list = String::from_utf8_lossy(&vault_list.stdout);
+    for name in ["pem", "jwk", "jwks", "raw"] {
+        assert!(vault_list.contains(&format!("private\timported-{name}")));
+        assert!(vault_list.contains(&format!("trusted\ttrusted-{name}")));
+    }
+}
+
 fn run(bin: &str, args: &[&str]) {
     let output = run_output(bin, args);
     assert_success(&output);
 }
 
+fn run_in(bin: &str, args: &[&str], vault_root: &PathBuf, agent_root: &PathBuf) {
+    let output = run_output_in(bin, args, vault_root, agent_root);
+    assert_success(&output);
+}
+
 fn run_output(bin: &str, args: &[&str]) -> Output {
+    run_output_in(
+        bin,
+        args,
+        &unique_dir().join("vault"),
+        &unique_dir().join("agent"),
+    )
+}
+
+fn run_output_in(bin: &str, args: &[&str], vault_root: &PathBuf, agent_root: &PathBuf) -> Output {
     Command::new(bin)
         .args(args)
         .env("LOCKBOX_KEY", "test-key")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
-        .env("LOCKBOX_AGENT_DIR", unique_dir().join("agent"))
-        .env("LOCKBOX_VAULT_DIR", unique_dir().join("vault"))
+        .env("LOCKBOX_AGENT_DIR", agent_root)
+        .env("LOCKBOX_VAULT_DIR", vault_root)
         .output()
         .unwrap()
 }
@@ -158,7 +299,11 @@ fn assert_success(output: &Output) {
 }
 
 fn unique_dir() -> PathBuf {
+    unique_dir_named("cli-flow")
+}
+
+fn unique_dir_named(label: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../target/test-tmp")
-        .join(format!("lockbox-cli-flow-{}", std::process::id()))
+        .join(format!("lockbox-{label}-{}", std::process::id()))
 }
