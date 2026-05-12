@@ -1,12 +1,21 @@
 use super::context::{
-    load_private_key_from_arg, mirror_key_directory, open_existing, read_hex_file,
+    load_private_key_from_arg, load_recipient_from_arg, mirror_key_directory, open_existing,
     read_new_password, read_password, require_arg, Access, CliResult,
 };
-use lockbox_core::{LockboxCreate, LockboxUnlock, MlKemKeyPair, MlKemRecipientKey};
+use lockbox_core::{LockboxCreate, LockboxUnlock, MlKemKeyPair};
 use lockbox_vault::{encode_hex, local_vault, NoopStore, Vault};
 use std::fs;
 
 pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
+    if args.first().map(String::as_str) == Some("--recipient") {
+        let recipient_name = require_arg(args, 1, "recipient")?;
+        let lockbox_path = require_arg(args, 2, "lockbox")?;
+        let recipient = load_recipient_from_arg(recipient_name)?;
+        let lb = Vault::new(NoopStore)
+            .create_lockbox(lockbox_path, LockboxCreate::RecipientKey(recipient))?;
+        mirror_key_directory(&lb)?;
+        return Ok(());
+    }
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     match access {
         Access::RawKey(key) => {
@@ -61,8 +70,8 @@ pub(crate) fn open_key(args: &[String]) -> CliResult<()> {
 
 pub(crate) fn add_recipient(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let public_path = require_arg(args, 1, "public key path")?;
-    let recipient = MlKemRecipientKey::from_bytes(&read_hex_file(public_path)?)?;
+    let recipient_arg = require_arg(args, 1, "recipient")?;
+    let recipient = load_recipient_from_arg(recipient_arg)?;
     let mut lb = open_existing(lockbox_path, access)?;
     lb.add_recipient_key(&recipient)?;
     lb.commit()?;

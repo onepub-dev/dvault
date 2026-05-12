@@ -2,6 +2,7 @@ pub(crate) fn usage(verbose: bool) {
     eprintln!(
         "usage:
   lockbox create <lockbox>
+  lockbox create --recipient <vault-key-or-recipient> <lockbox>
   lockbox open <lockbox>
   lockbox add <lockbox> <source> <lockbox-path>
   lockbox extract <lockbox> <lockbox-path> <destination>
@@ -12,15 +13,16 @@ pub(crate) fn usage(verbose: bool) {
   lockbox rename <lockbox> <from> <to>
   lockbox env set|get|list|export|rm ...
   lockbox recover <lockbox>
+  lockbox doctor
   lockbox lock <lockbox>
   lockbox lock --all
-  lockbox keygen <private-key> <public-key>
-  lockbox open-key <lockbox> <private-key>
-  lockbox add-recipient <lockbox> <public-key>
+  lockbox open-key <lockbox> [vault-key]
+  lockbox add-recipient <lockbox> <public-key-or-trusted-name>
   lockbox list-keys <lockbox>
   lockbox remove-key <lockbox> <slot-id>
   lockbox vault init
   lockbox vault keygen [name] [public-key-output]
+  lockbox vault import-key <name> <private-key> [public-key-output]
   lockbox vault trust <name> <public-key>
   lockbox vault list
   lockbox vault remove-key [name]
@@ -32,6 +34,7 @@ pub(crate) fn usage(verbose: bool) {
             "
 developer/testing:
   lockbox visualize <lockbox>
+  lockbox keygen <private-key> <public-key>
   lockbox vault path
   lockbox vault export-public [name] <public-key-output>
   lockbox vault keygen --overwrite [name] [public-key-output]
@@ -39,7 +42,7 @@ developer/testing:
   lockbox --key <raw-content-key> <command> ...
   LOCKBOX_KEY=<raw-content-key> lockbox <command> ...
   LOCKBOX_PASSWORD=<password> lockbox open <lockbox>
-  LOCKBOX_PRIVATE_KEY_PASSWORD=<password> lockbox open-key <lockbox>
+  LOCKBOX_VAULT_PASSWORD=<password> lockbox vault <command>
   LOCKBOX_AGENT_DIR=<dir> lockbox <command> ...
   LOCKBOX_VAULT_DIR=<dir> lockbox <command> ...
 

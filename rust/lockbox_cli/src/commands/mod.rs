@@ -1,4 +1,5 @@
 mod context;
+mod doctor;
 mod env;
 mod files;
 mod help;
@@ -38,6 +39,7 @@ pub(crate) fn run() -> CliResult<()> {
 
     match command.as_str() {
         "create" => keys::create(&args, &access)?,
+        "doctor" => doctor::run()?,
         "open" => keys::open(&args)?,
         "lock" => keys::lock(&args)?,
         "keygen" => keys::keygen(&args)?,

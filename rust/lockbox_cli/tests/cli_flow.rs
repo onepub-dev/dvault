@@ -85,18 +85,9 @@ fn cli_env_rename_and_visualize_flow() {
     assert!(vault_list.contains("private\tdefault"));
     assert!(vault_list.contains("trusted\tdefault"));
 
-    let vault_dir = unique_dir().join("vault").join("key_directories");
-    assert!(fs::read_dir(vault_dir).unwrap().next().is_some());
-
-    let encrypted_key = fs::read(
-        unique_dir()
-            .join("vault")
-            .join("private_keys")
-            .join("default.key"),
-    )
-    .unwrap();
-    assert!(encrypted_key.starts_with(b"LBXVKEY1"));
-    assert!(!String::from_utf8_lossy(&encrypted_key).contains("test-password"));
+    let vault_file = unique_dir().join("vault").join("local-vault.lbox");
+    let vault_bytes = fs::read(vault_file).unwrap();
+    assert!(!String::from_utf8_lossy(&vault_bytes).contains("test-key"));
 
     let public_export = dir.join("exported.pub");
     run(
@@ -115,6 +106,12 @@ fn cli_env_rename_and_visualize_flow() {
     let vault_list = run_output(bin, &["vault", "list"]);
     assert_success(&vault_list);
     assert!(!String::from_utf8_lossy(&vault_list.stdout).contains("default"));
+
+    let doctor = run_output(bin, &["doctor"]);
+    assert_success(&doctor);
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(doctor.contains("Local vault"));
+    assert!(doctor.contains("local-vault.lbox"));
 }
 
 fn run(bin: &str, args: &[&str]) {
@@ -126,6 +123,7 @@ fn run_output(bin: &str, args: &[&str]) -> Output {
     Command::new(bin)
         .args(args)
         .env("LOCKBOX_KEY", "test-key")
+        .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
         .env("LOCKBOX_AGENT_DIR", unique_dir().join("agent"))
         .env("LOCKBOX_VAULT_DIR", unique_dir().join("vault"))
         .output()

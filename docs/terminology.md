@@ -25,11 +25,11 @@ In the Rust workspace, `lockbox_vault` owns the local vault API and reusable
 agent transport. `lockbox_core` does not know about vaults; it only implements
 the lockbox file format and operations on an opened lockbox.
 
-`lockbox_vault::VaultDirectory` is the native filesystem-backed vault store. It
-stores user-local private keys, trusted recipient public keys, and local
-key-directory backups using private filesystem permissions where the OS exposes
-them. The unlock agent remains in-memory and separate from this persistent
-directory.
+`lockbox_vault::VaultDirectory` is the native single-file vault store. It keeps
+user-local private keys, trusted recipient public keys, and local key-directory
+backups inside `local-vault.lbox`, protected by the normal password-based
+lockbox mechanism. The unlock agent remains in-memory and separate from this
+persistent vault file.
 
 ## Lockbox
 

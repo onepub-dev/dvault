@@ -126,6 +126,7 @@ fn command(bin: &str, agent_dir: &PathBuf, vault_dir: &PathBuf, args: &[&str]) -
     command
         .args(args)
         .env("LOCKBOX_PASSWORD", "test-password")
+        .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
         .env("LOCKBOX_AGENT_DIR", agent_dir)
         .env("LOCKBOX_VAULT_DIR", vault_dir);
     command

@@ -220,8 +220,8 @@ and the server still validates the connecting client's SID against the agent
 process user SID after connection. The dedicated Agent IPC GitHub Action runs
 the smoke test on Linux, macOS, and Windows.
 
-The persistent local vault directory is a separate feature from the unlock
-agent. It can store:
+The persistent local vault is a password-encrypted `local-vault.lbox` file
+stored in the platform-specific vault directory. It can store:
 
 - the user's long-lived ML-KEM private key seed
 - trusted recipient public keys
@@ -231,11 +231,10 @@ These records are local recovery and convenience data. They are not required for
 a password-shared lockbox to be portable, and they are not the canonical copy of
 lockbox metadata.
 
-Local vault private keys are encrypted with a private-key password before they
-are written to disk. The CLI prompts for that password interactively, or reads
-`LOCKBOX_PRIVATE_KEY_PASSWORD` for automation. Trusted public keys and
-key-directory backups are stored as local vault records with owner-only file
-permissions.
+Local vault private keys are protected by the vault lockbox password. The CLI
+prompts for that password interactively, or reads `LOCKBOX_VAULT_PASSWORD` for
+automation. Trusted public keys and key-directory backups are records inside
+the vault lockbox.
 
 ## CLI Shape
 

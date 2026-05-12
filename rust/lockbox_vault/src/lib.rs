@@ -5,7 +5,9 @@ use std::path::Path;
 
 mod vault_directory;
 
-pub use vault_directory::{default_vault_dir, StoredTrustedRecipient, VaultDirectory};
+pub use vault_directory::{
+    default_vault_dir, default_vault_path, StoredTrustedRecipient, VaultDirectory,
+};
 
 const PROTOCOL_VERSION: &str = "LBX1";
 const MAX_REQUEST_BYTES: usize = 128 * 1024;
@@ -200,7 +202,8 @@ fn unlock_path_or_backup_with_password(
         Err(primary_err) => {
             let lockbox_id =
                 Lockbox::read_lockbox_id_path(path).map_err(|_| primary_err.clone())?;
-            let backup = VaultDirectory::open_default()
+            let vault_password = vault_password_from_env().map_err(|_| primary_err.clone())?;
+            let backup = VaultDirectory::open_default(&vault_password)
                 .and_then(|vault| vault.load_key_directory_backup(lockbox_id))
                 .map_err(|_| primary_err.clone())?;
             Lockbox::unlock_key_directory_backup_with_password(&backup, password)
@@ -218,13 +221,20 @@ fn unlock_path_or_backup_with_recipient(
         Err(primary_err) => {
             let lockbox_id =
                 Lockbox::read_lockbox_id_path(path).map_err(|_| primary_err.clone())?;
-            let backup = VaultDirectory::open_default()
+            let vault_password = vault_password_from_env().map_err(|_| primary_err.clone())?;
+            let backup = VaultDirectory::open_default(&vault_password)
                 .and_then(|vault| vault.load_key_directory_backup(lockbox_id))
                 .map_err(|_| primary_err.clone())?;
             Lockbox::unlock_key_directory_backup_with_recipient(&backup, recipient)
                 .map_err(|_| primary_err)
         }
     }
+}
+
+fn vault_password_from_env() -> Result<SecretString> {
+    std::env::var("LOCKBOX_VAULT_PASSWORD")
+        .map(|password| SecretString::from_bytes(password.into_bytes()))
+        .map_err(|_| Error::InvalidKey)
 }
 
 impl ContentKeyStore for AgentClient {

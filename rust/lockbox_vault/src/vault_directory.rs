@@ -1,19 +1,13 @@
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use getrandom::getrandom;
 use lockbox_core::{
-    derive_key_from_password, Error, LockboxId, MlKemKeyPair, MlKemRecipientKey, Result,
-    SecretString,
+    EntryKind, Error, ListOptions, Lockbox, LockboxCreate, LockboxId, LockboxUnlock, MlKemKeyPair,
+    MlKemRecipientKey, Result, SecretString,
 };
+use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use zeroize::Zeroize;
 
-use crate::{decode_hex, encode_hex};
-
-const PRIVATE_KEY_MAGIC: &[u8; 8] = b"LBXVKEY1";
-const PRIVATE_KEY_AAD: &[u8] = b"lockbox-vault-private-key/v1";
+const VAULT_FILE_NAME: &str = "local-vault.lbox";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredTrustedRecipient {
@@ -21,106 +15,104 @@ pub struct StoredTrustedRecipient {
     pub key: MlKemRecipientKey,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct VaultDirectory {
     root: PathBuf,
+    path: PathBuf,
+    lockbox: RefCell<Lockbox>,
 }
 
 impl VaultDirectory {
     pub const DEFAULT_KEY_NAME: &'static str = "default";
 
-    pub fn open_default() -> Result<Self> {
-        Self::open(default_vault_dir()?)
+    pub fn open_default(password: &SecretString) -> Result<Self> {
+        Self::open(default_vault_dir()?, password)
     }
 
-    pub fn open(root: impl AsRef<Path>) -> Result<Self> {
+    pub fn open(root: impl AsRef<Path>, password: &SecretString) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         create_private_dir(&root)?;
-        create_private_dir(&root.join("private_keys"))?;
-        create_private_dir(&root.join("trusted_recipients"))?;
-        create_private_dir(&root.join("key_directories"))?;
-        Ok(Self { root })
+        let path = root.join(VAULT_FILE_NAME);
+        let lockbox = if path.exists() {
+            Lockbox::open_file(
+                &path,
+                LockboxUnlock::Password(password.expose_bytes().to_vec()),
+            )?
+        } else {
+            let lockbox = Lockbox::create_file(
+                &path,
+                LockboxCreate::Password(password.expose_bytes().to_vec()),
+            )?;
+            set_private_file_permissions(&path)?;
+            lockbox
+        };
+        Ok(Self {
+            root,
+            path,
+            lockbox: RefCell::new(lockbox),
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    pub fn store_private_key(
-        &self,
-        name: &str,
-        keypair: &MlKemKeyPair,
-        passphrase: &SecretString,
-    ) -> Result<()> {
-        let path = self.private_key_path(name)?;
-        let encrypted = encrypt_private_key_seed(&keypair.to_seed_bytes(), passphrase)?;
-        write_private_file(&path, &encrypted)
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
-    pub fn load_private_key(&self, name: &str, passphrase: &SecretString) -> Result<MlKemKeyPair> {
-        let bytes =
-            fs::read(self.private_key_path(name)?).map_err(|err| Error::Io(err.to_string()))?;
-        let seed = decrypt_private_key_seed(&bytes, passphrase)?;
-        MlKemKeyPair::from_seed_bytes(&seed)
+    pub fn store_private_key(&self, name: &str, keypair: &MlKemKeyPair) -> Result<()> {
+        self.put_record(&private_key_record_path(name)?, &keypair.to_seed_bytes())
+    }
+
+    pub fn load_private_key(&self, name: &str) -> Result<MlKemKeyPair> {
+        MlKemKeyPair::from_seed_bytes(&self.get_record(&private_key_record_path(name)?)?)
     }
 
     pub fn private_key_exists(&self, name: &str) -> Result<bool> {
-        Ok(self.private_key_path(name)?.exists())
+        Ok(self
+            .lockbox
+            .borrow()
+            .stat(&private_key_record_path(name)?)
+            .is_some())
     }
 
     pub fn list_private_keys(&self) -> Result<Vec<String>> {
-        list_record_names(&self.root.join("private_keys"), "key")
+        self.list_record_names("/private_keys", ".key")
     }
 
     pub fn delete_private_key(&self, name: &str) -> Result<()> {
-        let path = self.private_key_path(name)?;
-        if path.exists() {
-            fs::remove_file(path).map_err(|err| Error::Io(err.to_string()))?;
-        }
-        Ok(())
+        self.delete_record_if_exists(&private_key_record_path(name)?)
     }
 
     pub fn store_trusted_recipient(&self, name: &str, key: &MlKemRecipientKey) -> Result<()> {
-        let path = self.trusted_recipient_path(name)?;
-        write_private_file(&path, encode_hex(&key.to_bytes()).as_bytes())
+        self.put_record(&trusted_recipient_record_path(name)?, &key.to_bytes())
     }
 
     pub fn load_trusted_recipient(&self, name: &str) -> Result<MlKemRecipientKey> {
-        let bytes = read_hex_file(&self.trusted_recipient_path(name)?)?;
-        MlKemRecipientKey::from_bytes(&bytes)
+        MlKemRecipientKey::from_bytes(&self.get_record(&trusted_recipient_record_path(name)?)?)
     }
 
     pub fn trusted_recipient_exists(&self, name: &str) -> Result<bool> {
-        Ok(self.trusted_recipient_path(name)?.exists())
+        Ok(self
+            .lockbox
+            .borrow()
+            .stat(&trusted_recipient_record_path(name)?)
+            .is_some())
     }
 
     pub fn delete_trusted_recipient(&self, name: &str) -> Result<()> {
-        let path = self.trusted_recipient_path(name)?;
-        if path.exists() {
-            fs::remove_file(path).map_err(|err| Error::Io(err.to_string()))?;
-        }
-        Ok(())
+        self.delete_record_if_exists(&trusted_recipient_record_path(name)?)
     }
 
     pub fn list_trusted_recipients(&self) -> Result<Vec<StoredTrustedRecipient>> {
         let mut out = Vec::new();
-        for entry in fs::read_dir(self.root.join("trusted_recipients"))
-            .map_err(|err| Error::Io(err.to_string()))?
-        {
-            let entry = entry.map_err(|err| Error::Io(err.to_string()))?;
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("pub") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
-                continue;
-            };
+        for name in self.list_record_names("/trusted_recipients", ".pub")? {
             out.push(StoredTrustedRecipient {
-                name: stem.to_string(),
-                key: MlKemRecipientKey::from_bytes(&read_hex_file(&path)?)?,
+                key: self.load_trusted_recipient(&name)?,
+                name,
             });
         }
-        out.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(out)
     }
 
@@ -129,82 +121,84 @@ impl VaultDirectory {
         lockbox_id: LockboxId,
         key_directory: &[u8],
     ) -> Result<()> {
-        let path = self.key_directory_backup_path(lockbox_id);
-        write_private_file(&path, key_directory)
+        self.put_record(&key_directory_backup_record_path(lockbox_id), key_directory)
     }
 
     pub fn load_key_directory_backup(&self, lockbox_id: LockboxId) -> Result<Vec<u8>> {
-        fs::read(self.key_directory_backup_path(lockbox_id))
-            .map_err(|err| Error::Io(err.to_string()))
+        self.get_record(&key_directory_backup_record_path(lockbox_id))
     }
 
-    fn private_key_path(&self, name: &str) -> Result<PathBuf> {
+    pub fn key_directory_backup_count(&self) -> Result<usize> {
         Ok(self
-            .root
-            .join("private_keys")
-            .join(format!("{}.key", validate_record_name(name)?)))
+            .lockbox
+            .borrow()
+            .list_iter(recursive_list("/key_directories"))?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.kind == EntryKind::File)
+            .count())
     }
 
-    fn trusted_recipient_path(&self, name: &str) -> Result<PathBuf> {
-        Ok(self
-            .root
-            .join("trusted_recipients")
-            .join(format!("{}.pub", validate_record_name(name)?)))
+    fn put_record(&self, path: &str, bytes: &[u8]) -> Result<()> {
+        let mut lockbox = self.lockbox.borrow_mut();
+        lockbox.put_file(path, bytes)?;
+        lockbox.commit()?;
+        set_private_file_permissions(&self.path)?;
+        Ok(())
     }
 
-    fn key_directory_backup_path(&self, lockbox_id: LockboxId) -> PathBuf {
-        self.root
-            .join("key_directories")
-            .join(format!("{lockbox_id}.keydir"))
+    fn get_record(&self, path: &str) -> Result<Vec<u8>> {
+        self.lockbox.borrow().get_file(path)
+    }
+
+    fn delete_record_if_exists(&self, path: &str) -> Result<()> {
+        let mut lockbox = self.lockbox.borrow_mut();
+        if lockbox.stat(path).is_some() {
+            lockbox.delete(path)?;
+            lockbox.commit()?;
+            set_private_file_permissions(&self.path)?;
+        }
+        Ok(())
+    }
+
+    fn list_record_names(&self, root: &str, extension: &str) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for entry in self.lockbox.borrow().list_iter(recursive_list(root))? {
+            let entry = entry?;
+            if entry.kind != EntryKind::File || !entry.path.ends_with(extension) {
+                continue;
+            }
+            let name = entry
+                .path
+                .rsplit('/')
+                .next()
+                .and_then(|file| file.strip_suffix(extension))
+                .ok_or_else(|| Error::InvalidPath(entry.path.clone()))?;
+            out.push(name.to_string());
+        }
+        out.sort();
+        Ok(out)
     }
 }
 
-fn encrypt_private_key_seed(seed: &[u8], passphrase: &SecretString) -> Result<Vec<u8>> {
-    let mut salt = [0u8; 16];
-    let mut nonce = [0u8; 12];
-    getrandom(&mut salt).map_err(|err| Error::Io(err.to_string()))?;
-    getrandom(&mut nonce).map_err(|err| Error::Io(err.to_string()))?;
-    let mut key = derive_key_from_password(passphrase.expose_bytes(), &salt)?;
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
-    let ciphertext = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: seed,
-                aad: PRIVATE_KEY_AAD,
-            },
-        )
-        .map_err(|_| Error::InvalidKey)?;
-    key.zeroize();
-    let mut out =
-        Vec::with_capacity(PRIVATE_KEY_MAGIC.len() + salt.len() + nonce.len() + ciphertext.len());
-    out.extend_from_slice(PRIVATE_KEY_MAGIC);
-    out.extend_from_slice(&salt);
-    out.extend_from_slice(&nonce);
-    out.extend_from_slice(&ciphertext);
-    Ok(out)
+fn recursive_list(path: &str) -> ListOptions {
+    let mut options = ListOptions::new(path);
+    options.recursive = true;
+    options
 }
 
-fn decrypt_private_key_seed(bytes: &[u8], passphrase: &SecretString) -> Result<Vec<u8>> {
-    if bytes.len() < PRIVATE_KEY_MAGIC.len() + 16 + 12 || &bytes[0..8] != PRIVATE_KEY_MAGIC {
-        return Err(Error::InvalidKey);
-    }
-    let salt = &bytes[8..24];
-    let nonce = &bytes[24..36];
-    let ciphertext = &bytes[36..];
-    let mut key = derive_key_from_password(passphrase.expose_bytes(), salt)?;
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
-    let seed = cipher
-        .decrypt(
-            Nonce::from_slice(nonce),
-            Payload {
-                msg: ciphertext,
-                aad: PRIVATE_KEY_AAD,
-            },
-        )
-        .map_err(|_| Error::InvalidKey)?;
-    key.zeroize();
-    Ok(seed)
+fn private_key_record_path(name: &str) -> Result<String> {
+    Ok(format!("/private_keys/{}.key", validate_record_name(name)?))
+}
+
+fn trusted_recipient_record_path(name: &str) -> Result<String> {
+    Ok(format!(
+        "/trusted_recipients/{}.pub",
+        validate_record_name(name)?
+    ))
+}
+
+fn key_directory_backup_record_path(lockbox_id: LockboxId) -> String {
+    format!("/key_directories/{lockbox_id}.keydir")
 }
 
 pub fn default_vault_dir() -> Result<PathBuf> {
@@ -212,6 +206,10 @@ pub fn default_vault_dir() -> Result<PathBuf> {
         return Ok(PathBuf::from(path));
     }
     default_vault_dir_for_os()
+}
+
+pub fn default_vault_path() -> Result<PathBuf> {
+    Ok(default_vault_dir()?.join(VAULT_FILE_NAME))
 }
 
 #[cfg(target_os = "windows")]
@@ -251,27 +249,6 @@ fn home_dir() -> Result<PathBuf> {
         .ok_or_else(|| Error::Io("HOME is not set".to_string()))
 }
 
-fn list_record_names(dir: &Path, extension: &str) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|err| Error::Io(err.to_string()))? {
-        let entry = entry.map_err(|err| Error::Io(err.to_string()))?;
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some(extension) {
-            continue;
-        }
-        if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
-            out.push(stem.to_string());
-        }
-    }
-    out.sort();
-    Ok(out)
-}
-
-fn read_hex_file(path: &Path) -> Result<Vec<u8>> {
-    let text = fs::read_to_string(path).map_err(|err| Error::Io(err.to_string()))?;
-    decode_hex(text.trim()).map_err(|err| Error::Io(err.to_string()))
-}
-
 fn validate_record_name(name: &str) -> Result<&str> {
     let valid = !name.is_empty()
         && name
@@ -287,11 +264,6 @@ fn validate_record_name(name: &str) -> Result<&str> {
 fn create_private_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).map_err(|err| Error::Io(err.to_string()))?;
     set_private_dir_permissions(path)
-}
-
-fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    fs::write(path, bytes).map_err(|err| Error::Io(err.to_string()))?;
-    set_private_file_permissions(path)
 }
 
 #[cfg(unix)]

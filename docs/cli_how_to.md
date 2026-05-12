@@ -384,11 +384,15 @@ should identify intact files even if the latest manifest is damaged.
 
 ## Recipient Keys
 
-Initialize the local vault directory:
+Initialize the local vault lockbox:
 
 ```bash
 lockbox vault init
 ```
+
+This creates `local-vault.lbox` in the platform-specific vault directory and
+prompts for the vault password. For automation, `LOCKBOX_VAULT_PASSWORD` can
+supply that password.
 
 Generate the default local recipient keypair and export its public key:
 
@@ -396,9 +400,14 @@ Generate the default local recipient keypair and export its public key:
 lockbox vault keygen default alice.pub
 ```
 
-Private keys in the local vault are encrypted with a private-key password. For
-automation, `LOCKBOX_PRIVATE_KEY_PASSWORD` can supply that password; interactive
-use prompts for it.
+Private keys are stored inside the encrypted local vault lockbox. There is no
+separate private-key password layer.
+
+Import an existing private key file into the vault:
+
+```bash
+lockbox vault import-key legacy alice.key alice.pub
+```
 
 Trust another recipient public key in the local vault:
 
@@ -425,16 +434,17 @@ The default vault location is platform-specific and can be overridden:
 LOCKBOX_VAULT_DIR=/secure/local/vault lockbox vault init
 ```
 
-Generate a recipient keypair:
+Create a lockbox for one of your vault keys:
 
 ```bash
-lockbox keygen alice.key alice.pub
+lockbox create --recipient default secrets.lbox
 ```
 
-Add a recipient public key to an unlocked lockbox:
+Add a recipient public key or trusted recipient name to an unlocked lockbox:
 
 ```bash
 lockbox add-recipient secrets.lbox alice.pub
+lockbox add-recipient secrets.lbox bob
 ```
 
 List key slots:
@@ -456,20 +466,18 @@ credential to keep opening the lockbox.
 Unlock with a private key:
 
 ```bash
-lockbox open-key secrets.lbox alice.key
+lockbox open-key secrets.lbox default
 ```
 
-If no private key path is supplied, `open-key` uses the default private key in
-the local vault:
+If no key name is supplied, `open-key` uses the default private key in the local
+vault:
 
 ```bash
 lockbox open-key secrets.lbox
 ```
 
-Private keys stored in the local vault are encrypted with the private-key
-password. If you pass an explicit private-key file path to `open-key`, that file
-is treated as an external hex-encoded ML-KEM seed file and remains outside the
-local vault protection model.
+The CLI uses vault-managed private keys by name. External private key files
+should be imported into the vault before use rather than loaded directly.
 
 Commands that create, unlock, or change lockbox key slots mirror the current
 key directory into the local vault as a recovery aid. The lockbox remains the

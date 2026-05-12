@@ -1,6 +1,4 @@
-use super::context::{
-    default_vault, read_hex_file, read_private_key_password, require_arg, CliResult,
-};
+use super::context::{default_vault, read_hex_file, require_arg, CliResult};
 use lockbox_core::{MlKemKeyPair, MlKemRecipientKey};
 use lockbox_vault::{default_vault_dir, encode_hex, VaultDirectory};
 use std::fs;
@@ -11,6 +9,7 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "init" => init(),
         "path" => path(),
         "keygen" => keygen(&args[1..]),
+        "import-key" => import_key(&args[1..]),
         "trust" => trust(&args[1..]),
         "remove-key" => remove_key(&args[1..]),
         "remove-trusted" => remove_trusted(&args[1..]),
@@ -49,8 +48,7 @@ fn keygen(args: &[String]) -> CliResult<()> {
     }
 
     let keypair = MlKemKeyPair::generate();
-    let password = read_private_key_password()?;
-    vault.store_private_key(name, &keypair, &password)?;
+    vault.store_private_key(name, &keypair)?;
     if let Some(path) = public_path {
         fs::write(path, encode_hex(&keypair.recipient_key().to_bytes()))?;
     }
@@ -73,6 +71,22 @@ fn trust(args: &[String]) -> CliResult<()> {
     }
     let recipient = MlKemRecipientKey::from_bytes(&read_hex_file(public_path)?)?;
     vault.store_trusted_recipient(name, &recipient)?;
+    Ok(())
+}
+
+fn import_key(args: &[String]) -> CliResult<()> {
+    let name = require_arg(args, 0, "key name")?;
+    let private_path = require_arg(args, 1, "private key path")?;
+    let public_path = args.get(2).map(String::as_str);
+    let vault = default_vault()?;
+    if vault.private_key_exists(name)? {
+        return Err(format!("vault private key already exists: {name}").into());
+    }
+    let keypair = MlKemKeyPair::from_seed_bytes(&read_hex_file(private_path)?)?;
+    vault.store_private_key(name, &keypair)?;
+    if let Some(path) = public_path {
+        fs::write(path, encode_hex(&keypair.recipient_key().to_bytes()))?;
+    }
     Ok(())
 }
 
@@ -108,8 +122,7 @@ fn export_public(args: &[String]) -> CliResult<()> {
         [name, destination, ..] => (name.as_str(), destination.as_str()),
         [] => return Err("missing public key path".into()),
     };
-    let password = read_private_key_password()?;
-    let keypair = default_vault()?.load_private_key(name, &password)?;
+    let keypair = default_vault()?.load_private_key(name)?;
     fs::write(destination, encode_hex(&keypair.recipient_key().to_bytes()))?;
     Ok(())
 }

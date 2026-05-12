@@ -1,5 +1,5 @@
 use crate::secret_prompt::prompt_secret;
-use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair};
+use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair, MlKemRecipientKey};
 use lockbox_vault::{decode_hex, local_vault, NoopStore, SecretString, Vault, VaultDirectory};
 use std::env;
 use std::path::Path;
@@ -85,11 +85,11 @@ pub(crate) fn read_password(prompt: &str) -> CliResult<SecretString> {
     Ok(prompt_secret(prompt)?)
 }
 
-pub(crate) fn read_private_key_password() -> CliResult<SecretString> {
-    if let Ok(password) = env::var("LOCKBOX_PRIVATE_KEY_PASSWORD") {
+pub(crate) fn read_vault_password() -> CliResult<SecretString> {
+    if let Ok(password) = env::var("LOCKBOX_VAULT_PASSWORD") {
         return Ok(SecretString::from_bytes(password.into_bytes()));
     }
-    read_password("Private key password: ")
+    Ok(prompt_secret("Vault password: ")?)
 }
 
 pub(crate) fn read_new_password() -> CliResult<SecretString> {
@@ -112,7 +112,8 @@ pub(crate) fn read_hex_file(path: &str) -> CliResult<Vec<u8>> {
 }
 
 pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
-    VaultDirectory::open_default()
+    let password = read_vault_password().map_err(|err| Error::Io(err.to_string()))?;
+    VaultDirectory::open_default(&password)
 }
 
 pub(crate) fn mirror_key_directory(lockbox: &Lockbox) -> Result<(), Error> {
@@ -126,11 +127,16 @@ pub(crate) fn mirror_key_directory(lockbox: &Lockbox) -> Result<(), Error> {
 pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<MlKemKeyPair> {
     let vault = default_vault()?;
     let name_or_path = arg.unwrap_or(VaultDirectory::DEFAULT_KEY_NAME);
-    if std::path::Path::new(name_or_path).exists() {
-        return Ok(MlKemKeyPair::from_seed_bytes(&read_hex_file(
-            name_or_path,
-        )?)?);
+    Ok(vault.load_private_key(name_or_path)?)
+}
+
+pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<MlKemRecipientKey> {
+    if std::path::Path::new(arg).exists() {
+        return Ok(MlKemRecipientKey::from_bytes(&read_hex_file(arg)?)?);
     }
-    let password = read_private_key_password()?;
-    Ok(vault.load_private_key(name_or_path, &password)?)
+    let vault = default_vault()?;
+    if let Ok(recipient) = vault.load_trusted_recipient(arg) {
+        return Ok(recipient);
+    }
+    Ok(vault.load_private_key(arg)?.recipient_key())
 }
