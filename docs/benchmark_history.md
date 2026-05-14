@@ -765,3 +765,54 @@ Conclusion:
   reductions likely require a larger structural change: building TOC leaves from
   borrowed manifest entries and making rollback journal-based instead of
   snapshot-based.
+
+## 2026-05-13 - Workload-Aware Cache Policy Pass
+
+Description: added explicit workload profiles and wired CLI-created initial
+imports to `BulkImport`. In that profile, append-only file-data pages are
+flushed and dropped from the decoded-page cache as they are written. Metadata,
+redaction, TOC, env, free-index, key-directory, and commit-root writes keep the
+normal commit-time cache policy.
+
+Verification:
+
+- `cargo test -p lockbox_core`
+- `cargo clippy -p lockbox_core --all-targets -- -D warnings`
+- `cargo build --release -p lockbox_cli`
+- `cargo bench -p lockbox_core --bench performance`
+
+Criterion results:
+
+| Benchmark | Result | Criterion verdict |
+| --- | ---: | --- |
+| small_files/add_commit_1000x1k | 23.70ms | no change |
+| small_files/extract_memory_1000x1k | 1.100ms | +5.2%, regression |
+| small_files/extract_directory_1000x1k | 23.54ms | no change |
+| mixed_tree/add_commit_mixed | 17.73ms | no change |
+| mixed_tree/list_recursive_mixed | 8.19us | -2.1%, improved |
+| mixed_tree/extract_directory_mixed | 9.61ms | no change |
+| large_file/add_commit_16m_randomish | 78.05ms | within noise |
+| large_file/range_read_1m_middle | 133.5us | no change |
+| append_delete/append_delete_replace_commit | 36.95ms | no change |
+| toc_structure/separator_update_5000 | 47.24ms | no change |
+| toc_structure/leaf_split_append_5000 | 30.96ms | no change |
+| toc_structure/leaf_merge_delete_5000 | 40.14ms | no change |
+| metadata_operations/rename_16m_file_commit | 5.69ms | no change |
+| metadata_operations/list_env_1000 | 575.4us | within noise |
+| metadata_operations/compact_16m_file_after_delete | 79.13ms | no change |
+
+100 MiB directory comparison used 4,096 files of 25,600 bytes each:
+
+| Tool | Encode time | Max RSS | Output bytes |
+| --- | ---: | ---: | ---: |
+| Lockbox CLI bulk import | 3.28s | 78,792 KiB | 110,231,648 |
+| `tar | gpg` default compression | 3.94s | 3,672 KiB | 105,578,459 |
+| `tar | gpg --compress-algo none` | 0.83s | 3,332 KiB | 107,004,045 |
+
+Compared with the previous 100 MiB lockbox/GPG pass, lockbox output size is
+unchanged, encode time is slightly higher, and peak RSS dropped from roughly
+266 MiB to 79 MiB. The bulk import path now packs small files through a
+long-lived `PageObjectPacker` and flushes before the current packed page would
+overflow, so it keeps roughly one file-data page plus import metadata resident
+instead of the whole source corpus. A density regression test checks that
+non-tail file-data pages are not left mostly empty.

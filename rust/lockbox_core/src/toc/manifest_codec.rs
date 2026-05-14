@@ -1,7 +1,5 @@
 use crate::file_chunk::{FileChunk, FileFragment};
-use crate::logical_path::{
-    validate_stored_path as validate_path, validate_symlink_paths as validate_symlink,
-};
+use crate::logical_path::validate_stored_path as validate_path;
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::security::validate_permissions;
@@ -26,17 +24,19 @@ pub(crate) fn encode_manifest_entries<'a>(
         out.extend_from_slice(&entry.len.to_le_bytes());
         out.extend_from_slice(&entry.record_offset.to_le_bytes());
         out.extend_from_slice(&entry.record_len.to_le_bytes());
+        out.extend_from_slice(&entry.record_object_id.to_le_bytes());
         out.push(entry.deleted as u8);
         out.push(entry.node_kind as u8);
         out.extend_from_slice(&entry.permissions.to_le_bytes());
-        if let Some(target) = &entry.symlink_target {
-            out.extend_from_slice(&(target.len() as u16).to_le_bytes());
-            out.extend_from_slice(target.as_bytes());
-        } else {
-            out.extend_from_slice(&0u16.to_le_bytes());
-        }
         out.extend_from_slice(&(entry.chunks.len() as u32).to_le_bytes());
         for chunk in &entry.chunks {
+            let stored_path = if chunk.stored_path == entry.path {
+                ""
+            } else {
+                chunk.stored_path.as_str()
+            };
+            out.extend_from_slice(&(stored_path.len() as u16).to_le_bytes());
+            out.extend_from_slice(stored_path.as_bytes());
             out.extend_from_slice(&chunk.file_offset.to_le_bytes());
             out.extend_from_slice(&chunk.len.to_le_bytes());
             out.extend_from_slice(&chunk.compressed_len.to_le_bytes());
@@ -72,6 +72,9 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
         return Err(Error::CorruptRecord);
     }
     let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    if count > (payload.len() - 4) / 44 {
+        return Err(Error::CorruptRecord);
+    }
     let mut offset = 4;
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
@@ -80,7 +83,7 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
         }
         let path_len = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap()) as usize;
         offset += 2;
-        if offset + path_len + 32 > payload.len() {
+        if offset + path_len + 42 > payload.len() {
             return Err(Error::CorruptRecord);
         }
         let path = String::from_utf8(payload[offset..offset + path_len].to_vec())
@@ -93,6 +96,8 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
         offset += 8;
         let record_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
         offset += 8;
+        let record_object_id = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
         let deleted = payload[offset] != 0;
         offset += 1;
         let node_kind = NodeKind::from_u8(payload[offset])?;
@@ -100,32 +105,36 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
         let permissions = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
         let permissions = validate_permissions(permissions)?;
         offset += 4;
-        let target_len =
-            u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap()) as usize;
-        offset += 2;
-        if offset + target_len > payload.len() {
-            return Err(Error::CorruptRecord);
-        }
-        let symlink_target = if target_len == 0 {
-            None
-        } else {
-            let target = String::from_utf8(payload[offset..offset + target_len].to_vec())
-                .map_err(|_| Error::CorruptRecord)?;
-            validate_symlink(&path, &target)?;
-            Some(target)
-        };
-        offset += target_len;
         if offset + 4 > payload.len() {
             return Err(Error::CorruptRecord);
         }
         let chunk_count =
             u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
+        if chunk_count > (payload.len() - offset) / 42 {
+            return Err(Error::CorruptRecord);
+        }
         let mut chunks = Vec::with_capacity(chunk_count);
         for _ in 0..chunk_count {
-            if offset + 40 > payload.len() {
+            if offset + 2 > payload.len() {
                 return Err(Error::CorruptRecord);
             }
+            let stored_path_len =
+                u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap()) as usize;
+            offset += 2;
+            if offset + stored_path_len + 40 > payload.len() {
+                return Err(Error::CorruptRecord);
+            }
+            let stored_path = if stored_path_len == 0 {
+                path.clone()
+            } else {
+                let stored_path =
+                    String::from_utf8(payload[offset..offset + stored_path_len].to_vec())
+                        .map_err(|_| Error::CorruptRecord)?;
+                validate_path(&stored_path)?;
+                stored_path
+            };
+            offset += stored_path_len;
             let file_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
             offset += 8;
             let chunk_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
@@ -140,6 +149,9 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
             let fragment_count =
                 u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
+            if fragment_count > (payload.len() - offset) / 40 {
+                return Err(Error::CorruptRecord);
+            }
             let mut fragments = Vec::with_capacity(fragment_count);
             for _ in 0..fragment_count {
                 if offset + 40 > payload.len() {
@@ -167,6 +179,7 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
                 });
             }
             chunks.push(FileChunk {
+                stored_path,
                 file_offset,
                 len: chunk_len,
                 compressed_len,
@@ -176,8 +189,10 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
             });
         }
         match node_kind {
-            NodeKind::File if symlink_target.is_some() => return Err(Error::CorruptRecord),
-            NodeKind::Symlink if symlink_target.is_none() => return Err(Error::CorruptRecord),
+            NodeKind::Symlink if record_offset == 0 || record_len == 0 || record_object_id == 0 => {
+                return Err(Error::CorruptRecord);
+            }
+            NodeKind::Symlink if !chunks.is_empty() => return Err(Error::CorruptRecord),
             _ => {}
         }
         entries.push(ManifestEntry {
@@ -185,10 +200,10 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
             len,
             record_offset,
             record_len,
+            record_object_id,
             deleted,
             node_kind,
             permissions,
-            symlink_target,
             chunks,
         });
     }
@@ -214,10 +229,10 @@ mod tests {
                 len: 1,
                 record_offset: 64,
                 record_len: 64,
+                record_object_id: 1,
                 deleted: false,
                 node_kind: NodeKind::File,
                 permissions: DEFAULT_FILE_PERMISSIONS,
-                symlink_target: None,
                 chunks: Vec::new(),
             },
         );
@@ -226,5 +241,46 @@ mod tests {
             decode_manifest(&payload),
             Err(Error::InvalidPath(_))
         ));
+    }
+
+    #[test]
+    fn decoded_manifest_rejects_impossible_entry_count_before_allocating() {
+        let payload = u32::MAX.to_le_bytes();
+
+        assert!(matches!(
+            decode_manifest_entries(&payload),
+            Err(Error::CorruptRecord)
+        ));
+    }
+
+    #[test]
+    fn decoded_manifest_rejects_symlink_without_object_reference() {
+        let payload = encoded_symlink_entry("/links/current", 0, 0, 0);
+
+        assert!(matches!(
+            decode_manifest_entries(&payload),
+            Err(Error::CorruptRecord)
+        ));
+    }
+
+    fn encoded_symlink_entry(
+        path: &str,
+        record_offset: u64,
+        record_len: u64,
+        record_object_id: u64,
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&(path.len() as u16).to_le_bytes());
+        out.extend_from_slice(path.as_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(&record_offset.to_le_bytes());
+        out.extend_from_slice(&record_len.to_le_bytes());
+        out.extend_from_slice(&record_object_id.to_le_bytes());
+        out.push(0);
+        out.push(NodeKind::Symlink as u8);
+        out.extend_from_slice(&DEFAULT_FILE_PERMISSIONS.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out
     }
 }

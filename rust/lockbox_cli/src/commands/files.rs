@@ -1,5 +1,5 @@
 use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
-use lockbox_core::{ExtractPolicy, ListOptions, Lockbox};
+use lockbox_core::{ExtractPolicy, ListOptions, Lockbox, WorkloadProfile};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -8,7 +8,11 @@ pub(crate) fn add(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let source = require_arg(args, 1, "source")?;
     let path = require_arg(args, 2, "lockbox path")?;
+    let creates_lockbox = !Path::new(lockbox_path).exists();
     let mut lb = open_or_create(lockbox_path, access)?;
+    if creates_lockbox {
+        lb.set_workload_profile(WorkloadProfile::BulkImport);
+    }
     add_source_path(&mut lb, Path::new(source), path)?;
     lb.commit()?;
     Ok(())

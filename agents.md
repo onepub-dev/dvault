@@ -9,6 +9,49 @@ DVault is a secure, encrypted file vault format designed for:
 
 ## Requirements
 
+### 0. Page Cache Ownership
+All normal lockbox reads and writes must go through the page cache. The page
+cache owns page encoding, encryption policy, dirty tracking, flushing, COW
+replacement, zeroing of superseded physical pages, and publication of freed
+ranges for reuse. Higher-level code must not write storage directly to append,
+replace, redact, or update pages.
+
+Allowed exceptions:
+-   **Fixed header access**: the lockbox header is fixed at offset `0` and may
+    be read directly before roots are known. It may also be written directly as
+    the final commit publication step.
+-   **Recovery reads**: recovery may scan a damaged lockbox by reading storage
+    directly because page-cache indexes and roots may be corrupt or missing.
+    When recovery creates the repaired lockbox, it must use the same normal
+    lockbox creation and page-cache write APIs used outside recovery.
+
+Unlock is not a page-cache exception. The key directory is a clear-text page
+class, so password and recipient unlock should read key-directory pages through
+the page-cache page read/decode boundary. Only fallback scans for damaged or
+missing roots should inspect raw storage bytes directly.
+
+Compaction is not a page-cache exception and must not move physical pages
+in-place. Compact by reading the live logical state, creating a replacement
+lockbox through the normal creation APIs, writing all live objects through the
+page cache, committing it, and then swapping the backing file or in-memory
+storage as a whole.
+
+Metadata such as TOC nodes, environment pages, symlink metadata pages, free
+indexes, commit roots, and key-directory pages are page-cache-managed data.
+Some page classes may be marked as **clear-text** so they can be read before
+the content key is available, or for other format-level purposes. Clear-text
+pages are still page-cache-managed pages: callers must write them through the
+normal page-cache page-writing APIs. The page cache/page format layer owns the
+clear-text page policy and must add and validate a checksum when writing and
+reading clear-text pages.
+
+Encrypted pages use AEAD authentication for body integrity. The page format may
+also keep a public page-header checksum as an early corruption filter, but
+higher-level code must not add independent checksums for encrypted page
+payloads. Clear-text page payloads rely on the page-cache/page-format checksum;
+clear-text object formats such as the key directory should not implement their
+own nested payload checksums.
+
 ### 1. Page-Based Format
 The vault is divided into fixed-size "Pages" (e.g., 64KB).
 -   **Independent Decryption**: Each page can be decrypted independently. This allows fetching and decrypting only the needed parts of the vault.

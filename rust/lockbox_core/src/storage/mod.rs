@@ -15,7 +15,6 @@ pub(crate) trait Storage: Clone + std::fmt::Debug {
     fn read_at(&self, offset: u64, len: usize) -> Result<Vec<u8>>;
     fn append(&mut self, bytes: &[u8]) -> Result<u64>;
     fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()>;
-    fn replace_all(&mut self, bytes: &[u8]) -> Result<()>;
 
     fn read_all(&self) -> Result<Vec<u8>> {
         let len = self.len()?;
@@ -46,6 +45,13 @@ impl StorageBackend {
     pub(crate) fn create_file(path: impl AsRef<Path>, initial_bytes: &[u8]) -> Result<Self> {
         Ok(Self::File(FileStore::create(path, initial_bytes)?))
     }
+
+    pub(crate) fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Memory(_) => None,
+            Self::File(store) => Some(store.path()),
+        }
+    }
 }
 
 impl Storage for StorageBackend {
@@ -74,13 +80,6 @@ impl Storage for StorageBackend {
         match self {
             Self::Memory(store) => store.write_at(offset, bytes),
             Self::File(store) => store.write_at(offset, bytes),
-        }
-    }
-
-    fn replace_all(&mut self, bytes: &[u8]) -> Result<()> {
-        match self {
-            Self::Memory(store) => store.replace_all(bytes),
-            Self::File(store) => store.replace_all(bytes),
         }
     }
 }
@@ -181,12 +180,6 @@ impl Storage for MemoryStore {
         self.bytes[start..end].copy_from_slice(bytes);
         Ok(())
     }
-
-    fn replace_all(&mut self, bytes: &[u8]) -> Result<()> {
-        self.bytes.clear();
-        self.bytes.extend_from_slice(bytes);
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -253,6 +246,10 @@ impl FileStore {
             .lock()
             .map_err(|_| Error::Io("storage file lock poisoned".to_string()))
     }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 impl Storage for FileStore {
@@ -293,17 +290,5 @@ impl Storage for FileStore {
             .map_err(|err| Error::Io(format!("seek {}: {err}", self.path.display())))?;
         file.write_all(bytes)
             .map_err(|err| Error::Io(format!("write {}: {err}", self.path.display())))
-    }
-
-    fn replace_all(&mut self, bytes: &[u8]) -> Result<()> {
-        let mut file = self.lock_file()?;
-        file.set_len(0)
-            .map_err(|err| Error::Io(format!("truncate {}: {err}", self.path.display())))?;
-        file.seek(SeekFrom::Start(0))
-            .map_err(|err| Error::Io(format!("seek {}: {err}", self.path.display())))?;
-        file.write_all(bytes)
-            .map_err(|err| Error::Io(format!("write {}: {err}", self.path.display())))?;
-        file.sync_data()
-            .map_err(|err| Error::Io(format!("sync {}: {err}", self.path.display())))
     }
 }

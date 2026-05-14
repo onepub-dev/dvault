@@ -34,9 +34,16 @@ lockbox expansion/extraction.
 - Free-slot lookup now uses ordered offset and size indexes in memory. The
   format persists that free-space state through a commit-root-referenced
   free-index page so reopening does not lose reusable regions.
-- Commit roots, free-space index checkpoints, TOC nodes, file data, symlinks,
-  delete markers, and environment records are now written as fixed-size
-  encrypted pages.
+- Commit roots, free-space index checkpoints, TOC nodes, env tree nodes, and
+  symlink metadata now use 128 KiB metadata pages. File data still uses 8 MiB
+  data pages.
+- Live symlinks are TOC entries that point at packed symlink metadata objects.
+  The target is not stored in the TOC, and many symlink objects share each
+  metadata page.
+- Env vars are packed into a commit-root-referenced env BTree instead of being
+  stored as one tiny object per page or linked through page-embedded lists.
+  `list_env` now reads from the env root instead of scanning the whole lockbox.
+  Env tree writes and redactions are staged through the page cache.
 - Full expansion currently walks manifest entries serially. It should support a
   bounded worker pool for independent records.
 - The convenience extraction APIs still return owned `Vec<u8>` values. That is
@@ -44,10 +51,38 @@ lockbox expansion/extraction.
   extraction should use `extract_to_directory`, which now streams directly to
   the filesystem.
 
+## Workload-Aware Cache Design
+
+The cache policy is set above the page cache, not inferred inside it:
+
+- `Interactive`: default for normal API use, existing-vault updates, deletes,
+  renames, env changes, and mixed read/write workloads. Dirty decoded pages stay
+  resident until commit flushes them.
+- `BulkImport`: used by the CLI when an `add` creates a new lockbox. Newly
+  appended file-data pages are marked discard-after-flush and flushed promptly,
+  so a large initial import does not hold all written pages in memory.
+- `ReadMostly`: reserved for caller-selected read-heavy use. It currently uses
+  the default retention policy and exists so read cache tuning can be added
+  without changing public API shape.
+- `ExtractMany`: reserved for repeated extraction/range-read workloads. It
+  currently uses the default retention policy.
+
+Only file-data pages use discard-after-flush in `BulkImport`. TOC pages, env
+tree pages, symlink metadata, free-index pages, key directories, redactions, and
+commit roots remain on the normal commit path. That keeps COW and redaction
+semantics simple while addressing the real memory spike in one-shot imports.
+Small files are still packed into shared 8 MiB data pages, but the bulk path
+uses a long-lived `PageObjectPacker` and flushes before adding an object that
+would overflow the current packed page. This bounds source-byte/object staging
+to roughly one page instead of the whole import and avoids half-empty spill
+pages.
+
 ## Required Next Changes
 
 - Expand Criterion coverage for root height increase/decrease at larger TOC
   sizes.
+- Add Criterion coverage for packed env updates, deletes, redaction, and cold
+  `list_env` loads from the env root.
 - Keep the existing quick smoke/perf example for GB-class local profiling and
   use Criterion for repeatable micro/structural benchmarks.
 
@@ -149,8 +184,10 @@ Representative current results from the latest local pass:
   files, 10,000 deletes, and 10,000 replacements: commit ~117ms, list ~7ms,
   lockbox/logical ratio ~0.015.
 
-Deletes are also staged and written as batched delete pages during commit.
-Without this, delete-heavy workloads paid one padded page per deleted path.
+Deletes redact the referenced object or page during commit and then publish the
+freed region through the free-space index. The current format does not emit
+delete marker pages because deleted paths and symlink targets must not remain
+recoverable as stale metadata.
 
 `perf` and `cargo flamegraph` are available in the local environment. Kernel
 symbols remain restricted, but user-space Rust symbols resolve well enough for

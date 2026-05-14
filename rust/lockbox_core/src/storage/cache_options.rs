@@ -1,4 +1,4 @@
-use crate::constants::DEFAULT_PAGE_BYTES;
+use crate::constants::DEFAULT_METADATA_PAGE_BYTES;
 
 const MIB: u64 = 1024 * 1024;
 const DEFAULT_NATIVE_MAX_CACHE_BYTES: u64 = 4 * 1024 * MIB;
@@ -16,14 +16,24 @@ pub enum CacheLimit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LockboxOptions {
     pub cache_limit: CacheLimit,
+    pub workload_profile: WorkloadProfile,
 }
 
 impl Default for LockboxOptions {
     fn default() -> Self {
         Self {
             cache_limit: CacheLimit::Auto,
+            workload_profile: WorkloadProfile::Interactive,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkloadProfile {
+    Interactive,
+    BulkImport,
+    ReadMostly,
+    ExtractMany,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +67,6 @@ pub(crate) fn auto_cache_limit_bytes() -> u64 {
 }
 
 fn minimum_useful_cache_bytes() -> u64 {
-    let by_page = (DEFAULT_PAGE_BYTES as u64).saturating_mul(8);
+    let by_page = (DEFAULT_METADATA_PAGE_BYTES as u64).saturating_mul(64);
     by_page.max(64 * MIB)
 }

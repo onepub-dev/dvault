@@ -146,9 +146,6 @@ impl<S: ContentKeyStore> Vault<S> {
             LockboxCreate::RecipientKey(recipient) => {
                 Lockbox::create_file(path, LockboxCreate::RecipientKey(recipient))
             }
-            LockboxCreate::RecipientKeyFile(key_path) => {
-                Lockbox::create_file(path, LockboxCreate::RecipientKeyFile(key_path))
-            }
         }
     }
 
@@ -180,9 +177,6 @@ impl<S: ContentKeyStore> Vault<S> {
                 self.store
                     .put_content_key(unlocked.lockbox_id, unlocked.key())?;
                 Lockbox::open_file(path, LockboxUnlock::RawKey(unlocked.into_key_bytes()))
-            }
-            LockboxUnlock::RecipientKeyFile(key_path) => {
-                Lockbox::open_file(path, LockboxUnlock::RecipientKeyFile(key_path))
             }
         }
     }

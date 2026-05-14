@@ -440,7 +440,10 @@ impl Lockbox {
         let mut chunks = entry.chunks.clone();
         chunks.sort_by_key(|chunk| chunk.file_offset);
         for chunk in chunks {
-            let decoded = self.read_file_chunk_frame(&entry.path, entry.len, &chunk)?;
+            if chunk.file_offset != written {
+                return Err(Error::CorruptRecord);
+            }
+            let decoded = self.read_file_chunk_frame(entry.len, &chunk)?;
             writer
                 .write_all(&decoded)
                 .map_err(|err| Error::Io(err.to_string()))?;
@@ -462,12 +465,24 @@ impl Lockbox {
             return Err(Error::CorruptRecord);
         }
 
-        let mut out = Vec::with_capacity(entry.len as usize);
+        let capacity = usize::try_from(entry.len).map_err(|_| {
+            Error::SecurityLimitExceeded("file exceeds addressable memory".to_string())
+        })?;
+        let mut out = Vec::with_capacity(capacity);
         let mut chunks = entry.chunks.clone();
         chunks.sort_by_key(|chunk| chunk.file_offset);
         for chunk in chunks {
-            let decoded = self.read_file_chunk_frame(&entry.path, entry.len, &chunk)?;
+            if chunk.file_offset != out.len() as u64 {
+                return Err(Error::CorruptRecord);
+            }
+            let decoded = self.read_file_chunk_frame(entry.len, &chunk)?;
             out.extend_from_slice(&decoded);
+            if out.len() as u64 > entry.len {
+                return Err(Error::CorruptRecord);
+            }
+        }
+        if out.len() as u64 != entry.len {
+            return Err(Error::CorruptRecord);
         }
         Ok(out)
     }

@@ -1,6 +1,10 @@
-use crate::constants::{DEFAULT_MAX_PAGE_BODY_BYTES, HEADER_LEN};
+use crate::constants::DEFAULT_METADATA_MAX_PAGE_BODY_BYTES;
 use crate::manifest_codec::{decode_manifest_entries, encode_manifest_entries};
 use crate::manifest_entry::ManifestEntry;
+use crate::page_tree::{
+    decode_page_tree_children, encode_page_tree_children, group_by_encoded_size,
+    page_tree_child_encoded_len, PageTreeChild,
+};
 use crate::{Error, Result};
 
 const TOC_NODE_VERSION: u8 = 1;
@@ -9,7 +13,6 @@ const TOC_INTERNAL: u8 = 2;
 pub(crate) const TOC_MIN_FILL_PERCENT: usize = 30;
 const TOC_NODE_PREFIX_BYTES: usize = 2;
 const ENTRY_COUNT_BYTES: usize = 4;
-const CHILD_COUNT_BYTES: usize = 4;
 
 #[derive(Debug)]
 pub(crate) enum TocNode {
@@ -81,7 +84,7 @@ pub(crate) fn encode_toc_leaf(entries: &[ManifestEntry]) -> Result<Vec<u8>> {
     out.push(TOC_NODE_VERSION);
     out.push(TOC_LEAF);
     out.extend_from_slice(&encode_manifest_entries(entries));
-    if out.len() > DEFAULT_MAX_PAGE_BODY_BYTES {
+    if out.len() > DEFAULT_METADATA_MAX_PAGE_BODY_BYTES {
         return Err(Error::SecurityLimitExceeded(
             "TOC leaf exceeds maximum page size".to_string(),
         ));
@@ -93,13 +96,15 @@ pub(crate) fn encode_toc_internal(children: &[TocChild]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     out.push(TOC_NODE_VERSION);
     out.push(TOC_INTERNAL);
-    out.extend_from_slice(&(children.len() as u32).to_le_bytes());
-    for child in children {
-        out.extend_from_slice(&(child.first_path.len() as u16).to_le_bytes());
-        out.extend_from_slice(child.first_path.as_bytes());
-        out.extend_from_slice(&child.offset.to_le_bytes());
-    }
-    if out.len() > DEFAULT_MAX_PAGE_BODY_BYTES {
+    let routing_children = children
+        .iter()
+        .map(|child| PageTreeChild {
+            first_key: child.first_path.clone(),
+            offset: child.offset,
+        })
+        .collect::<Vec<_>>();
+    out.extend_from_slice(&encode_page_tree_children(&routing_children));
+    if out.len() > DEFAULT_METADATA_MAX_PAGE_BODY_BYTES {
         return Err(Error::SecurityLimitExceeded(
             "TOC internal node exceeds maximum page size".to_string(),
         ));
@@ -108,15 +113,25 @@ pub(crate) fn encode_toc_internal(children: &[TocChild]) -> Result<Vec<u8>> {
 }
 
 pub(crate) fn toc_leaf_groups(entries: &[ManifestEntry]) -> Result<Vec<&[ManifestEntry]>> {
-    group_by_encoded_size(entries, leaf_base_len(), manifest_entry_encoded_len)
+    group_by_encoded_size(
+        entries,
+        leaf_base_len(),
+        manifest_entry_encoded_len,
+        "TOC entry",
+    )
 }
 
 pub(crate) fn toc_child_groups(children: &[TocChild]) -> Result<Vec<&[TocChild]>> {
-    group_by_encoded_size(children, internal_base_len(), toc_child_encoded_len)
+    group_by_encoded_size(
+        children,
+        internal_base_len(),
+        toc_child_encoded_len,
+        "TOC child",
+    )
 }
 
 pub(crate) fn toc_leaf_fill_percent(entries: &[ManifestEntry]) -> usize {
-    encoded_leaf_len(entries).saturating_mul(100) / DEFAULT_MAX_PAGE_BODY_BYTES
+    encoded_leaf_len(entries).saturating_mul(100) / DEFAULT_METADATA_MAX_PAGE_BODY_BYTES
 }
 
 pub(crate) fn encoded_leaf_len(entries: &[ManifestEntry]) -> usize {
@@ -127,42 +142,12 @@ pub(crate) fn encoded_leaf_len(entries: &[ManifestEntry]) -> usize {
             .sum::<usize>()
 }
 
-fn group_by_encoded_size<T>(
-    items: &[T],
-    base_len: usize,
-    item_len: impl Fn(&T) -> usize,
-) -> Result<Vec<&[T]>> {
-    if items.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut groups = Vec::new();
-    let mut start = 0usize;
-    let mut current_len = base_len;
-    for (index, item) in items.iter().enumerate() {
-        let len = item_len(item);
-        if base_len + len > DEFAULT_MAX_PAGE_BODY_BYTES {
-            return Err(Error::SecurityLimitExceeded(
-                "TOC item exceeds maximum page size".to_string(),
-            ));
-        }
-        if index > start && current_len + len > DEFAULT_MAX_PAGE_BODY_BYTES {
-            groups.push(&items[start..index]);
-            start = index;
-            current_len = base_len;
-        }
-        current_len += len;
-    }
-    groups.push(&items[start..]);
-    Ok(groups)
-}
-
 fn leaf_base_len() -> usize {
     TOC_NODE_PREFIX_BYTES + ENTRY_COUNT_BYTES
 }
 
 fn internal_base_len() -> usize {
-    TOC_NODE_PREFIX_BYTES + CHILD_COUNT_BYTES
+    TOC_NODE_PREFIX_BYTES + 4
 }
 
 fn manifest_entry_encoded_len(entry: &ManifestEntry) -> usize {
@@ -170,21 +155,30 @@ fn manifest_entry_encoded_len(entry: &ManifestEntry) -> usize {
         + 8
         + 8
         + 8
+        + 8
         + 1
         + 1
         + 4
-        + 2
-        + entry.symlink_target.as_ref().map_or(0, String::len)
         + 4
         + entry
             .chunks
             .iter()
-            .map(|chunk| 40 + chunk.fragments.len() * 40)
+            .map(|chunk| {
+                let stored_path_len = if chunk.stored_path == entry.path {
+                    0
+                } else {
+                    chunk.stored_path.len()
+                };
+                2 + stored_path_len + 40 + chunk.fragments.len() * 40
+            })
             .sum::<usize>()
 }
 
 fn toc_child_encoded_len(child: &TocChild) -> usize {
-    2 + child.first_path.len() + 8
+    page_tree_child_encoded_len(&PageTreeChild {
+        first_key: child.first_path.clone(),
+        offset: child.offset,
+    })
 }
 
 pub(crate) fn decode_toc_node(payload: &[u8]) -> Result<TocNode> {
@@ -212,44 +206,17 @@ fn validate_leaf_entries(entries: &[ManifestEntry]) -> Result<()> {
 }
 
 fn decode_toc_internal(payload: &[u8]) -> Result<TocNode> {
-    if payload.len() < 4 {
-        return Err(Error::CorruptRecord);
-    }
-    let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-    let mut offset = 4usize;
-    let mut children = Vec::with_capacity(count);
-    for _ in 0..count {
-        if offset + 2 > payload.len() {
-            return Err(Error::CorruptRecord);
-        }
-        let path_len = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap()) as usize;
-        offset += 2;
-        if offset + path_len + 8 > payload.len() {
-            return Err(Error::CorruptRecord);
-        }
-        let first_path = String::from_utf8(payload[offset..offset + path_len].to_vec())
-            .map_err(|_| Error::CorruptRecord)?;
-        crate::logical_path::validate_stored_path(&first_path)?;
-        offset += path_len;
-        let child_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        if child_offset < HEADER_LEN as u64 {
-            return Err(Error::CorruptRecord);
-        }
-        offset += 8;
-        children.push(TocChild {
-            first_path,
-            offset: child_offset,
-        });
-    }
-    if offset != payload.len() || children.is_empty() {
-        return Err(Error::CorruptRecord);
-    }
-    for pair in children.windows(2) {
-        if pair[0].first_path >= pair[1].first_path {
-            return Err(Error::CorruptRecord);
-        }
-    }
-    Ok(TocNode::Internal(children))
+    Ok(TocNode::Internal(
+        decode_page_tree_children(payload, |key| {
+            crate::logical_path::validate_stored_path(key).map(|_| ())
+        })?
+        .into_iter()
+        .map(|child| TocChild {
+            first_path: child.first_key,
+            offset: child.offset,
+        })
+        .collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -266,10 +233,10 @@ mod tests {
             len: 1,
             record_offset: 64,
             record_len: 64,
+            record_object_id: 1,
             deleted: false,
             node_kind: NodeKind::File,
             permissions: DEFAULT_FILE_PERMISSIONS,
-            symlink_target: None,
             chunks: Vec::new(),
         };
         let payload = encode_toc_leaf(&[entry]).unwrap();
@@ -386,10 +353,10 @@ mod tests {
                 len: 1,
                 record_offset: 64,
                 record_len: 64,
+                record_object_id: 1,
                 deleted: false,
                 node_kind: NodeKind::File,
                 permissions: DEFAULT_FILE_PERMISSIONS,
-                symlink_target: None,
                 chunks: Vec::new(),
             })
             .collect::<Vec<_>>();
@@ -397,7 +364,7 @@ mod tests {
         let groups = toc_leaf_groups(&entries).unwrap();
         assert!(!groups.is_empty());
         for group in groups {
-            assert!(encode_toc_leaf(group).unwrap().len() <= DEFAULT_MAX_PAGE_BODY_BYTES);
+            assert!(encode_toc_leaf(group).unwrap().len() <= DEFAULT_METADATA_MAX_PAGE_BODY_BYTES);
         }
     }
 
@@ -407,10 +374,10 @@ mod tests {
             len: 1,
             record_offset: 64,
             record_len: 64,
+            record_object_id: 1,
             deleted: false,
             node_kind: NodeKind::File,
             permissions: DEFAULT_FILE_PERMISSIONS,
-            symlink_target: None,
             chunks: Vec::new(),
         }
     }

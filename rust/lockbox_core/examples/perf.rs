@@ -11,14 +11,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "small" => small_files()?,
         "large" => large_file()?,
         "append-delete" => append_delete()?,
+        "metadata" => metadata_operations()?,
         "all" => {
             small_files()?;
             large_file()?;
             append_delete()?;
+            metadata_operations()?;
         }
         _ => {
             eprintln!("unknown LOCKBOX_PERF_SCENARIO: {scenario}");
-            eprintln!("expected one of: small, large, append-delete, all");
+            eprintln!("expected one of: small, large, append-delete, metadata, all");
             std::process::exit(2);
         }
     }
@@ -192,6 +194,62 @@ fn append_delete() -> Result<(), Box<dyn std::error::Error>> {
         commit,
         list,
         extract: delete_replace,
+        read_range: Duration::ZERO,
+    });
+    Ok(())
+}
+
+fn metadata_operations() -> Result<(), Box<dyn std::error::Error>> {
+    let large_bytes = std::env::var("LOCKBOX_PERF_LARGE_BYTES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(256usize * 1024 * 1024);
+    let env_count = std::env::var("LOCKBOX_PERF_ENV_VARS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(10_000usize);
+    let pattern = std::env::var("LOCKBOX_PERF_PATTERN").unwrap_or_else(|_| "randomish".into());
+
+    let mut bench = BenchLockbox::create("metadata")?;
+    let lockbox = &mut bench.lockbox;
+    lockbox.put_file_from_reader(
+        "/large/source.bin",
+        PatternReader::new(large_bytes, &pattern),
+    )?;
+    for i in 0..env_count {
+        lockbox.set_env(&format!("LOCKBOX_ENV_{i:06}"), "value")?;
+    }
+    lockbox.put_file("/delete-me.txt", b"delete")?;
+    lockbox.commit()?;
+
+    let start = Instant::now();
+    lockbox.rename("/large/source.bin", "/archive/renamed.bin")?;
+    let rename = start.elapsed();
+
+    let start = Instant::now();
+    let listed = lockbox.list_env()?.len();
+    let list_env = start.elapsed();
+
+    lockbox.delete("/delete-me.txt")?;
+    let start = Instant::now();
+    lockbox.compact()?;
+    let compact = start.elapsed();
+
+    let start = Instant::now();
+    lockbox.commit()?;
+    let commit = start.elapsed();
+
+    print_report(Report {
+        scenario: "metadata",
+        backend: bench.backend.clone(),
+        files: 1,
+        listed,
+        logical_bytes: large_bytes as u64,
+        lockbox_bytes: bench.lockbox_bytes()?,
+        add: rename,
+        commit,
+        list: list_env,
+        extract: compact,
         read_range: Duration::ZERO,
     });
     Ok(())

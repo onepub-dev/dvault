@@ -114,6 +114,9 @@ pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
 }
 
 pub(crate) fn mirror_key_directory(lockbox: &Lockbox) -> Result<(), Error> {
+    if lockbox.list_key_slots().is_empty() {
+        return Ok(());
+    }
     let vault = default_vault()?;
     vault.store_key_directory_backup(
         lockbox.lockbox_id(),

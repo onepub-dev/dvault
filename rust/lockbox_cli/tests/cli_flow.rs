@@ -132,6 +132,27 @@ fn cli_env_rename_and_visualize_flow() {
 }
 
 #[test]
+fn raw_key_create_does_not_mirror_empty_key_directory() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("raw-create");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("raw.lbox");
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    run_in(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+
+    assert!(lockbox.exists());
+    assert!(!vault_root.join("local-vault.lbox").exists());
+}
+
+#[test]
 fn vault_key_import_export_formats_are_accepted_by_cli() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("key-formats");

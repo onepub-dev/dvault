@@ -90,11 +90,16 @@ explicitly encrypted.
 
 ## Key Directory
 
-Key slots are stored in a key directory block inside the lockbox. The fixed
-header stores the byte offset of the current primary key directory. On each
-commit the current directory is written three times: a primary copy and two
-mirrors. The commit root records the mirror offsets and key-directory
-generation.
+Key slots are stored in clear-text key-directory metadata pages inside the
+lockbox. The fixed header stores the byte offset of the current primary key
+directory page. When key slots change, the current directory is written three
+times through the page cache: a primary copy and two mirrors. The commit root
+records the mirror offsets and key-directory generation. Ordinary file, env,
+symlink, and TOC commits keep referencing the existing key-directory pages.
+Because the key directory is a clear-text page class, password and recipient
+unlock should read current key-directory pages through the page-cache
+read/decode boundary. Raw byte scanning is reserved for damaged-header or
+missing-root recovery.
 
 The key directory is cleartext framing metadata, but it must not contain paths,
 file names, environment variable names, or file contents. It contains only:
@@ -108,12 +113,13 @@ file names, environment variable names, or file contents. It contains only:
 Password salts and ML-KEM ciphertexts are visible metadata. The content key
 itself is never stored in cleartext.
 
-The key-directory header includes the lockbox UUID, generation, copy index, a
-SHA-256 payload checksum, and a SHA-256 public-header checksum. If the fixed
+The key-directory payload header includes the lockbox UUID, generation, and copy
+index. Integrity for the clear-text key-directory page is owned by the page
+format: the page cache writes and validates the page checksum. If the fixed
 header or primary key-directory copy is damaged, the library can scan the
-lockbox for mirror copies, try the password or recipient key against those
-slots, recover the lockbox UUID and content key, and then scan encrypted
-pages for the latest valid commit root.
+lockbox for mirror pages, validate page checksums, try the password or
+recipient key against those slots, recover the lockbox UUID and content key,
+and then scan encrypted pages for the latest valid commit root.
 
 The Rust implementation caps the encoded key directory at 1 MiB. That is enough
 for thousands of slots, while preventing a corrupt or hostile lockbox from
@@ -287,7 +293,9 @@ options. Normal users should not type or manage raw content keys.
 - Password slots must use Argon2id with stored parameters and salt.
 - Public-key slots should use ML-KEM-1024 for post-quantum key wrapping.
 - Removing a key slot must compact the lockbox so stale key-directory history is
-  not left behind for the removed credential.
+  not left behind for the removed credential. Compaction is a logical rewrite
+  into a replacement lockbox through the normal page-cache APIs, followed by a
+  backing-storage swap.
 - Rotating the content key should rewrite/wrap a new content key and eventually
   re-encrypt content.
 

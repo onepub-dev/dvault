@@ -1,6 +1,5 @@
 mod compression;
 mod constants;
-mod env_store;
 mod error;
 mod fast_hash;
 mod format;
@@ -18,14 +17,14 @@ pub(crate) use format::{commit_root, header, key_directory, page, page_inspectio
 pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_bytes};
 pub(crate) use model::{
     entry, extract_policy, extracted_file, extracted_node, extracted_symlink, file_chunk,
-    list_iter, list_options, lockbox_id, node_kind, record, recovery_report,
+    list_iter, list_options, lockbox_id, node_kind, page_object_packer, record, recovery_report,
     recovery_report_options,
 };
 pub(crate) use paths::{host_path, logical_path, symlink};
 pub(crate) use storage::{cache_options, free_index, free_slot, memory_pressure, page_cache};
-pub(crate) use toc::{manifest_codec, manifest_entry, toc_btree};
+pub(crate) use toc::{env_btree, manifest_codec, manifest_entry, page_tree, toc_btree};
 
-pub use cache_options::{CacheLimit, CacheStats, LockboxOptions};
+pub use cache_options::{CacheLimit, CacheStats, LockboxOptions, WorkloadProfile};
 pub use entry::{Entry, EntryKind};
 pub use error::{Error, Result};
 pub use extract_policy::ExtractPolicy;

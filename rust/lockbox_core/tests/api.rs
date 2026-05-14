@@ -1,7 +1,7 @@
 use lockbox_core::{
     derive_key_from_password, CacheLimit, Entry, EntryKind, Error, ExtractPolicy, ExtractedNode,
     KeySlotKind, ListOptions, Lockbox, LockboxCreate, LockboxOptions, LockboxUnlock, MlKemKeyPair,
-    MlKemRecipientKey, RecoveryReportOptions,
+    MlKemRecipientKey, RecoveryReportOptions, WorkloadProfile,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -9,6 +9,7 @@ use std::io::Cursor;
 const KEY: &[u8] = b"correct horse battery staple";
 const HEADER_LEN: usize = 96;
 const HEADER_CHECKSUM_START: usize = 64;
+const METADATA_PAGE_BYTES: usize = 128 * 1024;
 const PAGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[test]
@@ -100,6 +101,32 @@ fn small_files_are_staged_until_commit_then_packed() {
 }
 
 #[test]
+fn add_file_stages_small_disk_files_until_commit() {
+    let source = std::env::temp_dir().join(format!(
+        "lockbox-small-source-{}-{}.txt",
+        std::process::id(),
+        "add-file"
+    ));
+    std::fs::write(&source, b"tiny source file").unwrap();
+
+    let mut lb = Lockbox::create(KEY);
+    let before = lb.to_bytes().len();
+    lb.add_file(&source, "/from-disk.txt").unwrap();
+
+    assert_eq!(lb.to_bytes().len(), before);
+    assert_eq!(lb.get_file("/from-disk.txt").unwrap(), b"tiny source file");
+
+    lb.commit().unwrap();
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+    assert_eq!(
+        reopened.get_file("/from-disk.txt").unwrap(),
+        b"tiny source file"
+    );
+
+    let _ = std::fs::remove_file(&source);
+}
+
+#[test]
 fn small_env_pages_are_padded_to_minimum_size() {
     let mut lb = Lockbox::create(KEY);
     let before = lb.to_bytes().len();
@@ -110,12 +137,31 @@ fn small_env_pages_are_padded_to_minimum_size() {
     assert!(lb.inspect_pages().unwrap().iter().any(|page| {
         page.objects
             .iter()
-            .any(|object| object.kind == "env-set" && object.payload_len > 0)
+            .any(|object| object.kind == "env-leaf" && object.payload_len > 0)
     }));
     let after = lb.to_bytes().len();
 
-    assert!(after >= before + PAGE_BYTES);
+    assert!(after >= before + 2 * METADATA_PAGE_BYTES);
     assert_eq!(lb.get_env("TOKEN").unwrap().as_deref(), Some("x"));
+}
+
+#[test]
+fn env_scan_fails_closed_when_env_page_is_corrupt() {
+    let mut lb = Lockbox::create(KEY);
+    lb.set_env("TOKEN", "x").unwrap();
+    lb.commit().unwrap();
+
+    let env_page = lb
+        .inspect_pages()
+        .unwrap()
+        .into_iter()
+        .find(|page| page.objects.iter().any(|object| object.kind == "env-leaf"))
+        .unwrap();
+    let mut bytes = lb.to_bytes();
+    bytes[env_page.offset as usize + HEADER_LEN + 8] ^= 0x55;
+
+    let reopened = Lockbox::open(bytes, KEY).unwrap();
+    assert!(reopened.get_env("TOKEN").is_err());
 }
 
 #[test]
@@ -587,7 +633,14 @@ fn page_offsets(bytes: &[u8]) -> Vec<usize> {
     while index + 8 <= bytes.len() {
         if bytes.get(index..index + 8) == Some(b"LBX2PAG\0".as_slice()) {
             offsets.push(index);
-            index = index.saturating_add(PAGE_BYTES);
+            let next_metadata = index.saturating_add(METADATA_PAGE_BYTES);
+            if next_metadata + 8 <= bytes.len()
+                && bytes.get(next_metadata..next_metadata + 8) == Some(b"LBX2PAG\0".as_slice())
+            {
+                index = next_metadata;
+            } else {
+                index = index.saturating_add(PAGE_BYTES);
+            }
         } else {
             index += 1;
         }
@@ -791,6 +844,7 @@ fn decoded_page_cache_records_hits_and_can_be_trimmed() {
         KEY,
         LockboxOptions {
             cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            ..LockboxOptions::default()
         },
     );
     lb.put_file("/docs/a.txt", b"alpha").unwrap();
@@ -800,6 +854,7 @@ fn decoded_page_cache_records_hits_and_can_be_trimmed() {
         KEY,
         LockboxOptions {
             cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            ..LockboxOptions::default()
         },
     )
     .unwrap();
@@ -820,6 +875,7 @@ fn decoded_page_cache_can_be_disabled() {
         KEY,
         LockboxOptions {
             cache_limit: CacheLimit::Disabled,
+            ..LockboxOptions::default()
         },
     );
     lb.put_file("/docs/a.txt", b"alpha").unwrap();
@@ -828,6 +884,92 @@ fn decoded_page_cache_can_be_disabled() {
     lb.get_file("/docs/a.txt").unwrap();
     assert_eq!(lb.cache_stats().entries, 0);
     assert_eq!(lb.cache_stats().used_bytes, 0);
+}
+
+#[test]
+fn bulk_import_flushes_file_pages_without_retaining_them_in_cache() {
+    let mut data = vec![0; 2 * 1024 * 1024];
+    fill_randomish(&mut data);
+    let mut lb = Lockbox::create_with_options(
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            workload_profile: WorkloadProfile::BulkImport,
+        },
+    );
+
+    lb.put_file("/bulk/data.zip", &data).unwrap();
+
+    assert_eq!(lb.cache_stats().entries, 0);
+    assert_eq!(lb.cache_stats().used_bytes, 0);
+    assert!(lb.storage_len().unwrap() > HEADER_LEN as u64);
+    assert_eq!(lb.get_file("/bulk/data.zip").unwrap(), data);
+    assert!(lb.cache_stats().entries > 0);
+
+    lb.commit().unwrap();
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+    assert_eq!(reopened.get_file("/bulk/data.zip").unwrap(), data);
+}
+
+#[test]
+fn bulk_import_drains_small_file_staging_before_commit() {
+    let data = vec![0xabu8; 25 * 1024];
+    let mut lb = Lockbox::create_with_options(
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            workload_profile: WorkloadProfile::BulkImport,
+        },
+    );
+
+    for index in 0..400 {
+        lb.put_file(&format!("/bulk/small-{index:04}.zip"), &data)
+            .unwrap();
+    }
+
+    assert!(lb.storage_len().unwrap() > HEADER_LEN as u64);
+    assert_eq!(lb.cache_stats().entries, 0);
+    assert_eq!(lb.get_file("/bulk/small-0000.zip").unwrap(), data);
+    assert_eq!(lb.get_file("/bulk/small-0399.zip").unwrap(), data);
+
+    lb.commit().unwrap();
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+    assert_eq!(reopened.get_file("/bulk/small-0000.zip").unwrap(), data);
+    assert_eq!(reopened.get_file("/bulk/small-0399.zip").unwrap(), data);
+}
+
+#[test]
+fn bulk_small_file_packer_keeps_non_tail_pages_dense() {
+    let data = vec![0xabu8; 25 * 1024];
+    let mut lb = Lockbox::create_with_options(
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            workload_profile: WorkloadProfile::BulkImport,
+        },
+    );
+
+    for index in 0..700 {
+        lb.put_file(&format!("/bulk/dense-{index:04}.zip"), &data)
+            .unwrap();
+    }
+    lb.commit().unwrap();
+
+    let file_pages = lb
+        .inspect_pages()
+        .unwrap()
+        .into_iter()
+        .filter(|page| page.objects.iter().any(|object| object.kind == "file-data"))
+        .collect::<Vec<_>>();
+    assert_eq!(file_pages.len(), 3);
+    for page in file_pages.iter().take(file_pages.len() - 1) {
+        assert!(
+            page.object_count >= 300,
+            "non-tail file page at offset {} only has {} objects",
+            page.offset,
+            page.object_count
+        );
+    }
 }
 
 #[test]
@@ -1066,6 +1208,76 @@ fn symlink_support_round_trips_and_safe_extraction_skips_by_default() {
 }
 
 #[test]
+fn symlink_recovery_records_are_packed_into_metadata_pages() {
+    let mut lb = Lockbox::create(KEY);
+    for index in 0..50 {
+        lb.put_symlink(
+            &format!("/links/link-{index:02}"),
+            &format!("/targets/target-{index:02}"),
+        )
+        .unwrap();
+    }
+    lb.commit().unwrap();
+
+    let symlink_pages = lb
+        .inspect_pages()
+        .unwrap()
+        .into_iter()
+        .filter(|page| page.objects.iter().any(|object| object.kind == "symlink"))
+        .count();
+    assert_eq!(symlink_pages, 1);
+
+    let mut damaged = lb.to_bytes();
+    damaged[0] ^= 0xff;
+    let report = Lockbox::recover(damaged, KEY);
+    assert!(report.intact_files.iter().any(|entry| {
+        entry.path == "/links/link-07"
+            && entry.kind == EntryKind::Symlink
+            && entry.symlink_target.as_deref() == Some("/targets/target-07")
+    }));
+}
+
+#[test]
+fn symlink_recovery_records_spill_across_metadata_pages() {
+    let mut lb = Lockbox::create(KEY);
+    for index in 0..1400 {
+        lb.put_symlink(
+            &format!("/links/{index:04}/{}", "l".repeat(40)),
+            &format!("/targets/{index:04}/{}", "t".repeat(40)),
+        )
+        .unwrap();
+    }
+    lb.commit().unwrap();
+
+    let symlink_pages = lb
+        .inspect_pages()
+        .unwrap()
+        .into_iter()
+        .filter(|page| page.objects.iter().any(|object| object.kind == "symlink"))
+        .count();
+    assert!(symlink_pages > 1, "expected spillover, got {symlink_pages}");
+
+    let mut damaged = lb.to_bytes();
+    damaged[0] ^= 0xff;
+    let report = Lockbox::recover(damaged, KEY);
+    let recovered = report
+        .intact_files
+        .iter()
+        .filter(|entry| entry.kind == EntryKind::Symlink)
+        .map(|entry| (entry.path.as_str(), entry.symlink_target.as_deref()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(recovered.len(), 1400);
+    for index in 0..1400 {
+        let path = format!("/links/{index:04}/{}", "l".repeat(40));
+        let target = format!("/targets/{index:04}/{}", "t".repeat(40));
+        assert_eq!(
+            recovered.get(path.as_str()).copied().flatten(),
+            Some(target.as_str())
+        );
+    }
+}
+
+#[test]
 fn invalid_permissions_are_rejected() {
     let mut lb = Lockbox::create(KEY);
     assert!(matches!(
@@ -1088,12 +1300,13 @@ fn env_vars_round_trip_and_are_returned_as_a_map() {
         Some("postgres://localhost/app")
     );
     assert_eq!(
-        reopened.list_env(),
+        reopened.list_env().unwrap(),
         vec!["DATABASE_URL".to_string(), "FEATURE_FLAG".to_string()]
     );
     assert_eq!(
         reopened
             .get_all_env()
+            .unwrap()
             .get("FEATURE_FLAG")
             .map(String::as_str),
         Some("enabled")
@@ -1115,12 +1328,38 @@ fn env_vars_can_be_removed_and_replaced() {
 }
 
 #[test]
-fn removing_env_var_redacts_original_env_page() {
+fn many_env_vars_are_packed_into_leaf_pages() {
+    let mut lb = Lockbox::create(KEY);
+    for index in 0..200 {
+        lb.set_env(&format!("VAR_{index:03}"), "value").unwrap();
+    }
+    lb.commit().unwrap();
+
+    let env_leaf_pages = lb
+        .inspect_pages()
+        .unwrap()
+        .into_iter()
+        .filter(|page| page.objects.iter().any(|object| object.kind == "env-leaf"))
+        .count();
+    assert_eq!(env_leaf_pages, 1);
+
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+    assert_eq!(reopened.list_env().unwrap().len(), 200);
+}
+
+#[test]
+fn removing_env_var_sanitizes_original_env_page() {
     let mut lb = Lockbox::create(KEY);
     lb.set_env("KEEP_ME", "still-here").unwrap();
     lb.set_env("REMOVE_ME", "gone").unwrap();
     lb.commit().unwrap();
-    let before = lb.to_bytes();
+    let original_env_offset = lb
+        .inspect_pages()
+        .unwrap()
+        .into_iter()
+        .find(|page| page.objects.iter().any(|object| object.kind == "env-leaf"))
+        .unwrap()
+        .offset;
 
     lb.remove_env("REMOVE_ME").unwrap();
     lb.commit().unwrap();
@@ -1132,9 +1371,15 @@ fn removing_env_var_redacts_original_env_page() {
         Some("still-here")
     );
     assert_eq!(reopened.get_env("REMOVE_ME").unwrap(), None);
-    assert!(page_offsets(&before)
+    assert!(lb
+        .inspect_pages()
+        .unwrap()
         .into_iter()
-        .any(|offset| after[offset..offset + 8].iter().all(|byte| *byte == 0)));
+        .any(|page| page.offset == original_env_offset
+            && page
+                .objects
+                .iter()
+                .any(|object| object.kind == "env-leaf" && object.payload_len <= 6)));
 }
 
 #[test]
@@ -1440,7 +1685,12 @@ fn recovery_reports_corrupt_records_for_damaged_frame_header() {
 #[test]
 fn recovery_skips_truncated_tail_and_keeps_prior_intact_files() {
     let mut damaged = sample_lockbox();
-    damaged.truncate(damaged.len() - 30);
+    let last_page = page_offsets(&damaged).into_iter().last().unwrap();
+    let header_len =
+        u32::from_le_bytes(damaged[last_page + 12..last_page + 16].try_into().unwrap()) as usize;
+    let encrypted_len =
+        u32::from_le_bytes(damaged[last_page + 44..last_page + 48].try_into().unwrap()) as usize;
+    damaged.truncate(last_page + header_len + encrypted_len - 1);
 
     let report = Lockbox::recover(damaged, KEY);
     assert_eq!(report.intact_file_count, 3);
@@ -1545,6 +1795,95 @@ fn recovery_report_verbose_lists_intact_files_with_optional_limit() {
     assert!(rendered.contains("Intact:\n"));
     assert!(rendered.contains("/docs/a.txt"));
     assert!(rendered.contains("1 more intact files omitted"));
+}
+
+#[test]
+fn large_file_rename_is_metadata_only_and_survives_reopen() {
+    let mut lb = Lockbox::create(KEY);
+    let payload = vec![0x5au8; 12 * 1024 * 1024];
+    lb.put_file_from_reader("/large/source.bin", Cursor::new(&payload))
+        .unwrap();
+    lb.commit().unwrap();
+    let before = lb.to_bytes().len();
+
+    lb.rename("/large/source.bin", "/archive/renamed.bin")
+        .unwrap();
+    lb.commit().unwrap();
+    let after = lb.to_bytes().len();
+
+    assert!(
+        after <= before + 4 * PAGE_BYTES,
+        "rename rewrote too much data: before={before}, after={after}"
+    );
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+    assert!(matches!(
+        reopened.get_file("/large/source.bin"),
+        Err(Error::NotFound(_))
+    ));
+    assert_eq!(reopened.get_file("/archive/renamed.bin").unwrap(), payload);
+
+    let report = Lockbox::recover(lb.to_bytes(), KEY);
+    assert_eq!(report.intact_file_count, 1);
+    assert!(report
+        .intact_files
+        .iter()
+        .any(|file| file.path == "/archive/renamed.bin"));
+}
+
+#[test]
+fn compact_preserves_large_file_after_streaming_rewrite() {
+    let mut lb = Lockbox::create(KEY);
+    let payload = vec![0x7bu8; 10 * 1024 * 1024];
+    lb.put_file_from_reader("/large/blob.bin", Cursor::new(&payload))
+        .unwrap();
+    lb.put_file("/small.txt", b"small").unwrap();
+    lb.commit().unwrap();
+
+    lb.delete("/small.txt").unwrap();
+    lb.compact().unwrap();
+    lb.commit().unwrap();
+
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+    assert_eq!(reopened.get_file("/large/blob.bin").unwrap(), payload);
+    assert!(matches!(
+        reopened.get_file("/small.txt"),
+        Err(Error::NotFound(_))
+    ));
+}
+
+#[test]
+fn path_backed_compact_logically_rewrites_live_state() {
+    let path = temp_path("path-backed-logical-compact");
+    let payload = vec![0x51u8; PAGE_BYTES + 123];
+    let _ = std::fs::remove_file(&path);
+
+    let mut lb = Lockbox::create_path(&path, KEY).unwrap();
+    lb.put_file_from_reader("/large/blob.bin", Cursor::new(&payload))
+        .unwrap();
+    lb.put_file("/empty.bin", b"").unwrap();
+    lb.put_file("/stale.txt", b"remove me").unwrap();
+    lb.put_symlink("/links/current", "/large/blob.bin").unwrap();
+    lb.set_env("TOKEN", "old").unwrap();
+    lb.commit().unwrap();
+
+    lb.delete("/stale.txt").unwrap();
+    lb.set_env("TOKEN", "new").unwrap();
+    lb.compact().unwrap();
+
+    let reopened = Lockbox::open_path(&path, KEY).unwrap();
+    assert_eq!(reopened.get_file("/large/blob.bin").unwrap(), payload);
+    assert_eq!(reopened.get_file("/empty.bin").unwrap(), b"");
+    assert_eq!(
+        reopened.get_symlink_target("/links/current").unwrap(),
+        "/large/blob.bin"
+    );
+    assert_eq!(reopened.get_env("TOKEN").unwrap().as_deref(), Some("new"));
+    assert!(matches!(
+        reopened.get_file("/stale.txt"),
+        Err(Error::NotFound(_))
+    ));
+
+    let _ = std::fs::remove_file(path);
 }
 
 fn sample_lockbox() -> Vec<u8> {

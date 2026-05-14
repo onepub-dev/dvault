@@ -16,7 +16,10 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
     not(any(target_os = "linux", target_os = "macos", target_os = "ios"))
 ))]
 pub(crate) fn available_memory_bytes() -> Option<u64> {
+    // SAFETY: `sysconf` reads process-global configuration and does not retain
+    // pointers or require additional invariants from Rust.
     let pages = unsafe { libc::sysconf(libc::_SC_AVPHYS_PAGES) };
+    // SAFETY: same as above; this is a side-effect-free OS query.
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if pages <= 0 || page_size <= 0 {
         return None;
@@ -31,9 +34,15 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn available_memory_bytes() -> Option<u64> {
+    // SAFETY: `vm_statistics64_data_t` is a plain C data buffer that is
+    // immediately initialized by `host_statistics64` before being read.
     let mut stats = unsafe { std::mem::zeroed::<libc::vm_statistics64_data_t>() };
     let mut count = libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: `mach_host_self` returns a send right for the current host and
+    // does not interact with Rust-managed memory.
     let host = unsafe { mach2::mach_init::mach_host_self() };
+    // SAFETY: `stats` points to a valid writable buffer and `count` points to a
+    // valid element count as required by `host_statistics64`.
     let result = unsafe {
         libc::host_statistics64(
             host,
@@ -45,6 +54,7 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
     if result != libc::KERN_SUCCESS {
         return None;
     }
+    // SAFETY: `sysconf` is a side-effect-free OS query.
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page_size <= 0 {
         return None;
@@ -85,6 +95,8 @@ pub(crate) fn available_memory_bytes() -> Option<u64> {
         ullAvailVirtual: 0,
         ullAvailExtendedVirtual: 0,
     };
+    // SAFETY: `status` has the documented `dwLength` and points to a valid
+    // writable `MEMORYSTATUSEX` for the duration of the call.
     let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
     if ok == 0 {
         None

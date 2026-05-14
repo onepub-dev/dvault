@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileFragment {
     pub(crate) page_offset: u64,
     pub(crate) page_len: u64,
@@ -9,8 +9,9 @@ pub(crate) struct FileFragment {
     pub(crate) fragment_len: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileChunk {
+    pub(crate) stored_path: String,
     pub(crate) file_offset: u64,
     pub(crate) len: u64,
     pub(crate) compressed_len: u64,
@@ -26,6 +27,19 @@ pub(crate) struct PendingFileChunk {
     pub(crate) total_len: u64,
     pub(crate) file_offset: u64,
     pub(crate) data: Arc<[u8]>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PackedSmallFile {
+    pub(crate) path: String,
+    pub(crate) permissions: u32,
+    pub(crate) total_len: u64,
+    pub(crate) len: u64,
+    pub(crate) compressed_len: u64,
+    pub(crate) compression: u8,
+    pub(crate) frame_id: u64,
+    pub(crate) object_id: u64,
+    pub(crate) fragment_len: u64,
 }
 
 #[derive(Debug, Clone)]

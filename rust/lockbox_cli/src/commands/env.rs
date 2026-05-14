@@ -21,13 +21,13 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
         }
         "list" => {
             let lb = open_existing(lockbox_path, access)?;
-            for name in lb.list_env() {
+            for name in lb.list_env()? {
                 println!("{name}");
             }
         }
         "export" => {
             let lb = open_existing(lockbox_path, access)?;
-            for (name, value) in lb.get_all_env() {
+            for (name, value) in lb.get_all_env()? {
                 println!("{name}={}", shell_quote(&value));
             }
         }

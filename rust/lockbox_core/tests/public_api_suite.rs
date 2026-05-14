@@ -7,8 +7,7 @@ use std::io::Cursor;
 const KEY: &[u8] = b"public api suite key";
 const PAGE_BYTES: usize = 8 * 1024 * 1024;
 const PAGE_MAGIC: &[u8; 8] = b"LBX2PAG\0";
-const KEY_DIR_MAGIC: &[u8; 8] = b"LBX2KEY\0";
-const KEY_DIR_HEADER_LEN: usize = 128;
+const PAGE_HEADER_LEN: usize = 96;
 
 #[test]
 fn public_api_files_listing_env_symlink_and_rename_flow() {
@@ -16,6 +15,7 @@ fn public_api_files_listing_env_symlink_and_rename_flow() {
         KEY,
         LockboxOptions {
             cache_limit: CacheLimit::Bytes(64 * 1024 * 1024),
+            ..LockboxOptions::default()
         },
     );
 
@@ -64,7 +64,7 @@ fn public_api_files_listing_env_symlink_and_rename_flow() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path, "/srv/app/logs/today.txt");
 
-    let env = reopened.get_all_env();
+    let env = reopened.get_all_env().unwrap();
     assert_eq!(
         env.get("DATABASE_URL").map(String::as_str),
         Some("postgres://localhost/app")
@@ -173,18 +173,46 @@ fn page_checksum_corruption_is_reported_and_recovery_keeps_intact_files() {
 }
 
 #[test]
-fn key_directory_payload_checksum_falls_back_to_mirror_copy() {
+fn key_directory_page_checksum_falls_back_to_mirror_copy() {
     let mut lb = Lockbox::create_with_password(b"password").unwrap();
     lb.put_file("/secret.txt", b"content").unwrap();
     lb.commit().unwrap();
 
     let mut damaged = lb.to_bytes();
     let primary_offset = u64::from_le_bytes(damaged[32..40].try_into().unwrap()) as usize;
-    assert_eq!(&damaged[primary_offset..primary_offset + 8], KEY_DIR_MAGIC);
-    damaged[primary_offset + KEY_DIR_HEADER_LEN] ^= 0x01;
+    assert_eq!(&damaged[primary_offset..primary_offset + 8], PAGE_MAGIC);
+    damaged[primary_offset + PAGE_HEADER_LEN + 40] ^= 0x01;
 
     let reopened = Lockbox::open_with_password(damaged, b"password").unwrap();
     assert_eq!(reopened.get_file("/secret.txt").unwrap(), b"content");
+}
+
+#[test]
+fn key_directory_pages_only_change_for_key_crud() {
+    let mut lb = Lockbox::create_with_password(b"password").unwrap();
+    lb.commit().unwrap();
+    let mut bytes = lb.to_bytes();
+    let first_key_dir_offset = u64::from_le_bytes(bytes[32..40].try_into().unwrap()) as usize;
+
+    lb.put_file("/secret.txt", b"content").unwrap();
+    lb.commit().unwrap();
+    bytes = lb.to_bytes();
+    assert_eq!(
+        u64::from_le_bytes(bytes[32..40].try_into().unwrap()) as usize,
+        first_key_dir_offset
+    );
+
+    let recipient = MlKemKeyPair::generate();
+    lb.add_recipient(&recipient).unwrap();
+    lb.commit().unwrap();
+    bytes = lb.to_bytes();
+    let second_key_dir_offset = u64::from_le_bytes(bytes[32..40].try_into().unwrap()) as usize;
+    assert_ne!(second_key_dir_offset, first_key_dir_offset);
+    assert!(
+        bytes[first_key_dir_offset..first_key_dir_offset + 128 * 1024]
+            .iter()
+            .all(|byte| *byte == 0)
+    );
 }
 
 fn find_page_offsets(bytes: &[u8]) -> Vec<usize> {

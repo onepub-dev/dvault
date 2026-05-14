@@ -3,15 +3,19 @@ use std::path::Path;
 
 use super::Lockbox;
 use crate::commit_root::decode_commit_root;
+use crate::constants::DEFAULT_MAX_FILE_BYTES;
 use crate::format::{
     decode_index_record, decode_index_records, decode_symlink_payload, decode_toc_node, read_header,
 };
 use crate::lockbox_id::LockboxId;
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
-use crate::page::{decode_page, scan_page_records, PageObjectKind, DEFAULT_PAGE_BYTES, PAGE_MAGIC};
+use crate::page::{
+    decode_page, page_decode_slice, page_size_for_objects, scan_page_records, PageObjectKind,
+    PAGE_MAGIC,
+};
 use crate::record::{DecodedRecord, RecordKind};
-use crate::{Entry, RecoveryReport, Result};
+use crate::{Entry, Error, RecoveryReport, Result};
 
 impl Lockbox {
     pub fn recover_path(path: impl AsRef<Path>, key: impl AsRef<[u8]>) -> RecoveryReport {
@@ -37,10 +41,9 @@ impl Lockbox {
 
         if let Ok((root_offset, _, _, _)) = read_header(&bytes) {
             if root_offset > 0 {
-                let toc_root = bytes
-                    .get(root_offset as usize..root_offset as usize + DEFAULT_PAGE_BYTES)
+                let toc_root = page_at(&bytes, root_offset)
                     .filter(|page| page.get(..8) == Some(PAGE_MAGIC.as_slice()))
-                    .ok_or(crate::Error::CorruptRecord)
+                    .ok_or(Error::CorruptRecord)
                     .and_then(|page| {
                         let decoded = decode_page(page, lockbox_id, &key)?;
                         let Some(commit_root_object) = decoded
@@ -48,7 +51,7 @@ impl Lockbox {
                             .iter()
                             .find(|object| object.kind == PageObjectKind::CommitRoot)
                         else {
-                            return Err(crate::Error::CorruptRecord);
+                            return Err(Error::CorruptRecord);
                         };
                         decode_commit_root(&commit_root_object.payload)
                     });
@@ -72,7 +75,7 @@ impl Lockbox {
                 match decode_index_records(&record) {
                     Ok(entries) => {
                         for entry in entries {
-                            manifest.insert(entry.path.clone(), entry);
+                            apply_scanned_entry(&mut manifest, entry);
                         }
                     }
                     Err(_) => corrupt_records += 1,
@@ -88,14 +91,13 @@ impl Lockbox {
             if entry.deleted {
                 continue;
             }
+            let recovered_symlink_target = match entry.node_kind {
+                NodeKind::Symlink => recover_symlink_target(&bytes, &key, lockbox_id, entry).ok(),
+                NodeKind::File => None,
+            };
             let complete = match entry.node_kind {
                 NodeKind::File => read_page_file_bytes(&bytes, entry, &key, lockbox_id).is_ok(),
-                NodeKind::Symlink => {
-                    read_record_from_page(&bytes, &key, lockbox_id, entry.record_offset)
-                        .ok()
-                        .filter(|r| r.header.kind == RecordKind::Symlink)
-                        .is_some()
-                }
+                NodeKind::Symlink => recovered_symlink_target.is_some(),
             };
             if complete {
                 intact_file_count += 1;
@@ -107,7 +109,7 @@ impl Lockbox {
                 kind: entry.entry_kind(),
                 len: entry.len,
                 permissions: entry.permissions,
-                symlink_target: entry.symlink_target.clone(),
+                symlink_target: recovered_symlink_target,
                 is_deleted: false,
             });
         }
@@ -130,7 +132,7 @@ impl Lockbox {
 
         for record in scan.records {
             if let Ok(Some(entry)) = decode_index_record(&record) {
-                latest_paths.insert(entry.path.clone(), entry);
+                apply_scanned_entry(&mut latest_paths, entry);
             }
         }
 
@@ -138,9 +140,18 @@ impl Lockbox {
             if entry.deleted {
                 continue;
             }
-            if let Ok(record) =
+            let record = if entry.record_object_id == 0 {
                 read_record_from_page(&bytes, &key_bytes, lockbox_id, entry.record_offset)
-            {
+            } else {
+                read_record_object_from_page(
+                    &bytes,
+                    &key_bytes,
+                    lockbox_id,
+                    entry.record_offset,
+                    entry.record_object_id,
+                )
+            };
+            if let Ok(record) = record {
                 match record.header.kind {
                     RecordKind::FilePage => {
                         if let Ok(file_bytes) =
@@ -216,10 +227,8 @@ fn read_toc_node_payload_from_bytes(
     lockbox_id: crate::LockboxId,
     offset: u64,
 ) -> Result<Vec<u8>> {
-    if bytes.get(offset as usize..offset as usize + 8) == Some(PAGE_MAGIC.as_slice()) {
-        let page = bytes
-            .get(offset as usize..offset as usize + DEFAULT_PAGE_BYTES)
-            .ok_or(crate::Error::Truncated)?;
+    if bytes.get(checked_range(offset, 8)?) == Some(PAGE_MAGIC.as_slice()) {
+        let page = page_at(bytes, offset).ok_or(Error::Truncated)?;
         let decoded = decode_page(page, lockbox_id, key)?;
         let Some(toc_object) = decoded.objects.iter().find(|object| {
             matches!(
@@ -227,11 +236,11 @@ fn read_toc_node_payload_from_bytes(
                 PageObjectKind::TocLeaf | PageObjectKind::TocInternal
             )
         }) else {
-            return Err(crate::Error::CorruptRecord);
+            return Err(Error::CorruptRecord);
         };
         return Ok(toc_object.payload.clone());
     }
-    Err(crate::Error::CorruptRecord)
+    Err(Error::CorruptRecord)
 }
 
 fn read_page_file_bytes(
@@ -242,27 +251,49 @@ fn read_page_file_bytes(
 ) -> Result<Vec<u8>> {
     let mut chunks = entry.chunks.clone();
     chunks.sort_by_key(|chunk| chunk.file_offset);
-    let mut out = Vec::with_capacity(entry.len as usize);
+    let expected_len = if entry.len == 0 && chunks.iter().any(|chunk| chunk.len > 0) {
+        chunks.iter().try_fold(0u64, |max_end, chunk| {
+            let end = chunk
+                .file_offset
+                .checked_add(chunk.len)
+                .ok_or(Error::CorruptRecord)?;
+            Ok(max_end.max(end))
+        })?
+    } else {
+        entry.len
+    };
+    if expected_len > DEFAULT_MAX_FILE_BYTES {
+        return Err(Error::SecurityLimitExceeded(
+            "recovered file exceeds default safety limit".to_string(),
+        ));
+    }
+    let capacity = usize::try_from(expected_len).map_err(|_| Error::CorruptRecord)?;
+    let mut out = Vec::with_capacity(capacity);
     for chunk in chunks {
-        let mut stored = vec![0u8; chunk.compressed_len as usize];
+        if chunk.compressed_len > crate::constants::DEFAULT_MAX_PAGE_LOGICAL_BYTES as u64 {
+            return Err(Error::SecurityLimitExceeded(
+                "compressed file frame exceeds safety limit".to_string(),
+            ));
+        }
+        if chunk.file_offset != out.len() as u64 {
+            return Err(Error::CorruptRecord);
+        }
+        let compressed_len =
+            usize::try_from(chunk.compressed_len).map_err(|_| Error::CorruptRecord)?;
+        let mut stored = vec![0u8; compressed_len];
         for fragment in &chunk.fragments {
-            let page = bytes
-                .get(
-                    fragment.page_offset as usize
-                        ..fragment.page_offset as usize + DEFAULT_PAGE_BYTES,
-                )
-                .ok_or(crate::Error::Truncated)?;
+            let page = page_at(bytes, fragment.page_offset).ok_or(Error::Truncated)?;
             let decoded_page = decode_page(page, lockbox_id, key)?;
             let Some(object) = decoded_page
                 .objects
                 .iter()
                 .find(|object| object.id == fragment.object_id)
             else {
-                return Err(crate::Error::CorruptRecord);
+                return Err(Error::CorruptRecord);
             };
             let decoded = crate::format::decode_file_fragment_payload(&object.payload)?;
-            if decoded.path != entry.path
-                || (decoded.total_len != 0 && decoded.total_len != entry.len)
+            if decoded.path != chunk.stored_path
+                || (decoded.total_len != 0 && decoded.total_len != expected_len)
                 || decoded.file_offset != chunk.file_offset
                 || decoded.len != chunk.len
                 || decoded.compressed_len != chunk.compressed_len
@@ -271,20 +302,26 @@ fn read_page_file_bytes(
                 || decoded.fragment_offset != fragment.fragment_offset
                 || decoded.data.len() as u64 != fragment.fragment_len
             {
-                return Err(crate::Error::CorruptRecord);
+                return Err(Error::CorruptRecord);
             }
-            let start = usize::try_from(fragment.fragment_offset)
-                .map_err(|_| crate::Error::CorruptRecord)?;
+            let start =
+                usize::try_from(fragment.fragment_offset).map_err(|_| Error::CorruptRecord)?;
             let end = start
                 .checked_add(decoded.data.len())
-                .ok_or(crate::Error::CorruptRecord)?;
+                .ok_or(Error::CorruptRecord)?;
             if end > stored.len() {
-                return Err(crate::Error::CorruptRecord);
+                return Err(Error::CorruptRecord);
             }
             stored[start..end].copy_from_slice(&decoded.data);
         }
         let decoded = crate::compression::decode_file_frame(chunk.compression, &stored, chunk.len)?;
         out.extend_from_slice(&decoded);
+        if out.len() as u64 > expected_len {
+            return Err(Error::CorruptRecord);
+        }
+    }
+    if out.len() as u64 != expected_len {
+        return Err(Error::CorruptRecord);
     }
     Ok(out)
 }
@@ -295,14 +332,26 @@ fn read_record_from_page(
     lockbox_id: LockboxId,
     offset: u64,
 ) -> Result<DecodedRecord> {
-    let page = bytes
-        .get(offset as usize..offset as usize + DEFAULT_PAGE_BYTES)
-        .ok_or(crate::Error::Truncated)?;
+    let page = page_at(bytes, offset).ok_or(Error::Truncated)?;
     let decoded = decode_page(page, lockbox_id, key)?;
     let Some(object) = decoded.objects.first() else {
-        return Err(crate::Error::CorruptRecord);
+        return Err(Error::CorruptRecord);
     };
-    let kind = match object.kind {
+    let kind = record_kind_from_page_object(object.kind)?;
+    Ok(DecodedRecord {
+        header: crate::record::RecordHeader {
+            kind,
+            sequence: decoded.sequence,
+            total_len: page_size_for_objects(&decoded.objects) as u64,
+        },
+        offset,
+        object_id: object.id,
+        payload: object.payload.clone(),
+    })
+}
+
+fn record_kind_from_page_object(kind: PageObjectKind) -> Result<RecordKind> {
+    Ok(match kind {
         PageObjectKind::PackedFileData | PageObjectKind::FileData => RecordKind::FilePage,
         PageObjectKind::Symlink => RecordKind::Symlink,
         PageObjectKind::EnvSet => RecordKind::Env,
@@ -311,17 +360,103 @@ fn read_record_from_page(
         PageObjectKind::TocLeaf | PageObjectKind::TocInternal => RecordKind::TocNode,
         PageObjectKind::CommitRoot => RecordKind::CommitRoot,
         PageObjectKind::FreeIndexLeaf | PageObjectKind::FreeIndexInternal => RecordKind::FreeIndex,
-        PageObjectKind::KeyDirectory => return Err(crate::Error::CorruptRecord),
+        PageObjectKind::KeyDirectory | PageObjectKind::EnvLeaf | PageObjectKind::EnvInternal => {
+            return Err(Error::CorruptRecord);
+        }
+    })
+}
+
+fn recover_symlink_target(
+    bytes: &[u8],
+    key: &[u8],
+    lockbox_id: LockboxId,
+    entry: &ManifestEntry,
+) -> Result<String> {
+    if entry.record_offset == 0 || entry.record_object_id == 0 {
+        return Err(Error::CorruptRecord);
+    }
+    let record = read_record_object_from_page(
+        bytes,
+        key,
+        lockbox_id,
+        entry.record_offset,
+        entry.record_object_id,
+    )?;
+    if record.header.kind != RecordKind::Symlink {
+        return Err(Error::CorruptRecord);
+    }
+    let (path, target) = decode_symlink_payload(&record.payload)?;
+    if path != entry.path {
+        return Err(Error::CorruptRecord);
+    }
+    Ok(target)
+}
+
+fn read_record_object_from_page(
+    bytes: &[u8],
+    key: &[u8],
+    lockbox_id: LockboxId,
+    offset: u64,
+    object_id: u64,
+) -> Result<DecodedRecord> {
+    let page = page_at(bytes, offset).ok_or(Error::Truncated)?;
+    let decoded = decode_page(page, lockbox_id, key)?;
+    let Some(object) = decoded.objects.iter().find(|object| object.id == object_id) else {
+        return Err(Error::CorruptRecord);
     };
+    let kind = record_kind_from_page_object(object.kind)?;
     Ok(DecodedRecord {
         header: crate::record::RecordHeader {
             kind,
             sequence: decoded.sequence,
-            total_len: DEFAULT_PAGE_BYTES as u64,
+            total_len: page_size_for_objects(&decoded.objects) as u64,
         },
         offset,
         object_id: object.id,
         payload: object.payload.clone(),
+    })
+}
+
+fn page_at(bytes: &[u8], offset: u64) -> Option<&[u8]> {
+    page_decode_slice(bytes, usize::try_from(offset).ok()?)
+}
+
+fn checked_range(offset: u64, len: usize) -> Result<std::ops::Range<usize>> {
+    let start = usize::try_from(offset).map_err(|_| Error::CorruptRecord)?;
+    let end = start.checked_add(len).ok_or(Error::CorruptRecord)?;
+    Ok(start..end)
+}
+
+fn apply_scanned_entry(manifest: &mut BTreeMap<String, ManifestEntry>, mut entry: ManifestEntry) {
+    if entry.deleted || entry.node_kind != NodeKind::File {
+        manifest.insert(entry.path.clone(), entry);
+        return;
+    }
+    if entry.len == 0 {
+        entry.len = recovered_len_from_chunks(&entry).unwrap_or(0);
+    }
+    manifest
+        .entry(entry.path.clone())
+        .and_modify(|existing| {
+            if existing.deleted || existing.node_kind != NodeKind::File {
+                *existing = entry.clone();
+                return;
+            }
+            existing.len = existing.len.max(entry.len);
+            existing.record_offset = existing.record_offset.min(entry.record_offset);
+            existing.record_len = existing.record_len.max(entry.record_len);
+            existing.chunks.extend(entry.chunks.clone());
+        })
+        .or_insert(entry);
+}
+
+fn recovered_len_from_chunks(entry: &ManifestEntry) -> Result<u64> {
+    entry.chunks.iter().try_fold(0u64, |max_end, chunk| {
+        let end = chunk
+            .file_offset
+            .checked_add(chunk.len)
+            .ok_or(Error::CorruptRecord)?;
+        Ok(max_end.max(end))
     })
 }
 

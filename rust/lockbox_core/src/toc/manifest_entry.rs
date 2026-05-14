@@ -9,10 +9,10 @@ pub(crate) struct ManifestEntry {
     pub(crate) len: u64,
     pub(crate) record_offset: u64,
     pub(crate) record_len: u64,
+    pub(crate) record_object_id: u64,
     pub(crate) deleted: bool,
     pub(crate) node_kind: NodeKind,
     pub(crate) permissions: u32,
-    pub(crate) symlink_target: Option<String>,
     pub(crate) chunks: Vec<FileChunk>,
 }
 
@@ -30,7 +30,7 @@ impl ManifestEntry {
             kind: self.entry_kind(),
             len: self.len,
             permissions: self.permissions,
-            symlink_target: self.symlink_target.clone(),
+            symlink_target: None,
             is_deleted: self.deleted,
         }
     }

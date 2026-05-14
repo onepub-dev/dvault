@@ -97,12 +97,16 @@ fn lock_memory(bytes: &[u8]) -> bool {
     if bytes.is_empty() {
         return false;
     }
+    // SAFETY: `bytes.as_ptr()` is valid for `bytes.len()` bytes for the
+    // duration of this call, and `mlock` does not retain the pointer.
     unsafe { libc::mlock(bytes.as_ptr().cast(), bytes.len()) == 0 }
 }
 
 #[cfg(unix)]
 fn unlock_memory(bytes: &[u8]) {
     if !bytes.is_empty() {
+        // SAFETY: `bytes.as_ptr()` is valid for `bytes.len()` bytes for the
+        // duration of this call, and `munlock` does not retain the pointer.
         unsafe {
             libc::munlock(bytes.as_ptr().cast(), bytes.len());
         }
@@ -114,6 +118,8 @@ fn lock_memory(bytes: &[u8]) -> bool {
     if bytes.is_empty() {
         return false;
     }
+    // SAFETY: `bytes.as_ptr()` is valid for `bytes.len()` bytes for the
+    // duration of this call, and `VirtualLock` does not retain the pointer.
     unsafe {
         windows_sys::Win32::System::Memory::VirtualLock(bytes.as_ptr().cast(), bytes.len()) != 0
     }
@@ -122,6 +128,8 @@ fn lock_memory(bytes: &[u8]) -> bool {
 #[cfg(windows)]
 fn unlock_memory(bytes: &[u8]) {
     if !bytes.is_empty() {
+        // SAFETY: `bytes.as_ptr()` is valid for `bytes.len()` bytes for the
+        // duration of this call, and `VirtualUnlock` does not retain the pointer.
         unsafe {
             windows_sys::Win32::System::Memory::VirtualUnlock(bytes.as_ptr().cast(), bytes.len());
         }

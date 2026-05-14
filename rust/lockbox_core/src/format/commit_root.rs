@@ -1,11 +1,12 @@
 use crate::{Error, Result};
 
-const COMMIT_ROOT_VERSION: u8 = 2;
+const COMMIT_ROOT_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommitRoot {
     pub(crate) sequence: u64,
     pub(crate) toc_root_offset: u64,
+    pub(crate) env_root_offset: u64,
     pub(crate) free_index_root_offset: u64,
     pub(crate) key_directory_offset: u64,
     pub(crate) key_directory_mirror_offsets: [u64; 2],
@@ -15,11 +16,12 @@ pub(crate) struct CommitRoot {
 }
 
 pub(crate) fn encode_commit_root(root: &CommitRoot) -> Vec<u8> {
-    let mut out = Vec::with_capacity(1 + 7 + 8 * 9);
+    let mut out = Vec::with_capacity(1 + 7 + 8 * 10);
     out.push(COMMIT_ROOT_VERSION);
     out.extend_from_slice(&[0; 7]);
     out.extend_from_slice(&root.sequence.to_le_bytes());
     out.extend_from_slice(&root.toc_root_offset.to_le_bytes());
+    out.extend_from_slice(&root.env_root_offset.to_le_bytes());
     out.extend_from_slice(&root.free_index_root_offset.to_le_bytes());
     out.extend_from_slice(&root.key_directory_offset.to_le_bytes());
     out.extend_from_slice(&root.key_directory_mirror_offsets[0].to_le_bytes());
@@ -31,7 +33,7 @@ pub(crate) fn encode_commit_root(root: &CommitRoot) -> Vec<u8> {
 }
 
 pub(crate) fn decode_commit_root(payload: &[u8]) -> Result<CommitRoot> {
-    if payload.len() != 1 + 7 + 8 * 9 || payload[0] != COMMIT_ROOT_VERSION {
+    if payload.len() != 1 + 7 + 8 * 10 || payload[0] != COMMIT_ROOT_VERSION {
         return Err(Error::CorruptRecord);
     }
     if payload[1..8].iter().any(|byte| *byte != 0) {
@@ -40,6 +42,7 @@ pub(crate) fn decode_commit_root(payload: &[u8]) -> Result<CommitRoot> {
     let mut offset = 8usize;
     let sequence = read_u64(payload, &mut offset);
     let toc_root_offset = read_u64(payload, &mut offset);
+    let env_root_offset = read_u64(payload, &mut offset);
     let free_index_root_offset = read_u64(payload, &mut offset);
     let key_directory_offset = read_u64(payload, &mut offset);
     let key_directory_mirror_offsets = [
@@ -55,6 +58,7 @@ pub(crate) fn decode_commit_root(payload: &[u8]) -> Result<CommitRoot> {
     Ok(CommitRoot {
         sequence,
         toc_root_offset,
+        env_root_offset,
         free_index_root_offset,
         key_directory_offset,
         key_directory_mirror_offsets,
@@ -79,6 +83,7 @@ mod tests {
         let root = CommitRoot {
             sequence: 10,
             toc_root_offset: 100,
+            env_root_offset: 150,
             free_index_root_offset: 200,
             key_directory_offset: 300,
             key_directory_mirror_offsets: [301, 302],
@@ -98,12 +103,13 @@ mod tests {
         let root = CommitRoot {
             sequence: 0x0102_0304_0506_0708,
             toc_root_offset: 0x1112_1314_1516_1718,
-            free_index_root_offset: 0x2122_2324_2526_2728,
-            key_directory_offset: 0x3132_3334_3536_3738,
-            key_directory_mirror_offsets: [0x4142_4344_4546_4748, 0x5152_5354_5556_5758],
-            key_directory_generation: 0x6162_6364_6566_6768,
-            previous_commit_root_offset: 0x7172_7374_7576_7778,
-            flags: 0x8182_8384_8586_8788,
+            env_root_offset: 0x2122_2324_2526_2728,
+            free_index_root_offset: 0x3132_3334_3536_3738,
+            key_directory_offset: 0x4142_4344_4546_4748,
+            key_directory_mirror_offsets: [0x5152_5354_5556_5758, 0x6162_6364_6566_6768],
+            key_directory_generation: 0x7172_7374_7576_7778,
+            previous_commit_root_offset: 0x8182_8384_8586_8788,
+            flags: 0x9192_9394_9596_9798,
         };
         let encoded = encode_commit_root(&root);
 
@@ -144,6 +150,10 @@ mod tests {
             &encoded[72..80],
             &[0x88, 0x87, 0x86, 0x85, 0x84, 0x83, 0x82, 0x81]
         );
+        assert_eq!(
+            &encoded[80..88],
+            &[0x98, 0x97, 0x96, 0x95, 0x94, 0x93, 0x92, 0x91]
+        );
         assert_eq!(decode_commit_root(&encoded).unwrap(), root);
     }
 
@@ -152,6 +162,7 @@ mod tests {
         let root = CommitRoot {
             sequence: 10,
             toc_root_offset: 0,
+            env_root_offset: 0,
             free_index_root_offset: 0,
             key_directory_offset: 0,
             key_directory_mirror_offsets: [0, 0],

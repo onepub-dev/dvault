@@ -8,6 +8,7 @@ pub(crate) mod list_iter;
 pub(crate) mod list_options;
 pub(crate) mod lockbox_id;
 pub(crate) mod node_kind;
+pub(crate) mod page_object_packer;
 pub(crate) mod record;
 pub(crate) mod recovery_report;
 pub(crate) mod recovery_report_options;

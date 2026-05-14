@@ -48,6 +48,8 @@ platform vault integration.
 ## Format Model
 
 Lockbox v2 uses a small cleartext page frame plus encrypted private page bodies.
+Key-directory pages are clear-text page-cache pages because unlock metadata must
+be readable before the content key is available.
 
 ```text
 [ Header ]
@@ -63,15 +65,16 @@ Cleartext page headers contain only scanner-safe framing:
 magic
 page version
 sequence
-encrypted body length
+stored body length
 SHA-256 public header checksum
 ```
 
 Paths, file names, content, lengths-by-path, and manifest entries are inside
-fixed-size encrypted pages. Pages are currently 8 MiB, and normal
-storage reads and writes operate on whole pages. This hides the true size of
-tiny files, env vars, symlinks, and metadata from the backing store and from a
-range-request based web service.
+fixed-size encrypted pages. Metadata pages are currently 128 KiB and file-data
+pages are 8 MiB. Normal storage writes operate on whole physical pages. This
+hides the true size of tiny files, env vars, symlinks, and metadata from the
+backing store and from a range-request based web service.
+Clear-text pages use page-format checksums validated by the page cache.
 
 ## Manifest And Recovery
 
@@ -96,9 +99,13 @@ let clean = Lockbox::salvage(damaged_bytes, key)?;
 ## Key Management
 
 Normal lockboxes use a random content key. Users unlock that content key through
-one or more key slots stored in a key directory block. The header points at the
-current key directory, and the directory is capped at 1 MiB to avoid unbounded
-metadata processing.
+one or more key slots stored in clear-text key-directory pages. The header
+points at the current primary key-directory page, and the directory payload is
+capped at 1 MiB to avoid unbounded metadata processing.
+Because key-directory pages are clear-text page-cache pages, password and
+recipient unlock read the current key-directory page through the page-cache
+read/decode boundary. Raw byte scanning is only a recovery fallback for damaged
+headers or missing roots.
 
 Each lockbox also has a public random UUID in the header. The CLI uses that UUID
 to identify per-user unlock-cache entries and local vault records without
@@ -232,22 +239,34 @@ Current tested APIs:
 - `recover`
 - `salvage`
 
-Environment variables are stored as encrypted env objects inside normal pages.
-They are not file entries, do not appear in directory listings, and are loaded
-only when `get_env`, `list_env`, or `get_all_env` is called.
+Environment variables are encrypted metadata, not file entries. They do not
+appear in directory listings and should be loaded only when `get_env`,
+`list_env`, or `get_all_env` is called. The format stores env vars in a
+commit-root-referenced live env BTree with packed env leaf pages and routing-only
+internal pages. Env updates and deletes sanitize old env tree pages during
+commit; an append-only env history is not acceptable because newly added
+recipients could decrypt stale secrets.
+
+Symlinks are live TOC entries that point at encrypted symlink metadata objects.
+The TOC stores the link path, node kind, and object reference; the symlink
+target lives in the referenced metadata object. Many symlink objects are packed
+into shared metadata pages so symlinks remain recoverable without paying one
+page per link.
 
 ### Page Cache
 
 The core library uses a unified decoded-page cache for pages read from the
-lockbox. TOC nodes, file pages, symlinks, env objects, and free-index objects
-share one weighted LRU budget keyed by page offset. The cache is a performance
-layer only: correctness does not require the full TOC or full lockbox to fit in
+lockbox. TOC nodes, file pages, symlinks, env objects, free-index objects, key
+directories, and commit roots share one weighted LRU budget keyed by page
+offset. Metadata pages weigh less than file-data pages. The cache owns page
+encoding, encryption or clear-text checksum policy, flushing, redaction, and
+zeroing. Correctness does not require the full TOC or full lockbox to fit in
 memory.
 
 The default cache limit is `Auto`. On native platforms this uses a
 page-aware minimum and a best-effort memory-pressure target:
 
-- minimum useful cache: the larger of eight maximum-size pages or 64 MiB
+- minimum useful cache: the larger of sixty-four metadata pages or 64 MiB
 - target: about 15% of currently available/reclaimable memory
 - native cap: 4 GiB unless the caller overrides it
 - WASM default: 64 MiB, because reliable free-memory information is not
@@ -256,10 +275,12 @@ page-aware minimum and a best-effort memory-pressure target:
 Embedders can choose a fixed budget or disable caching:
 
 ```rust
-use lockbox_core::{CacheLimit, Lockbox, LockboxOptions};
+use lockbox_core::{CacheLimit, Lockbox, LockboxOptions, WorkloadProfile};
 
 let options = LockboxOptions {
     cache_limit: CacheLimit::Bytes(256 * 1024 * 1024),
+    workload_profile: WorkloadProfile::Interactive,
+    ..LockboxOptions::default()
 };
 let lockbox = Lockbox::open_with_options(bytes, key, options)?;
 
@@ -267,6 +288,11 @@ lockbox.set_cache_limit(CacheLimit::Auto);
 lockbox.trim_cache_to(64 * 1024 * 1024);
 let stats = lockbox.cache_stats();
 ```
+
+Workload policy is explicit. The page cache does not guess that a page is
+insert-only. CLI-created initial imports use `BulkImport`, which lets file-data
+pages flush and drop from cache as they are appended. Metadata and update
+workloads keep the default `Interactive` behavior.
 
 ## Page Reuse
 
@@ -280,7 +306,10 @@ contains live objects, those objects are relocated first, then the old page is
 zeroed so stale ciphertext is not left recoverable through COW history.
 
 Compaction should remain a maintenance operation for heavily fragmented
-archives, not the default write path.
+archives, not the default write path. It is implemented as a logical rewrite:
+the live lockbox state is copied into a fresh lockbox through the normal
+page-cache-backed APIs and the backing storage is swapped after the replacement
+commits. It does not shuffle physical pages inside the old file.
 
 ## Security Posture
 
@@ -307,8 +336,8 @@ Default rules:
   default-ignorable controls are rejected by default to reduce visual spoofing.
 - Path limits are enforced in UTF-8 bytes, component bytes, and component depth.
 - Only regular file payloads are materialized by default.
-- Symlinks are not extracted by default. Future symlink metadata must pass the
-  same logical-path validation for both link path and target.
+- Symlinks are not extracted by default. Symlink metadata must pass the same
+  logical-path validation for both link path and target.
 - Bulk extraction is bounded by default with maximum file count, per-file bytes,
   and total expanded bytes.
 - Existing destination files must not be overwritten by default when filesystem

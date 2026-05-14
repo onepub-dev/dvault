@@ -9,7 +9,9 @@ use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey};
 use crate::lockbox_id::LockboxId;
 use crate::secret_bytes::SecretBytes;
 use crate::storage::{Storage, StorageBackend};
-use crate::{EntryKind, Error, Result};
+use crate::{EntryKind, Error, LockboxOptions, Result};
+use std::fs;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,7 +25,6 @@ pub enum LockboxCreate {
     RawKey(Vec<u8>),
     Password(Vec<u8>),
     RecipientKey(MlKemRecipientKey),
-    RecipientKeyFile(PathBuf),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -31,7 +32,6 @@ pub enum LockboxUnlock {
     RawKey(Vec<u8>),
     Password(Vec<u8>),
     RecipientKey(MlKemKeyPair),
-    RecipientKeyFile(PathBuf),
 }
 
 impl UnlockedContentKey {
@@ -60,13 +60,6 @@ impl Lockbox {
                 lockbox.add_recipient_key(&recipient)?;
                 lockbox
             }
-            LockboxCreate::RecipientKeyFile(path_to_key) => {
-                let recipient = MlKemRecipientKey::from_bytes(&read_hex_file(path_to_key)?)?;
-                let content_key = random_content_key()?;
-                let mut lockbox = Self::create_path(path, content_key)?;
-                lockbox.add_recipient_key(&recipient)?;
-                lockbox
-            }
         };
         lockbox.commit()?;
         Ok(lockbox)
@@ -82,11 +75,6 @@ impl Lockbox {
             }
             LockboxUnlock::RecipientKey(recipient) => {
                 let unlocked = Self::unlock_path_with_recipient(path, &recipient)?;
-                Self::open_path(path, unlocked.key())
-            }
-            LockboxUnlock::RecipientKeyFile(path_to_key) => {
-                let keypair = MlKemKeyPair::from_seed_bytes(&read_hex_file(path_to_key)?)?;
-                let unlocked = Self::unlock_path_with_recipient(path, &keypair)?;
                 Self::open_path(path, unlocked.key())
             }
         }
@@ -235,6 +223,7 @@ impl Lockbox {
         let id = next_key_slot_id(&self.key_slots);
         let slot = KeySlot::password(id, password, random_salt()?, self.key.expose())?;
         self.key_slots.push(slot);
+        self.mark_key_directory_dirty();
         Ok(id)
     }
 
@@ -246,6 +235,7 @@ impl Lockbox {
         let id = next_key_slot_id(&self.key_slots);
         let slot = KeySlot::ml_kem_1024(id, recipient, self.key.expose())?;
         self.key_slots.push(slot);
+        self.mark_key_directory_dirty();
         Ok(id)
     }
 
@@ -255,6 +245,7 @@ impl Lockbox {
         if self.key_slots.len() == before {
             return Err(Error::NotFound(format!("key slot {id}")));
         }
+        self.mark_key_directory_dirty();
         Ok(())
     }
 
@@ -280,7 +271,12 @@ impl Lockbox {
     }
 
     pub fn export_key_directory_backup(&self) -> Result<Vec<u8>> {
-        encode_key_directory(&self.key_slots, self.lockbox_id, self.sequence, 0)
+        encode_key_directory(
+            &self.key_slots,
+            self.lockbox_id,
+            self.key_directory_generation,
+            0,
+        )
     }
 
     pub fn list_key_slots(&self) -> Vec<KeySlotInfo> {
@@ -305,17 +301,68 @@ impl Lockbox {
     }
 
     pub fn compact(&mut self) -> Result<()> {
-        let original_storage = self.storage.clone();
         let entries = self
             .manifest
             .values()
             .filter(|entry| !entry.deleted)
             .cloned()
             .collect::<Vec<_>>();
-        let env = self.get_all_env();
-        let key_slots = self.key_slots.clone();
-        let mut compacted = Lockbox::create_with_lockbox_id(self.key.expose(), self.lockbox_id);
-        compacted.key_slots = key_slots;
+        let env = self.get_all_env()?;
+        if let Some(path) = self.storage.path().map(Path::to_path_buf) {
+            return self.compact_file_backed(path, entries, env);
+        }
+
+        let mut compacted = Lockbox::create_with_lockbox_id_and_options(
+            self.key.expose(),
+            self.lockbox_id,
+            self.compaction_options(),
+        );
+        self.populate_compacted(&mut compacted, entries, env)?;
+        compacted.commit()?;
+        *self = compacted;
+        Ok(())
+    }
+
+    fn compact_file_backed(
+        &mut self,
+        path: PathBuf,
+        entries: Vec<crate::manifest_entry::ManifestEntry>,
+        env: std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        let temp_path = compact_temp_path(&path);
+        let _ = fs::remove_file(&temp_path);
+        let key = self.key.expose().to_vec();
+        let options = self.compaction_options();
+        let result = (|| {
+            let mut compacted = Lockbox::create_path_with_lockbox_id_and_options(
+                &temp_path,
+                &key,
+                self.lockbox_id,
+                options,
+            )?;
+            self.populate_compacted(&mut compacted, entries, env)?;
+            compacted.commit()?;
+            drop(compacted);
+            replace_file_with_compacted(&temp_path, &path)?;
+            let reopened = Lockbox::open_path_with_options(&path, &key, options)?;
+            *self = reopened;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        result
+    }
+
+    fn populate_compacted(
+        &self,
+        compacted: &mut Lockbox,
+        entries: Vec<crate::manifest_entry::ManifestEntry>,
+        env: std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        compacted.key_slots = self.key_slots.clone();
+        compacted.key_directory_generation = self.key_directory_generation;
+        compacted.dirty_key_directory = !compacted.key_slots.is_empty();
 
         for (name, value) in env {
             compacted.set_env(&name, &value)?;
@@ -324,53 +371,125 @@ impl Lockbox {
         for entry in entries {
             match entry.entry_kind() {
                 EntryKind::File => {
-                    let mut data = Vec::new();
-                    self.write_file_to(&entry.path, &mut data)?;
-                    compacted.put_file_with_permissions(&entry.path, &data, entry.permissions)?;
+                    let reader = FileEntryReader::new(self, &entry)?;
+                    compacted.put_file_from_reader_with_permissions(
+                        &entry.path,
+                        reader,
+                        entry.permissions,
+                    )?;
                 }
                 EntryKind::Symlink => {
-                    let Some(target) = entry.symlink_target.as_deref() else {
-                        return Err(Error::CorruptRecord);
-                    };
-                    compacted.put_symlink(&entry.path, target)?;
+                    let target = self.get_symlink_target(&entry.path)?;
+                    compacted.put_symlink(&entry.path, &target)?;
                 }
             }
         }
-
-        compacted.commit()?;
-        let compacted_bytes = compacted.bytes()?;
-        compacted.storage = original_storage;
-        compacted.storage.replace_all(&compacted_bytes)?;
-        *self = compacted;
         Ok(())
     }
-}
 
-fn read_hex_file(path: impl AsRef<Path>) -> Result<Vec<u8>> {
-    let text = std::fs::read_to_string(path.as_ref())
-        .map_err(|err| Error::Io(format!("read {}: {err}", path.as_ref().display())))?;
-    decode_hex(text.trim())
-}
-
-fn decode_hex(text: &str) -> Result<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return Err(Error::InvalidKey);
+    fn compaction_options(&self) -> LockboxOptions {
+        LockboxOptions {
+            workload_profile: self.workload_profile,
+            ..LockboxOptions::default()
+        }
     }
-    let mut out = Vec::with_capacity(text.len() / 2);
-    for chunk in text.as_bytes().chunks_exact(2) {
-        let hi = hex_value(chunk[0])?;
-        let lo = hex_value(chunk[1])?;
-        out.push((hi << 4) | lo);
-    }
-    Ok(out)
 }
 
-fn hex_value(byte: u8) -> Result<u8> {
-    match byte {
-        b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(Error::InvalidKey),
+fn compact_temp_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("lockbox");
+    path.with_file_name(format!(".{file_name}.compact-{}", std::process::id()))
+}
+
+fn replace_file_with_compacted(temp_path: &Path, path: &Path) -> Result<()> {
+    fs::rename(temp_path, path).map_err(|err| {
+        Error::Io(format!(
+            "replace compacted lockbox {}: {err}",
+            path.display()
+        ))
+    })
+}
+
+impl Lockbox {
+    pub(crate) fn mark_key_directory_dirty(&mut self) {
+        self.key_directory_generation = self.key_directory_generation.saturating_add(1);
+        self.dirty_key_directory = true;
+    }
+}
+
+struct FileEntryReader<'a> {
+    lockbox: &'a Lockbox,
+    entry: &'a crate::manifest_entry::ManifestEntry,
+    chunks: Vec<crate::file_chunk::FileChunk>,
+    next_chunk: usize,
+    current: Cursor<Vec<u8>>,
+    written: u64,
+}
+
+impl<'a> FileEntryReader<'a> {
+    fn new(lockbox: &'a Lockbox, entry: &'a crate::manifest_entry::ManifestEntry) -> Result<Self> {
+        if let Some(pending) = lockbox.pending_small_files.get(&entry.path) {
+            if pending.data.len() as u64 != entry.len {
+                return Err(Error::CorruptRecord);
+            }
+            return Ok(Self {
+                lockbox,
+                entry,
+                chunks: Vec::new(),
+                next_chunk: 0,
+                current: Cursor::new(pending.data.to_vec()),
+                written: 0,
+            });
+        }
+        if entry.chunks.is_empty() {
+            return Err(Error::CorruptRecord);
+        }
+        let mut chunks = entry.chunks.clone();
+        chunks.sort_by_key(|chunk| chunk.file_offset);
+        Ok(Self {
+            lockbox,
+            entry,
+            chunks,
+            next_chunk: 0,
+            current: Cursor::new(Vec::new()),
+            written: 0,
+        })
+    }
+}
+
+impl Read for FileEntryReader<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let read = self.current.read(out)?;
+            if read != 0 {
+                self.written = self.written.saturating_add(read as u64);
+                return Ok(read);
+            }
+            if self.next_chunk >= self.chunks.len() {
+                if self.written == self.entry.len {
+                    return Ok(0);
+                }
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "lockbox file length mismatch during compaction",
+                ));
+            }
+            let chunk = &self.chunks[self.next_chunk];
+            if chunk.file_offset != self.written {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "lockbox file chunk offset mismatch during compaction",
+                ));
+            }
+            self.next_chunk += 1;
+            let decoded = self
+                .lockbox
+                .read_file_chunk_frame(self.entry.len, chunk)
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+            self.current = Cursor::new(decoded);
+        }
     }
 }
 
@@ -408,7 +527,7 @@ fn key_directories_from_storage(
     let header = storage.read_at(0, crate::constants::HEADER_LEN)?;
     let mut directories = Vec::new();
     if let Ok((_, _, key_directory_offset, lockbox_id)) = read_header(&header) {
-        if let Ok(directory) = crate::key_directory::read_key_directory_from_storage(
+        if let Ok(directory) = crate::key_directory::read_key_directory_via_page_cache(
             storage,
             key_directory_offset,
             Some(lockbox_id),

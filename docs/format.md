@@ -14,10 +14,11 @@ by transferring lockbox fixtures between Linux x64, Linux arm64, macOS arm64,
 and an emulated big-endian `s390x` environment. The big-endian job reads a
 little-endian-created fixture and emits a fixture that Linux x64 reads back.
 
-The physical unit of the lockbox is a fixed-size encrypted page. Higher
-level structures such as TOC nodes, file chunks, environment variables, key
-directories, free-space indexes, and commit roots are encoded as objects inside
-pages. Public APIs must not expose page management.
+The physical unit of the lockbox is a fixed-size encrypted page selected from a
+small set of page classes. Metadata pages are 128 KiB. File-data pages are
+8 MiB. Higher level structures such as TOC nodes, file chunks, environment
+variables, key directories, free-space indexes, and commit roots are encoded as
+objects inside pages. Public APIs must not expose page management.
 
 ## Fixed Header
 
@@ -52,10 +53,12 @@ unlock metadata and must not contain private file metadata.
 
 ## Pages
 
-Every page has the same physical size. The default page size is 8 MiB.
-Implementations may read and write whole pages for native storage. Browser/WASM
-clients may fetch page ranges over HTTP using the TOC offsets, but decryption
-still authenticates a whole page.
+Every page has a fixed physical size for its page class. Metadata pages are
+128 KiB. File-data pages are 8 MiB. Implementations may read and write whole
+pages for native storage, but page headers also expose the stored body length
+so readers can authenticate an intact page without requiring trailing padding.
+Browser/WASM clients may fetch page ranges over HTTP using the TOC offsets, but
+decryption still authenticates a whole page body.
 
 ```text
 offset  size  field
@@ -65,20 +68,34 @@ offset  size  field
 12      4     header length
 16      8     page id
 24      8     commit sequence that wrote this page
-32      12    AEAD nonce
-44      4     encrypted body length
+32      12    AEAD nonce, or zero for clear-text pages
+44      4     stored body length
 48      16    reserved header extension
 64      32    SHA-256 checksum over bytes 0..64
-H       m     encrypted body
-H+m     p     zero padding to the fixed page size
+H       m     stored body
+H+m     p     zero padding to the physical page size
 ```
 
 The nonce is generated per page write and must be unique for the content key. It
 must not be derived only from record kind, object kind, or commit sequence.
 
-Only the page header is public. Object kinds, object lengths, logical
-paths, symlink targets, environment variable names, permissions, compression
-selection, and file contents are inside the encrypted body.
+Most page bodies are encrypted with ChaCha20-Poly1305. Encrypted pages store
+the AEAD nonce in the page header and the ciphertext plus authentication tag in
+the stored body. The AEAD tag authenticates the page body and the associated
+data listed below.
+
+Some page classes are clear-text pages. Clear-text pages set public flag
+`0x0001`, store a zero nonce, and store `SHA-256(body) || body` as the stored
+body. Clear-text pages are not content-key encrypted, but the page cache/page
+codec still validates their checksum before returning decoded objects. The key
+directory is currently a clear-text page class because unlock metadata must be
+read before the content key is available.
+
+For encrypted pages, only the page header is public. Object kinds, object
+lengths, logical paths, symlink targets, environment variable names,
+permissions, compression selection, and file contents are inside the encrypted
+body. For clear-text pages, object headers and payloads are public and must not
+contain private file metadata.
 
 Page public-header checksums are generated and verified at the page
 cache/page-codec boundary. Higher-level TOC, file, recovery, and extraction code
@@ -92,11 +109,13 @@ Page AEAD associated data includes:
 - page id
 - commit sequence
 - public flags
-- encrypted body length
+- stored body length
 
 ## Page Body
 
-The decrypted page body is an object container.
+The decoded page body is an object container. For encrypted pages this is the
+decrypted AEAD plaintext. For clear-text pages this is the checksummed body
+after the checksum prefix has been validated and removed.
 
 ```text
 offset  size  field
@@ -123,7 +142,7 @@ profile internally.
 ## Compressed File Extents
 
 The production file-data layout is page-packed compressed extents, not one
-compressed object per physical page. A fixed 8 MiB physical page is a container.
+compressed object per physical page. A fixed 8 MiB file-data page is a container.
 Its encrypted body may contain:
 
 - many complete compressed small files
@@ -163,22 +182,46 @@ unlocked the content key.
 
 ## Page Cache Boundary
 
-Encryption and decryption are owned by the page cache. Higher layers
-construct or consume decoded page objects and are otherwise oblivious
-to encryption. On read, the cache loads fixed encrypted bytes from storage,
-authenticates and decrypts the page once, then caches the decoded page. On
+Encryption policy, clear-text page checksums, dirty tracking, and physical page
+writes are owned by the page cache. Higher layers construct or consume decoded
+page objects and are otherwise oblivious to whether the page is encrypted or
+clear-text. On read, the cache loads fixed page bytes from storage, validates
+the page header checksum, authenticates encrypted pages or verifies clear-text
+page checksums, decodes the page body once, then caches the decoded page. On
 write, callers submit decoded page objects; the cache encodes, compresses,
-encrypts, writes one fixed page to storage, and stores the decoded page in cache.
+encrypts or checksums according to page policy, writes one fixed page to
+storage, and stores the decoded page in cache.
 
 Raw page encode/decode helpers are format primitives. Production read/write
 paths should route through the cache boundary. Direct raw decoding is reserved
 for recovery scans and low-level format tests, where the caller starts from
 untrusted bytes rather than from an opened lockbox.
 
+Unlock is part of the cache boundary, not an exception to it. Key-directory
+pages are clear-text page-cache pages, so password and recipient unlock should
+read the current key-directory page through the page-cache read/decode path.
+Raw byte scanning is only a fallback for damaged headers, missing roots, or
+recovery-style mirror discovery.
+
+The fixed header is the direct-access bootstrap record. It may be read directly
+before any page roots are known, and it may be written directly when publishing
+a commit. Other page classes, including clear-text key-directory pages, use the
+page-cache read/write boundary.
+
+Compaction is a logical rewrite rather than an in-place page defragmenter. The
+implementation reads the current live TOC/env/key state, creates a fresh
+lockbox with the same lockbox id and content key, writes each live object
+through the normal page-cache APIs, commits that replacement, then swaps the
+backing storage. It does not move encrypted or clear-text pages into free slots
+inside the existing file, because that would require layout-specific rewrites of
+every physical reference type and would bypass the normal COW/redaction rules.
+
 ## Objects
 
-The object stream contains typed objects. Object headers are encrypted because
-they are part of the page body.
+The object stream contains typed objects. Object headers are private on
+encrypted pages because they are part of the encrypted page body. Object headers
+are public on clear-text pages, so clear-text page classes must be limited to
+public metadata.
 
 ```text
 offset  size  field
@@ -194,7 +237,13 @@ Object ids are stable references used by TOC entries and indexes. A logical file
 may reference one or more file-data objects. Multiple small logical files may be
 packed into one file-pack object.
 
-Initial object kinds:
+Symlinks are live TOC entries that reference symlink metadata objects. The live
+TOC stores the symlink node kind plus the metadata page offset, object length,
+and object id. It does not store the symlink target. The target is stored only
+inside the referenced symlink object, and many symlink objects may be packed into
+one metadata page.
+
+Object kinds:
 
 ```text
 1       commit root
@@ -203,11 +252,14 @@ Initial object kinds:
 4       file data
 5       packed file data
 6       symlink
-7       env set
-8       env delete
+7       reserved legacy env set; not emitted by the current format
+8       reserved legacy env delete; not emitted by the current format
 9       key directory
 10      free-space index leaf
 11      free-space index internal
+12      reserved legacy delete marker; not emitted by the current format
+13      env leaf node
+14      env internal node
 ```
 
 ## Commit Root
@@ -219,17 +271,16 @@ The commit root payload contains:
 
 ```text
 field
+commit-root payload version: 3
 commit sequence
-lockbox UUID
-format parameter set id
 TOC root object reference
+environment root object reference, or zero
 free-space index root object reference
 primary key-directory offset, or zero
 key-directory mirror offset A, or zero
 key-directory mirror offset B, or zero
 key-directory generation
 previous commit-root reference, or zero
-commit creation timestamp, optional and coarse
 commit flags
 ```
 
@@ -253,8 +304,11 @@ with an older but internally valid lockbox.
 ## Table Of Contents
 
 The TOC is a live-only copy-on-write BTree. Tombstones are not stored in the
-current TOC. Deletes remove entries from the live TOC and return old object/page
-references to the free-space index once they are no longer referenced.
+current TOC. Deletes remove entries from the live TOC, redact the referenced
+payload or metadata object through the page cache, and return old object/page
+references to the free-space index once they are no longer referenced. Deleted
+files and symlinks are not discoverable during recovery after their metadata has
+been redacted.
 
 Leaf payloads contain sorted manifest entries. Internal payloads contain sorted
 child separators and child object references.
@@ -272,6 +326,49 @@ Decode rules are intentionally strict:
 Updating a file rewrites the touched TOC leaf and changed ancestors. Unchanged
 TOC pages remain referenced by the previous and current commit roots until
 compaction reclaims unreachable history.
+
+## Environment Variables
+
+Environment variables are encrypted metadata, not files. They must not appear in
+file listings, file recovery listings, visualizations, or unauthenticated public
+metadata.
+
+The committed env namespace is live-only, like the TOC. It must contain only the
+current value for each env name. Old env values are secret material; they must
+not remain decryptable in old COW pages after `set_env`, `remove_env`, or
+recipient changes are committed. This is required because adding a recipient
+grants access to the lockbox content key, and that recipient could otherwise
+decrypt stale env pages containing secrets that are still valid elsewhere.
+
+The env structure is commit-root referenced. The commit root points to an env
+root object, or zero when no env vars exist. Env entries are packed into
+encrypted env leaf pages so many small env vars share a page. Env internal pages
+contain only sorted routing names and child page offsets; env values exist only
+in env leaves. Normal `get_env`, `list_env`, and `get_all_env` operations load
+from the env root and must not discover env vars by scanning the whole lockbox.
+
+Env pages must not embed forward or backward linked-list pointers as the primary
+structure. Page-embedded linked lists interact poorly with copy-on-write: when a
+middle page changes, every link that reaches it may need to be rewritten, and a
+tail/head mutation can force extra page rewrites. Use a root-referenced
+directory/tree or other immutable index structure. The current pre-1.0
+implementation writes a packed env BTree from the live namespace on env commits
+and reuses the same encoded-size grouping and routing-child codec as the TOC.
+
+An env update follows the same secret-redaction rule as file replacement:
+
+1. read the current env directory
+2. build replacement env page(s) containing only live env entries
+3. stage sanitized replacements for old env tree pages through the page cache
+4. publish the new env root in the next commit root
+5. add the old env tree page slots to the committed free-space index
+
+Appending a tombstone or replacement record without redacting the old value is
+not acceptable for env vars. Such a log can be useful for non-secret audit data,
+but env vars are treated as active secrets by default.
+
+No backwards-compatible env-history scan is supported. The format is still
+pre-release and there are no existing production vaults to migrate.
 
 ## Free-Space Index
 
@@ -315,35 +412,39 @@ bytes.
 It must not store paths, file names, environment variable names, or file
 contents.
 
-The key directory is intentionally readable before the content key is available.
-Its wrapped content-key values are authenticated by their wrapping algorithms; its
-outer structure is length-limited and protected by SHA-256 checksums so tools
-can reject malformed metadata early.
+The key directory is intentionally readable before the content key is available,
+so it is stored as a page-cache-managed clear-text metadata page. Its wrapped
+content-key values are authenticated by their wrapping algorithms. The page
+format owns integrity for the clear-text page by adding and validating the page
+body checksum. The key-directory payload itself is length-limited and contains
+only enough structure to parse the key slots.
 
-Every key-directory block has its own public recovery header:
+Every key-directory payload has this public header inside the key-directory
+page object:
 
 ```text
 offset  size  field
 0       8     magic: "LBX2KEY\0"
-8       2     key-directory version: 3
+8       2     key-directory version: 4
 10      2     flags
-12      4     header length: 128
+12      4     header length: 64
 16      8     total key-directory length
 24      8     key-directory generation
 32      16    lockbox UUID
 48      4     copy index
-52      4     reserved
-56      32    SHA-256 checksum over key-slot payload
-88      8     reserved
-96      32    SHA-256 checksum over bytes 0..96
-128     n     key-slot payload
+52      12    reserved
+64      n     key-slot payload
 ```
 
 The lockbox writes three copies of the key directory for every key-directory
 generation: a primary copy referenced by the fixed header, plus two mirror
-copies referenced by the commit root. Recovery can also scan the raw lockbox for
-`LBX2KEY\0` blocks, validate their checksums, group them by lockbox UUID, and
-use the highest generation that successfully unwraps the content key.
+copies referenced by the commit root. Key-directory generation changes only
+when key slots are created, updated, or removed; ordinary file, symlink, env, or
+TOC commits keep referencing the existing key-directory pages.
+
+Recovery can also scan the raw lockbox for clear-text key-directory pages,
+validate the page checksums, group decoded key-directory payloads by lockbox
+UUID, and use the highest generation that successfully unwraps the content key.
 
 The fixed header is therefore a fast path, not the only path. If the header is
 corrupt, password/public-key unlock can recover the lockbox UUID and content key
@@ -355,10 +456,11 @@ history may contain old key directories or data pages, the CLI must treat key
 removal as a conservative maintenance operation:
 
 1. remove the key slot from the live key directory
-2. rewrite reachable encrypted pages as needed under the retained content key or
-   a new content key
-3. compact unreachable old pages
-4. commit the new key directory and free-space index
+2. logically rewrite reachable files, symlinks, env vars, TOC nodes, free-space
+   metadata, and key-directory pages through the page cache into a replacement
+   lockbox
+3. commit the replacement lockbox
+4. swap the replacement backing storage over the old one
 
 ## Page Cache
 
@@ -367,6 +469,15 @@ pages are held in a weighted LRU cache. Dirty pages stay in the cache and are
 visible to reads from the same opened lockbox, but they are not written to the
 backing store until `commit()` flushes them and publishes a new commit root.
 There is no background writer.
+
+The cache is given explicit workload policy by the caller-facing lockbox layer.
+It does not infer that a page is insert-only from page contents or offsets. In
+the default `Interactive` profile, dirty pages are retained after flush. In the
+`BulkImport` profile, newly appended file-data pages may be flushed as
+discard-after-flush pages so large initial imports do not keep every written
+data page resident. Metadata pages, redaction writes, TOC nodes, env tree nodes,
+free-index pages, key-directory pages, and commit roots remain on the normal
+commit-time path.
 
 Copy-on-write happens at commit time. This allows the same dirty page to absorb
 multiple logical mutations before the library allocates and writes replacement
@@ -377,12 +488,12 @@ path must redact the physical page that held the old encrypted object. If the
 old page also contains live objects, those live objects are relocated to a new
 page first; then the old physical page is overwritten with zeros and removed
 from the decoded-page cache. This is required because old COW pages may still
-contain decryptable ciphertext even after the live TOC no longer references
-them.
+contain decryptable ciphertext even after the live TOC or env root no longer
+references them.
 
 `CacheLimit::Auto` is page-aware:
 
-- minimum native cache: max of eight pages or 64 MiB
+- minimum native cache: max of sixty-four metadata pages or 64 MiB
 - native target: about 15% of currently available/reclaimable memory
 - native cap: 4 GiB by default
 - WASM default: 64 MiB unless the embedder supplies an explicit limit

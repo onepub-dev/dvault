@@ -235,6 +235,81 @@ fn bench_toc_structure(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_metadata_operations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("metadata_operations");
+    group.sample_size(10);
+
+    group.bench_function("rename_16m_file_commit", |b| {
+        b.iter_batched(
+            || {
+                let mut lockbox = Lockbox::create(KEY);
+                lockbox
+                    .put_file_from_reader(
+                        "/large/source.bin",
+                        PatternReader::new(16 * 1024 * 1024, Pattern::Randomish),
+                    )
+                    .unwrap();
+                lockbox.commit().unwrap();
+                lockbox
+            },
+            |mut lockbox| {
+                lockbox
+                    .rename("/large/source.bin", "/archive/renamed.bin")
+                    .unwrap();
+                lockbox.commit().unwrap();
+                black_box(lockbox.stat("/archive/renamed.bin").unwrap().len);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("list_env_1000", |b| {
+        b.iter_batched(
+            || {
+                let mut lockbox = Lockbox::create(KEY);
+                for i in 0..1000 {
+                    lockbox
+                        .set_env(&format!("LOCKBOX_ENV_{i:04}"), "value")
+                        .unwrap();
+                }
+                lockbox.commit().unwrap();
+                Lockbox::open(lockbox.to_bytes(), KEY).unwrap()
+            },
+            |lockbox| {
+                let names = lockbox.list_env().unwrap();
+                black_box(names.len());
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("compact_16m_file_after_delete", |b| {
+        b.iter_batched(
+            || {
+                let mut lockbox = Lockbox::create(KEY);
+                lockbox
+                    .put_file_from_reader(
+                        "/large/blob.bin",
+                        PatternReader::new(16 * 1024 * 1024, Pattern::Randomish),
+                    )
+                    .unwrap();
+                lockbox.put_file("/delete-me.txt", b"delete").unwrap();
+                lockbox.commit().unwrap();
+                lockbox.delete("/delete-me.txt").unwrap();
+                lockbox
+            },
+            |mut lockbox| {
+                lockbox.compact().unwrap();
+                lockbox.commit().unwrap();
+                black_box(lockbox.stat("/large/blob.bin").unwrap().len);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
 fn prepared_small_lockbox(files: usize, file_size: usize) -> Lockbox {
     let payload = vec![b'x'; file_size];
     let mut lockbox = Lockbox::create(KEY);
@@ -332,6 +407,7 @@ criterion_group!(
     bench_mixed_tree,
     bench_large_file,
     bench_append_delete,
-    bench_toc_structure
+    bench_toc_structure,
+    bench_metadata_operations
 );
 criterion_main!(benches);

@@ -10,9 +10,11 @@ cryptographic review.
 - `..`, Windows drive syntax, UNC-like roots, backslashes, controls, dangerous
   Unicode controls, and non-canonical Unicode metadata are rejected.
 - Symlink paths and targets use the same logical-path rules.
-- Fixed-size pages are encrypted and authenticated with
-  ChaCha20-Poly1305. Each page stores a unique nonce in the page header and
-  authenticates page identity through AEAD AAD.
+- Fixed-size private pages are encrypted and authenticated with
+  ChaCha20-Poly1305. Each encrypted page stores a unique nonce in the page
+  header and authenticates page identity through AEAD AAD. Clear-text pages,
+  currently used for key directories, are page-cache managed and protected by
+  page-format checksums.
 - Password slots use Argon2id with per-slot salts.
 - Recipient slots use ML-KEM-1024 wrapping.
 - Key directories are capped at 1 MiB.
@@ -23,10 +25,15 @@ cryptographic review.
   internal separators, invalid child offsets, and invalid stored paths before
   extraction trusts TOC metadata.
 - Current commits now publish an authenticated commit-root object inside a
-  fixed-size encrypted page. The commit root points at the live TOC root
-  and the persisted free-space index.
-- The committed TOC is live-only; deletes are represented in recovery history,
-  not as tombstones in the current namespace.
+  fixed-size encrypted page. The commit root points at the live TOC root,
+  the live env root, and the persisted free-space index.
+- The committed TOC is live-only; deletes redact the referenced payload or
+  metadata object and are not represented as tombstones or recovery history.
+- The committed env namespace is live-only. Env values are active secrets, so
+  updates and deletes stage sanitized replacements for old env tree pages
+  through the page cache before a newly added recipient can decrypt stale
+  values. Linked env-page logs, tombstone histories, and legacy env scans are
+  not accepted by the current pre-release format.
 
 ## Risks And Required Follow-Up
 
@@ -43,9 +50,13 @@ cryptographic review.
   help only and should be discouraged for real use.
 - The core still exposes raw-key APIs for developer/testing use. Normal bindings
   should guide callers toward password/recipient unlock APIs.
-- The live storage path now uses fixed-size encrypted pages. Format
-  review should treat `docs/format.md` as the current contract and continue to
-  audit that all normal reads and writes pass through the page cache.
+- The live storage path now uses fixed-size page-cache managed pages. Format
+  review should treat `docs/format.md` as the current contract. Normal writes,
+  including compaction rewrites, pass through the page cache. Unlock reads of
+  current key-directory pages also go through the page-cache page read/decode
+  boundary because key directories are clear-text pages. Direct raw storage
+  reads are limited to fixed-header reads, recovery scans, and low-level format
+  handling.
 - Memory locking is best effort. It can fail due to OS limits; zeroization is
   still the reliable baseline.
 - Compression-ratio and decompression-bomb tests cover the core page body

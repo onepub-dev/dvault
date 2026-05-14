@@ -2,7 +2,6 @@ use super::Lockbox;
 use crate::logical_path::{
     canonicalize_api_path as canonicalize_path, glob_matches, validate_glob,
 };
-use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::{Entry, ListIter, ListOptions, Result};
 
@@ -47,7 +46,7 @@ impl Lockbox {
                 }
             }
             yielded += 1;
-            Some(Ok(entry.to_public_entry()))
+            Some(self.public_entry_for_manifest(entry))
         });
         Ok(ListIter::new(Box::new(iter)))
     }
@@ -68,6 +67,17 @@ impl Lockbox {
         self.manifest
             .get(path.as_str())
             .filter(|e| !e.deleted)
-            .map(ManifestEntry::to_public_entry)
+            .and_then(|entry| self.public_entry_for_manifest(entry).ok())
+    }
+
+    fn public_entry_for_manifest(
+        &self,
+        entry: &crate::manifest_entry::ManifestEntry,
+    ) -> Result<Entry> {
+        let mut public = entry.to_public_entry();
+        if entry.node_kind == NodeKind::Symlink {
+            public.symlink_target = Some(self.symlink_target_for_entry(entry)?);
+        }
+        Ok(public)
     }
 }

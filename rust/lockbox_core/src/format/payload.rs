@@ -2,7 +2,7 @@ use crate::file_chunk::{DecodedFileChunk, PendingFileChunk};
 use crate::logical_path::{
     validate_stored_path as validate_path, validate_symlink_paths as validate_symlink,
 };
-use crate::security::{validate_env_name, validate_env_value, validate_permissions};
+use crate::security::validate_permissions;
 use crate::{Error, Result};
 
 #[cfg(test)]
@@ -81,6 +81,24 @@ pub(crate) fn encode_file_fragment_payload(
 }
 
 pub(crate) fn decode_file_fragment_payload(payload: &[u8]) -> Result<DecodedFileChunk> {
+    let view = decode_file_fragment_payload_view(payload)?;
+    Ok(DecodedFileChunk {
+        path: view.path.to_string(),
+        permissions: view.permissions,
+        total_len: view.total_len,
+        file_offset: view.file_offset,
+        len: view.len,
+        compressed_len: view.compressed_len,
+        compression: view.compression,
+        frame_id: view.frame_id,
+        fragment_offset: view.fragment_offset,
+        data: view.data.to_vec(),
+    })
+}
+
+pub(crate) fn decode_file_fragment_payload_view(
+    payload: &[u8],
+) -> Result<DecodedFileChunkView<'_>> {
     if payload.len() < 2 {
         return Err(Error::CorruptRecord);
     }
@@ -116,8 +134,8 @@ pub(crate) fn decode_file_fragment_payload(payload: &[u8]) -> Result<DecodedFile
     if offset + data_len != payload.len() {
         return Err(Error::CorruptRecord);
     }
-    Ok(DecodedFileChunk {
-        path: path.to_string(),
+    Ok(DecodedFileChunkView {
+        path,
         permissions,
         total_len,
         file_offset,
@@ -126,8 +144,21 @@ pub(crate) fn decode_file_fragment_payload(payload: &[u8]) -> Result<DecodedFile
         compression,
         frame_id,
         fragment_offset,
-        data: payload[offset..].to_vec(),
+        data: &payload[offset..],
     })
+}
+
+pub(crate) struct DecodedFileChunkView<'a> {
+    pub(crate) path: &'a str,
+    pub(crate) permissions: u32,
+    pub(crate) total_len: u64,
+    pub(crate) file_offset: u64,
+    pub(crate) len: u64,
+    pub(crate) compressed_len: u64,
+    pub(crate) compression: u8,
+    pub(crate) frame_id: u64,
+    pub(crate) fragment_offset: u64,
+    pub(crate) data: &'a [u8],
 }
 
 pub(crate) fn encode_symlink_payload(path: &str, target: &str) -> Vec<u8> {
@@ -169,112 +200,6 @@ pub(crate) fn decode_symlink_payload(payload: &[u8]) -> Result<(String, String)>
 }
 
 #[cfg(test)]
-pub(crate) fn encode_delete_payload(path: &str) -> Vec<u8> {
-    encode_delete_payloads(std::slice::from_ref(&path))
-}
-
-pub(crate) fn encode_delete_payloads(paths: &[&str]) -> Vec<u8> {
-    let capacity = paths.iter().map(|path| 2 + path.len()).sum();
-    let mut out = Vec::with_capacity(capacity);
-    for path in paths {
-        out.extend_from_slice(&(path.len() as u16).to_le_bytes());
-        out.extend_from_slice(path.as_bytes());
-    }
-    out
-}
-
-#[cfg(test)]
-pub(crate) fn decode_delete_payload(payload: &[u8]) -> Result<String> {
-    decode_delete_payloads(payload)?
-        .into_iter()
-        .next()
-        .ok_or(Error::CorruptRecord)
-}
-
-pub(crate) fn decode_delete_payloads(payload: &[u8]) -> Result<Vec<String>> {
-    if payload.len() < 2 {
-        return Err(Error::CorruptRecord);
-    }
-    let mut offset = 0usize;
-    let mut paths = Vec::new();
-    while offset < payload.len() {
-        if offset + 2 > payload.len() {
-            return Err(Error::CorruptRecord);
-        }
-        let path_len = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap()) as usize;
-        offset += 2;
-        if offset + path_len > payload.len() {
-            return Err(Error::CorruptRecord);
-        }
-        let path = String::from_utf8(payload[offset..offset + path_len].to_vec())
-            .map_err(|_| Error::CorruptRecord)?;
-        validate_path(&path)?;
-        paths.push(path);
-        offset += path_len;
-    }
-    Ok(paths)
-}
-
-pub(crate) fn encode_env_payload(name: &str, value: &str) -> Vec<u8> {
-    let name_bytes = name.as_bytes();
-    let value_bytes = value.as_bytes();
-    let mut out = Vec::with_capacity(2 + name_bytes.len() + 4 + value_bytes.len());
-    out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
-    out.extend_from_slice(name_bytes);
-    out.extend_from_slice(&(value_bytes.len() as u32).to_le_bytes());
-    out.extend_from_slice(value_bytes);
-    out
-}
-
-pub(crate) fn decode_env_payload(payload: &[u8]) -> Result<(String, String)> {
-    if payload.len() < 6 {
-        return Err(Error::CorruptRecord);
-    }
-    let name_len = u16::from_le_bytes(payload[0..2].try_into().unwrap()) as usize;
-    if payload.len() < 2 + name_len + 4 {
-        return Err(Error::CorruptRecord);
-    }
-    let name =
-        String::from_utf8(payload[2..2 + name_len].to_vec()).map_err(|_| Error::CorruptRecord)?;
-    let name = validate_env_name(&name)?;
-    let value_len_start = 2 + name_len;
-    let value_len = u32::from_le_bytes(
-        payload[value_len_start..value_len_start + 4]
-            .try_into()
-            .unwrap(),
-    ) as usize;
-    let value_start = value_len_start + 4;
-    if payload.len() != value_start + value_len {
-        return Err(Error::CorruptRecord);
-    }
-    let value = String::from_utf8(payload[value_start..value_start + value_len].to_vec())
-        .map_err(|_| Error::CorruptRecord)?;
-    let value = validate_env_value(&value)?;
-    Ok((name, value))
-}
-
-pub(crate) fn encode_env_delete_payload(name: &str) -> Vec<u8> {
-    let name_bytes = name.as_bytes();
-    let mut out = Vec::with_capacity(2 + name_bytes.len());
-    out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
-    out.extend_from_slice(name_bytes);
-    out
-}
-
-pub(crate) fn decode_env_delete_payload(payload: &[u8]) -> Result<String> {
-    if payload.len() < 2 {
-        return Err(Error::CorruptRecord);
-    }
-    let name_len = u16::from_le_bytes(payload[0..2].try_into().unwrap()) as usize;
-    if payload.len() != 2 + name_len {
-        return Err(Error::CorruptRecord);
-    }
-    let name =
-        String::from_utf8(payload[2..2 + name_len].to_vec()).map_err(|_| Error::CorruptRecord)?;
-    validate_env_name(&name)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::constants::DEFAULT_FILE_PERMISSIONS;
@@ -284,15 +209,6 @@ mod tests {
         let payload = encode_file_payload("/safe/../evil.txt", DEFAULT_FILE_PERMISSIONS, b"evil");
         assert!(matches!(
             decode_file_payload(&payload),
-            Err(Error::InvalidPath(_))
-        ));
-    }
-
-    #[test]
-    fn decoded_delete_payload_rejects_tampered_traversal_path() {
-        let payload = encode_delete_payload("/safe/../evil.txt");
-        assert!(matches!(
-            decode_delete_payload(&payload),
             Err(Error::InvalidPath(_))
         ));
     }

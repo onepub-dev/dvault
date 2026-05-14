@@ -1,25 +1,24 @@
 use super::Lockbox;
-use crate::constants::DEFAULT_MAX_PAGE_BODY_BYTES;
-use crate::format::encode_delete_payloads;
 use crate::logical_path::canonicalize_api_path as canonicalize_path;
-use crate::manifest_entry::ManifestEntry;
-use crate::node_kind::NodeKind;
-use crate::record::RecordKind;
+use crate::logical_path::LogicalPath;
 use crate::{Error, Result};
 
 impl Lockbox {
     pub fn delete(&mut self, path: &str) -> Result<()> {
         let path = canonicalize_path(path, false)?;
-        self.pending_small_files.remove(&path);
+        if self.should_discard_file_pages_after_flush()
+            && self.pending_small_files.contains_key(&path)
+        {
+            self.flush_bulk_small_file_packer()?;
+        }
+        self.remove_pending_small_file(&path);
         let old = self
             .manifest
             .get(path.as_str())
             .filter(|entry| !entry.deleted)
             .cloned()
             .ok_or_else(|| Error::NotFound(path.clone()))?;
-        if old.record_len != 0 || !old.chunks.is_empty() {
-            self.pending_deletes.push(path.clone());
-        }
+        self.pending_symlinks.remove(&path);
         self.free_entry_slots(old.clone())?;
         let dirty_path = old.path.clone();
         self.manifest.remove(path.as_str());
@@ -27,54 +26,25 @@ impl Lockbox {
         Ok(())
     }
 
-    pub(crate) fn flush_pending_deletes(&mut self) -> Result<()> {
-        if self.pending_deletes.is_empty() {
-            return Ok(());
-        }
-
-        let pending = std::mem::take(&mut self.pending_deletes);
-        let mut batch = Vec::new();
-        let mut batch_size = 0usize;
-        for path in pending {
-            let entry_size = 2 + path.len();
-            if !batch.is_empty() && batch_size + entry_size > DEFAULT_MAX_PAGE_BODY_BYTES {
-                self.write_delete_batch(&batch)?;
-                batch.clear();
-                batch_size = 0;
-            }
-            batch_size += entry_size;
-            batch.push(path);
-        }
-        if !batch.is_empty() {
-            self.write_delete_batch(&batch)?;
-        }
-        Ok(())
-    }
-
-    fn write_delete_batch(&mut self, paths: &[String]) -> Result<()> {
-        self.sequence += 1;
-        let refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
-        let payload = encode_delete_payloads(&refs);
-        self.write_object_page(RecordKind::Delete, self.sequence, payload)?;
-        Ok(())
-    }
-
     pub fn rename(&mut self, from: &str, to: &str) -> Result<()> {
         if let Ok(from_path) = canonicalize_path(from, false) {
-            if let Some(entry) = self
+            if self
                 .manifest
                 .get(from_path.as_str())
                 .filter(|entry| !entry.deleted)
-                .cloned()
+                .is_some()
             {
-                self.rename_entry(&from_path, to, &entry)?;
-                self.delete(from)?;
+                let to_path = canonicalize_path(to, false)?;
+                self.rename_manifest_entry(&from_path, &to_path)?;
                 return Ok(());
             }
         }
 
         let from_dir = canonicalize_path(from, true)?;
         let to_dir = canonicalize_path(to, true)?;
+        if from_dir == to_dir {
+            return Ok(());
+        }
         if from_dir == "/" || to_dir.starts_with(&format!("{}/", from_dir.trim_end_matches('/'))) {
             return Err(Error::InvalidPath(to_dir));
         }
@@ -97,22 +67,62 @@ impl Lockbox {
             } else {
                 format!("{}{}", to_dir.trim_end_matches('/'), suffix)
             };
-            self.rename_entry(&entry.path, &to_path, &entry)?;
-            self.delete(&entry.path)?;
+            self.rename_manifest_entry(&entry.path, &to_path)?;
         }
         Ok(())
     }
 
-    fn rename_entry(&mut self, from_path: &str, to: &str, entry: &ManifestEntry) -> Result<()> {
-        match entry.node_kind {
-            NodeKind::File => {
-                let data = self.get_file(from_path)?;
-                self.put_file_with_permissions(to, &data, entry.permissions)
-            }
-            NodeKind::Symlink => {
-                let target = self.get_symlink_target(from_path)?;
-                self.put_symlink(to, &target)
-            }
+    fn rename_manifest_entry(&mut self, from_path: &str, to_path: &str) -> Result<()> {
+        if from_path == to_path {
+            return Ok(());
         }
+
+        if self.should_discard_file_pages_after_flush()
+            && (self.pending_small_files.contains_key(from_path)
+                || self.pending_small_files.contains_key(to_path))
+        {
+            self.flush_bulk_small_file_packer()?;
+        }
+
+        if let Some(old_target) = self
+            .manifest
+            .get(to_path)
+            .filter(|entry| !entry.deleted)
+            .cloned()
+        {
+            self.pending_symlinks.remove(to_path);
+            self.free_entry_slots(old_target)?;
+            self.manifest.remove(to_path);
+        }
+
+        let mut entry = self
+            .manifest
+            .remove(from_path)
+            .filter(|entry| !entry.deleted)
+            .ok_or_else(|| Error::NotFound(from_path.to_string()))?;
+
+        if let Some(pending) = self.remove_pending_small_file(from_path) {
+            self.insert_pending_small_file(
+                to_path.to_string(),
+                crate::file_chunk::PendingFileChunk {
+                    path: to_path.to_string(),
+                    ..pending
+                },
+            );
+        }
+        if let Some(target) = self.pending_symlinks.remove(from_path) {
+            self.pending_symlinks.insert(to_path.to_string(), target);
+        } else if entry.node_kind == crate::node_kind::NodeKind::Symlink {
+            let target = self.symlink_target_for_entry(&entry)?;
+            self.free_entry_slots(entry.clone())?;
+            self.pending_symlinks.insert(to_path.to_string(), target);
+        }
+
+        entry.path = to_path.to_string();
+        self.manifest
+            .insert(LogicalPath::from_canonical(entry.path.clone()), entry);
+        self.mark_toc_dirty(from_path);
+        self.mark_toc_dirty(to_path);
+        Ok(())
     }
 }

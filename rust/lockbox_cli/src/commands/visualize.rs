@@ -13,7 +13,7 @@ fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
     println!("  size: {} bytes", lb.storage_len()?);
 
     let key_slot_count = lb.list_key_slots().len();
-    let env_count = lb.list_env().len();
+    let env_count = lb.list_env()?.len();
     let mut file_count = 0usize;
     let mut symlink_count = 0usize;
     let mut total_file_bytes = 0u64;

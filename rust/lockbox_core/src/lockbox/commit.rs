@@ -10,15 +10,20 @@ use crate::free_index::{
 };
 use crate::host_path::HostPath;
 use crate::key_directory::encode_key_directory;
-use crate::page::{PageObject, PageObjectKind};
+use crate::page::{page_size_for_objects, PageObject, PageObjectKind};
 use crate::storage::{Storage, StorageBackend};
 use crate::{Error, LockboxOptions, Result};
 use std::fs;
 use std::path::Path;
 
 impl Lockbox {
+    pub fn try_to_bytes(&self) -> Result<Vec<u8>> {
+        self.bytes()
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
-        self.bytes().expect("failed to materialize lockbox bytes")
+        self.try_to_bytes()
+            .expect("failed to materialize lockbox bytes")
     }
 
     pub fn open_path(path: impl AsRef<Path>, key: impl AsRef<[u8]>) -> Result<Self> {
@@ -43,9 +48,22 @@ impl Lockbox {
         key: impl AsRef<[u8]>,
         options: LockboxOptions,
     ) -> Result<Self> {
+        Self::create_path_with_lockbox_id_and_options(
+            path,
+            key,
+            crate::lockbox_id::LockboxId::new_random()?,
+            options,
+        )
+    }
+
+    pub(crate) fn create_path_with_lockbox_id_and_options(
+        path: impl AsRef<Path>,
+        key: impl AsRef<[u8]>,
+        lockbox_id: crate::lockbox_id::LockboxId,
+        options: LockboxOptions,
+    ) -> Result<Self> {
         let path = HostPath::new(path);
         let mut bytes = vec![0; crate::constants::HEADER_LEN];
-        let lockbox_id = crate::lockbox_id::LockboxId::new_random()?;
         write_header(&mut bytes, 0, 0, 0, lockbox_id);
         let mut lockbox = Self::open_storage(
             StorageBackend::create_file(path.as_path(), &bytes)?,
@@ -74,35 +92,38 @@ impl Lockbox {
 
     fn commit_inner(&mut self) -> Result<()> {
         self.flush_pending_small_files()?;
-        self.flush_pending_deletes()?;
-        if self.needs_packing {
+        self.flush_pending_symlinks()?;
+        if self.needs_packing && !self.should_discard_file_pages_after_flush() {
             self.pack_small_file_pages()?;
             self.needs_packing = false;
+        } else if self.needs_packing {
+            self.needs_packing = false;
         }
+        self.stage_env_tree_redactions()?;
         self.apply_pending_redactions()?;
         if self.toc_root.is_some()
             && self.dirty_toc_paths.is_empty()
-            && self.key_slots.is_empty()
+            && !self.dirty_env
+            && !self.dirty_key_directory
             && !self.has_dirty_pages()
         {
             return Ok(());
         }
+        self.env_root_offset = self.commit_env_tree()?;
         self.manifest_offset = self.commit_toc_btree()?;
         let manifest_offset = self.manifest_offset;
         self.free_index_offset = self.write_free_index()?;
         self.sequence += 1;
-        let key_directory_generation = self.sequence;
         self.flush_dirty_pages()?;
-        let key_directory_offsets = self.write_key_directory_mirrors(key_directory_generation)?;
-        self.key_directory_offset = key_directory_offsets[0];
-        self.key_directory_mirror_offsets = [key_directory_offsets[1], key_directory_offsets[2]];
+        self.write_key_directory_mirrors_if_dirty()?;
         let commit_root_payload = encode_commit_root(&CommitRoot {
             sequence: self.sequence,
             toc_root_offset: manifest_offset,
+            env_root_offset: self.env_root_offset,
             free_index_root_offset: self.free_index_offset,
             key_directory_offset: self.key_directory_offset,
             key_directory_mirror_offsets: self.key_directory_mirror_offsets,
-            key_directory_generation,
+            key_directory_generation: self.key_directory_generation,
             previous_commit_root_offset: self.commit_root_offset,
             flags: 0,
         });
@@ -124,18 +145,60 @@ impl Lockbox {
         Ok(())
     }
 
-    fn write_key_directory_mirrors(&mut self, generation: u64) -> Result<[u64; 3]> {
+    fn write_key_directory_mirrors_if_dirty(&mut self) -> Result<()> {
+        if !self.dirty_key_directory {
+            return Ok(());
+        }
+        let old_offsets = [
+            self.key_directory_offset,
+            self.key_directory_mirror_offsets[0],
+            self.key_directory_mirror_offsets[1],
+        ];
         if self.key_slots.is_empty() {
-            return Ok([0, 0, 0]);
+            self.key_directory_offset = 0;
+            self.key_directory_mirror_offsets = [0, 0];
+            self.dirty_key_directory = false;
+            for offset in old_offsets {
+                self.zero_key_directory_page(offset)?;
+            }
+            return Ok(());
         }
         let key_slots = self.key_slots.clone();
         let mut offsets = [0u64; 3];
         for (copy_index, offset) in offsets.iter_mut().enumerate() {
-            let key_directory =
-                encode_key_directory(&key_slots, self.lockbox_id, generation, copy_index as u32)?;
-            *offset = self.storage.append(&key_directory)?;
+            let key_directory = encode_key_directory(
+                &key_slots,
+                self.lockbox_id,
+                self.key_directory_generation,
+                copy_index as u32,
+            )?;
+            let object = PageObject {
+                kind: PageObjectKind::KeyDirectory,
+                id: self.sequence,
+                payload: key_directory,
+            };
+            let page_offset = self
+                .allocate_page_offset(page_size_for_objects(std::slice::from_ref(&object)) as u64)?;
+            self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
+            *offset = page_offset;
         }
-        Ok(offsets)
+        self.key_directory_offset = offsets[0];
+        self.key_directory_mirror_offsets = [offsets[1], offsets[2]];
+        self.dirty_key_directory = false;
+        for offset in old_offsets {
+            self.zero_key_directory_page(offset)?;
+        }
+        Ok(())
+    }
+
+    fn zero_key_directory_page(&mut self, offset: u64) -> Result<()> {
+        if offset != 0 {
+            self.zero_page_and_free(crate::free_slot::FreeSlot {
+                offset,
+                len: crate::page::DEFAULT_METADATA_PAGE_BYTES as u64,
+            })?;
+        }
+        Ok(())
     }
 
     fn commit_toc_btree(&mut self) -> Result<u64> {
@@ -373,12 +436,13 @@ impl Lockbox {
     }
 
     fn append_toc_page(&mut self, kind: PageObjectKind, payload: Vec<u8>) -> Result<u64> {
-        let page_offset = self.allocate_page_offset()?;
         let object = PageObject {
             kind,
             id: self.sequence,
             payload,
         };
+        let page_offset =
+            self.allocate_page_offset(page_size_for_objects(std::slice::from_ref(&object)) as u64)?;
         self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
         Ok(page_offset)
     }
@@ -446,9 +510,12 @@ struct CommitRollback {
     sequence: u64,
     commit_root_offset: u64,
     manifest_offset: u64,
+    env_root_offset: u64,
     free_index_offset: u64,
     key_directory_offset: u64,
     key_directory_mirror_offsets: [u64; 2],
+    key_directory_generation: u64,
+    dirty_key_directory: bool,
     key_slots: Vec<crate::key_slot::KeySlot>,
     manifest: std::collections::BTreeMap<
         crate::logical_path::LogicalPath,
@@ -458,12 +525,18 @@ struct CommitRollback {
     toc_leaves: Vec<TocLeaf>,
     dirty_toc_paths: std::collections::BTreeSet<crate::logical_path::LogicalPath>,
     env_vars: Option<std::collections::BTreeMap<String, String>>,
+    env_root: Option<crate::env_btree::EnvTreeNode>,
+    env_leaves: Vec<crate::env_btree::EnvLeaf>,
+    dirty_env: bool,
     free_space: crate::free_slot::FreeSpace,
     record_ref_counts: std::collections::HashMap<u64, usize, crate::fast_hash::FastBuildHasher>,
     pending_small_files: std::collections::BTreeMap<String, crate::file_chunk::PendingFileChunk>,
+    pending_small_file_bytes: usize,
+    bulk_small_file_packer:
+        crate::page_object_packer::PageObjectPacker<crate::file_chunk::PackedSmallFile>,
+    pending_symlinks: std::collections::BTreeMap<String, String>,
     pending_redactions: std::collections::BTreeMap<u64, super::PendingRedaction>,
     redacted_free_slots: Vec<crate::free_slot::FreeSlot>,
-    pending_deletes: Vec<String>,
     needs_packing: bool,
 }
 
@@ -473,21 +546,29 @@ impl CommitRollback {
             sequence: lockbox.sequence,
             commit_root_offset: lockbox.commit_root_offset,
             manifest_offset: lockbox.manifest_offset,
+            env_root_offset: lockbox.env_root_offset,
             free_index_offset: lockbox.free_index_offset,
             key_directory_offset: lockbox.key_directory_offset,
             key_directory_mirror_offsets: lockbox.key_directory_mirror_offsets,
+            key_directory_generation: lockbox.key_directory_generation,
+            dirty_key_directory: lockbox.dirty_key_directory,
             key_slots: lockbox.key_slots.clone(),
             manifest: lockbox.manifest.clone(),
             toc_root: lockbox.toc_root.clone(),
             toc_leaves: lockbox.toc_leaves.clone(),
             dirty_toc_paths: lockbox.dirty_toc_paths.clone(),
             env_vars: lockbox.env_vars.borrow().clone(),
+            env_root: lockbox.env_root.clone(),
+            env_leaves: lockbox.env_leaves.clone(),
+            dirty_env: lockbox.dirty_env,
             free_space: lockbox.free_space.clone(),
             record_ref_counts: lockbox.record_ref_counts.clone(),
             pending_small_files: lockbox.pending_small_files.clone(),
+            pending_small_file_bytes: lockbox.pending_small_file_bytes,
+            bulk_small_file_packer: lockbox.bulk_small_file_packer.clone(),
+            pending_symlinks: lockbox.pending_symlinks.clone(),
             pending_redactions: lockbox.pending_redactions.clone(),
             redacted_free_slots: lockbox.redacted_free_slots.clone(),
-            pending_deletes: lockbox.pending_deletes.clone(),
             needs_packing: lockbox.needs_packing,
         }
     }
@@ -496,21 +577,29 @@ impl CommitRollback {
         lockbox.sequence = self.sequence;
         lockbox.commit_root_offset = self.commit_root_offset;
         lockbox.manifest_offset = self.manifest_offset;
+        lockbox.env_root_offset = self.env_root_offset;
         lockbox.free_index_offset = self.free_index_offset;
         lockbox.key_directory_offset = self.key_directory_offset;
         lockbox.key_directory_mirror_offsets = self.key_directory_mirror_offsets;
+        lockbox.key_directory_generation = self.key_directory_generation;
+        lockbox.dirty_key_directory = self.dirty_key_directory;
         lockbox.key_slots = self.key_slots;
         lockbox.manifest = self.manifest;
         lockbox.toc_root = self.toc_root;
         lockbox.toc_leaves = self.toc_leaves;
         lockbox.dirty_toc_paths = self.dirty_toc_paths;
         lockbox.env_vars.replace(self.env_vars);
+        lockbox.env_root = self.env_root;
+        lockbox.env_leaves = self.env_leaves;
+        lockbox.dirty_env = self.dirty_env;
         lockbox.free_space = self.free_space;
         lockbox.record_ref_counts = self.record_ref_counts;
         lockbox.pending_small_files = self.pending_small_files;
+        lockbox.pending_small_file_bytes = self.pending_small_file_bytes;
+        lockbox.bulk_small_file_packer = self.bulk_small_file_packer;
+        lockbox.pending_symlinks = self.pending_symlinks;
         lockbox.pending_redactions = self.pending_redactions;
         lockbox.redacted_free_slots = self.redacted_free_slots;
-        lockbox.pending_deletes = self.pending_deletes;
         lockbox.needs_packing = self.needs_packing;
         lockbox.page_manager.borrow_mut().clear();
     }
@@ -523,9 +612,14 @@ fn same_leaf_entries(
     old.len() == new.len()
         && old.iter().zip(new).all(|(old, new)| {
             old.path == new.path
+                && old.len == new.len
                 && old.record_offset == new.record_offset
                 && old.record_len == new.record_len
+                && old.record_object_id == new.record_object_id
                 && old.deleted == new.deleted
+                && old.node_kind == new.node_kind
+                && old.permissions == new.permissions
+                && old.chunks == new.chunks
         })
 }
 
@@ -548,16 +642,14 @@ fn leaf_directory_is_compatible(old: &[TocLeaf], new: &[TocLeaf]) -> bool {
 mod tests {
     use super::*;
     use crate::constants::DEFAULT_FILE_PERMISSIONS;
-    use crate::file_chunk::{FileChunk, FileFragment};
     use crate::logical_path::LogicalPath;
     use crate::manifest_entry::ManifestEntry;
     use crate::node_kind::NodeKind;
-    use crate::page::DEFAULT_PAGE_BYTES;
 
     #[test]
     fn compatible_toc_update_rewrites_only_changed_leaf_and_ancestors() {
         let mut lb = Lockbox::create("secret");
-        for entry in synthetic_manifest_entries(40_000) {
+        for entry in synthetic_manifest_entries(150_000) {
             lb.manifest
                 .insert(LogicalPath::from_canonical(entry.path.clone()), entry);
         }
@@ -623,8 +715,7 @@ mod tests {
         assert_eq!(header_root_offset, lb.commit_root_offset);
         assert_ne!(header_root_offset, lb.manifest_offset);
 
-        let page =
-            &bytes[header_root_offset as usize..header_root_offset as usize + DEFAULT_PAGE_BYTES];
+        let page = crate::page::page_decode_slice(&bytes, header_root_offset as usize).unwrap();
         let decoded = crate::page::decode_page(page, lb.lockbox_id, lb.key.expose()).unwrap();
         let commit_object = decoded
             .objects
@@ -707,8 +798,8 @@ mod tests {
         lb.commit().unwrap();
         assert!(lb.free_index_offset > 0);
         let bytes = lb.to_bytes();
-        let root_page = &bytes[lb.free_index_offset as usize
-            ..lb.free_index_offset as usize + crate::page::DEFAULT_PAGE_BYTES];
+        let root_page =
+            crate::page::page_decode_slice(&bytes, lb.free_index_offset as usize).unwrap();
         let decoded = crate::page::decode_page(root_page, lb.lockbox_id, lb.key.expose()).unwrap();
         assert!(decoded
             .objects
@@ -775,26 +866,11 @@ mod tests {
                 len: 1,
                 record_offset: 1_000_000 + i as u64,
                 record_len: 64,
+                record_object_id: 1,
                 deleted: false,
                 node_kind: NodeKind::File,
                 permissions: DEFAULT_FILE_PERMISSIONS,
-                symlink_target: None,
-                chunks: (0..8)
-                    .map(|chunk| FileChunk {
-                        file_offset: chunk as u64,
-                        len: 1,
-                        compressed_len: 1,
-                        compression: crate::compression::COMPRESSION_NONE,
-                        frame_id: 3_000_000 + (i * 8 + chunk) as u64,
-                        fragments: vec![FileFragment {
-                            page_offset: 2_000_000 + (i * 8 + chunk) as u64,
-                            page_len: DEFAULT_PAGE_BYTES as u64,
-                            object_id: 4_000_000 + (i * 8 + chunk) as u64,
-                            fragment_offset: 0,
-                            fragment_len: 1,
-                        }],
-                    })
-                    .collect(),
+                chunks: Vec::new(),
             })
             .collect()
     }

@@ -1,14 +1,15 @@
 use crate::key_slot::{slot_fingerprint, KeySlot};
 use crate::key_wrap::MlKemWrappedKey;
 use crate::lockbox_id::LockboxId;
+use crate::page::{decode_page, page_decode_slice, DecodedPage, PageObjectKind, PAGE_HEADER_LEN};
+use crate::page_cache::PageCache;
 use crate::storage::Storage;
 use crate::{Error, Result};
 
 const KEY_DIR_MAGIC: &[u8; 8] = b"LBX2KEY\0";
-const KEY_DIR_HEADER_LEN: usize = 128;
-const KEY_DIR_VERSION: u16 = 3;
+const KEY_DIR_HEADER_LEN: usize = 64;
+const KEY_DIR_VERSION: u16 = 4;
 const MAX_KEY_DIRECTORY_BYTES: usize = 1024 * 1024;
-const KEY_DIR_HEADER_CHECKSUM_START: usize = 96;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DecodedKeyDirectory {
@@ -40,9 +41,6 @@ pub(crate) fn encode_key_directory(
     out[24..32].copy_from_slice(&generation.to_le_bytes());
     out[32..48].copy_from_slice(lockbox_id.as_bytes());
     out[48..52].copy_from_slice(&copy_index.to_le_bytes());
-    out[56..88].copy_from_slice(&crate::crypto::strong_checksum(&payload));
-    let header_digest = crate::crypto::strong_checksum(&out[0..KEY_DIR_HEADER_CHECKSUM_START]);
-    out[KEY_DIR_HEADER_CHECKSUM_START..KEY_DIR_HEADER_LEN].copy_from_slice(&header_digest);
     out.extend_from_slice(&payload);
     Ok(out)
 }
@@ -52,88 +50,26 @@ pub(crate) fn read_key_directory(
     offset: u64,
     expected_lockbox_id: Option<LockboxId>,
 ) -> Result<DecodedKeyDirectory> {
-    if offset == 0 {
-        return Err(Error::CorruptHeader);
-    }
-    let start = offset as usize;
-    if start + KEY_DIR_HEADER_LEN > bytes.len() {
-        return Err(Error::Truncated);
-    }
-    let header = &bytes[start..start + KEY_DIR_HEADER_LEN];
-    if &header[0..8] != KEY_DIR_MAGIC {
-        return Err(Error::CorruptHeader);
-    }
-    let header = decode_key_directory_header(header, expected_lockbox_id)?;
-    let total_len = header.total_len;
-    if total_len > MAX_KEY_DIRECTORY_BYTES {
-        return Err(Error::SecurityLimitExceeded(
-            "key directory exceeds 1 MiB".to_string(),
-        ));
-    }
-    if total_len < KEY_DIR_HEADER_LEN || start + total_len > bytes.len() {
-        return Err(Error::Truncated);
-    }
-    let payload = &bytes[start + KEY_DIR_HEADER_LEN..start + total_len];
-    if crate::crypto::strong_checksum(payload) != header.payload_digest {
-        return Err(Error::CorruptHeader);
-    }
-    Ok(DecodedKeyDirectory {
-        offset,
-        lockbox_id: header.lockbox_id,
-        generation: header.generation,
-        copy_index: header.copy_index,
-        slots: decode_key_slots(payload)?,
-    })
+    let start = usize::try_from(offset).map_err(|_| Error::CorruptHeader)?;
+    let page_bytes = page_decode_slice(bytes, start).ok_or(Error::CorruptHeader)?;
+    decode_key_directory_page(page_bytes, offset, expected_lockbox_id)
 }
 
 pub(crate) fn read_key_directory_backup(bytes: &[u8]) -> Result<DecodedKeyDirectory> {
     if bytes.len() < KEY_DIR_HEADER_LEN || &bytes[0..8] != KEY_DIR_MAGIC {
         return Err(Error::CorruptHeader);
     }
-    let header = decode_key_directory_header(&bytes[0..KEY_DIR_HEADER_LEN], None)?;
-    let total_len = header.total_len;
-    if total_len < KEY_DIR_HEADER_LEN || total_len > bytes.len() {
-        return Err(Error::Truncated);
-    }
-    let payload = &bytes[KEY_DIR_HEADER_LEN..total_len];
-    if crate::crypto::strong_checksum(payload) != header.payload_digest {
-        return Err(Error::CorruptHeader);
-    }
-    Ok(DecodedKeyDirectory {
-        offset: 0,
-        lockbox_id: header.lockbox_id,
-        generation: header.generation,
-        copy_index: header.copy_index,
-        slots: decode_key_slots(payload)?,
-    })
+    decode_key_directory_payload(bytes, 0, None)
 }
 
-pub(crate) fn read_key_directory_from_storage(
+pub(crate) fn read_key_directory_via_page_cache(
     storage: &impl Storage,
     offset: u64,
     expected_lockbox_id: Option<LockboxId>,
 ) -> Result<DecodedKeyDirectory> {
-    let header = storage.read_at(offset, KEY_DIR_HEADER_LEN)?;
-    if &header[0..8] != KEY_DIR_MAGIC {
-        return Err(Error::CorruptHeader);
-    }
-    let header = decode_key_directory_header(&header, expected_lockbox_id)?;
-    let total_len = header.total_len;
-    if total_len < KEY_DIR_HEADER_LEN {
-        return Err(Error::Truncated);
-    }
-    let payload_len = total_len - KEY_DIR_HEADER_LEN;
-    let payload = storage.read_at(offset + KEY_DIR_HEADER_LEN as u64, payload_len)?;
-    if crate::crypto::strong_checksum(&payload) != header.payload_digest {
-        return Err(Error::CorruptHeader);
-    }
-    Ok(DecodedKeyDirectory {
-        offset,
-        lockbox_id: header.lockbox_id,
-        generation: header.generation,
-        copy_index: header.copy_index,
-        slots: decode_key_slots(&payload)?,
-    })
+    let decode_lockbox_id = expected_lockbox_id.unwrap_or(LockboxId::from_bytes([0; 16]));
+    let page = PageCache::read_decoded_page_from_storage(storage, offset, decode_lockbox_id, &[])?;
+    decode_key_directory_decoded_page(&page, offset, expected_lockbox_id)
 }
 
 pub(crate) fn scan_key_directories(
@@ -142,14 +78,12 @@ pub(crate) fn scan_key_directories(
 ) -> Vec<DecodedKeyDirectory> {
     let mut found = Vec::new();
     let mut offset = crate::constants::HEADER_LEN;
-    while offset + KEY_DIR_HEADER_LEN <= bytes.len() {
-        if &bytes[offset..offset + 8] == KEY_DIR_MAGIC {
+    while offset + PAGE_HEADER_LEN <= bytes.len() {
+        if bytes.get(offset..offset + 8) == Some(crate::page::PAGE_MAGIC.as_slice()) {
             if let Ok(decoded) = read_key_directory(bytes, offset as u64, expected_lockbox_id) {
-                let total_len =
-                    u64::from_le_bytes(bytes[offset + 16..offset + 24].try_into().unwrap())
-                        as usize;
+                let page_size = crate::page::DEFAULT_METADATA_PAGE_BYTES;
                 found.push(decoded);
-                offset = offset.saturating_add(total_len.max(KEY_DIR_HEADER_LEN));
+                offset = offset.saturating_add(page_size);
                 continue;
             }
         }
@@ -176,7 +110,6 @@ struct KeyDirectoryHeader {
     lockbox_id: LockboxId,
     generation: u64,
     copy_index: u32,
-    payload_digest: [u8; 32],
 }
 
 fn decode_key_directory_header(
@@ -206,17 +139,7 @@ fn decode_key_directory_header(
     if expected_lockbox_id.is_some_and(|expected| lockbox_id != expected) {
         return Err(Error::CorruptHeader);
     }
-    if header[52..56].iter().any(|byte| *byte != 0) {
-        return Err(Error::CorruptHeader);
-    }
-    if header[88..KEY_DIR_HEADER_CHECKSUM_START]
-        .iter()
-        .any(|byte| *byte != 0)
-    {
-        return Err(Error::CorruptHeader);
-    }
-    let header_digest = crate::crypto::strong_checksum(&header[0..KEY_DIR_HEADER_CHECKSUM_START]);
-    if header[KEY_DIR_HEADER_CHECKSUM_START..KEY_DIR_HEADER_LEN] != header_digest {
+    if header[52..KEY_DIR_HEADER_LEN].iter().any(|byte| *byte != 0) {
         return Err(Error::CorruptHeader);
     }
     Ok(KeyDirectoryHeader {
@@ -224,7 +147,51 @@ fn decode_key_directory_header(
         lockbox_id,
         generation: u64::from_le_bytes(header[24..32].try_into().unwrap()),
         copy_index: u32::from_le_bytes(header[48..52].try_into().unwrap()),
-        payload_digest: header[56..88].try_into().unwrap(),
+    })
+}
+
+fn decode_key_directory_page(
+    page_bytes: &[u8],
+    offset: u64,
+    expected_lockbox_id: Option<LockboxId>,
+) -> Result<DecodedKeyDirectory> {
+    let decode_lockbox_id = expected_lockbox_id.unwrap_or(LockboxId::from_bytes([0; 16]));
+    let page = decode_page(page_bytes, decode_lockbox_id, &[])?;
+    decode_key_directory_decoded_page(&page, offset, expected_lockbox_id)
+}
+
+pub(crate) fn decode_key_directory_decoded_page(
+    page: &DecodedPage,
+    offset: u64,
+    expected_lockbox_id: Option<LockboxId>,
+) -> Result<DecodedKeyDirectory> {
+    let object = page
+        .objects
+        .iter()
+        .find(|object| object.kind == PageObjectKind::KeyDirectory)
+        .ok_or(Error::CorruptHeader)?;
+    decode_key_directory_payload(&object.payload, offset, expected_lockbox_id)
+}
+
+fn decode_key_directory_payload(
+    bytes: &[u8],
+    offset: u64,
+    expected_lockbox_id: Option<LockboxId>,
+) -> Result<DecodedKeyDirectory> {
+    if bytes.len() < KEY_DIR_HEADER_LEN || &bytes[0..8] != KEY_DIR_MAGIC {
+        return Err(Error::CorruptHeader);
+    }
+    let header = decode_key_directory_header(&bytes[0..KEY_DIR_HEADER_LEN], expected_lockbox_id)?;
+    let total_len = header.total_len;
+    if total_len < KEY_DIR_HEADER_LEN || total_len > bytes.len() {
+        return Err(Error::Truncated);
+    }
+    Ok(DecodedKeyDirectory {
+        offset,
+        lockbox_id: header.lockbox_id,
+        generation: header.generation,
+        copy_index: header.copy_index,
+        slots: decode_key_slots(&bytes[KEY_DIR_HEADER_LEN..total_len])?,
     })
 }
 
@@ -259,6 +226,9 @@ fn decode_key_slots(payload: &[u8]) -> Result<Vec<KeySlot>> {
         return Err(Error::CorruptHeader);
     }
     let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    if count > (payload.len() - 4) / 9 {
+        return Err(Error::CorruptHeader);
+    }
     let mut offset = 4usize;
     let mut slots = Vec::with_capacity(count);
     for _ in 0..count {
@@ -331,11 +301,11 @@ mod tests {
             encode_key_directory(&[], lockbox_id, 0x0102_0304_0506_0708, 0x1112_1314).unwrap();
 
         assert_eq!(&encoded[0..8], KEY_DIR_MAGIC);
-        assert_eq!(&encoded[8..10], &[0x03, 0x00]);
-        assert_eq!(&encoded[12..16], &[0x80, 0x00, 0x00, 0x00]);
+        assert_eq!(&encoded[8..10], &[0x04, 0x00]);
+        assert_eq!(&encoded[12..16], &[0x40, 0x00, 0x00, 0x00]);
         assert_eq!(
             &encoded[16..24],
-            &[0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+            &[0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
         );
         assert_eq!(
             &encoded[24..32],
@@ -344,14 +314,7 @@ mod tests {
         assert_eq!(&encoded[32..48], lockbox_id.as_bytes());
         assert_eq!(&encoded[48..52], &[0x14, 0x13, 0x12, 0x11]);
 
-        let mut bytes = vec![0; crate::constants::HEADER_LEN];
-        bytes.extend_from_slice(&encoded);
-        let decoded = read_key_directory(
-            &bytes,
-            crate::constants::HEADER_LEN as u64,
-            Some(lockbox_id),
-        )
-        .unwrap();
+        let decoded = read_key_directory_backup(&encoded).unwrap();
         assert_eq!(decoded.lockbox_id, lockbox_id);
         assert_eq!(decoded.generation, 0x0102_0304_0506_0708);
         assert_eq!(decoded.copy_index, 0x1112_1314);
@@ -359,17 +322,14 @@ mod tests {
     }
 
     #[test]
-    fn key_directory_rejects_public_checksum_tampering() {
+    fn key_directory_rejects_reserved_field_tampering() {
         let lockbox_id = LockboxId::new_random().unwrap();
         let encoded = encode_key_directory(&[], lockbox_id, 7, 0).unwrap();
-        let mut bytes = vec![0; crate::constants::HEADER_LEN];
-        bytes.extend_from_slice(&encoded);
-
-        let offset = crate::constants::HEADER_LEN;
-        bytes[offset + 24] ^= 0x01;
+        let mut bytes = encoded;
+        bytes[52] ^= 0x01;
 
         assert!(matches!(
-            read_key_directory(&bytes, offset as u64, Some(lockbox_id)),
+            read_key_directory_backup(&bytes),
             Err(Error::CorruptHeader)
         ));
     }
