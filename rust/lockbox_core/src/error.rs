@@ -1,14 +1,23 @@
 use std::fmt;
 
+/// Error type returned by lockbox operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    /// The public header could not be parsed or authenticated.
     CorruptHeader,
+    /// An encrypted record or decoded page failed validation.
     CorruptRecord,
+    /// The supplied key was wrong or authentication failed.
     InvalidKey,
+    /// A requested logical path was not found.
     NotFound(String),
+    /// A caller supplied an invalid logical or host path.
     InvalidPath(String),
+    /// Filesystem or platform IO failed.
     Io(String),
+    /// A configured safety limit rejected the operation.
     SecurityLimitExceeded(String),
+    /// The input ended before a complete lockbox structure could be read.
     Truncated,
 }
 
@@ -37,4 +46,5 @@ impl fmt::Display for Error {
     }
 }
 
+/// Convenient result alias for lockbox operations.
 pub type Result<T> = std::result::Result<T, Error>;

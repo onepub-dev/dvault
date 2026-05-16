@@ -8,16 +8,23 @@ use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey, MlKemWrappedKey};
 use crate::secret_bytes::SecretString;
 use crate::{Error, Result};
 
+/// Type of key slot that can unlock a lockbox content key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySlotKind {
+    /// Password-derived wrapping key.
     Password,
+    /// ML-KEM-1024 recipient wrapping key.
     MlKem1024,
 }
 
+/// Public metadata for one key slot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeySlotInfo {
+    /// Stable slot id used for deletion.
     pub id: u64,
+    /// Slot type.
     pub kind: KeySlotKind,
+    /// Human-readable algorithm description.
     pub algorithm: String,
 }
 

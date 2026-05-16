@@ -1,5 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
+//! Core encrypted lockbox storage engine.
+//!
+//! `lockbox_core` owns the portable `.lbox` file format and the in-memory API
+//! for storing files, symlinks, environment values, and key slots. It does not
+//! know about a user's local vault or unlock-cache agent; those live in
+//! `lockbox_vault`.
 
 mod compression;
 mod constants;

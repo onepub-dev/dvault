@@ -43,6 +43,12 @@ mod symlinks;
 
 pub use key_management::{LockboxCreate, LockboxUnlock, UnlockedContentKey};
 
+/// Open encrypted lockbox container.
+///
+/// A `Lockbox` owns the encrypted storage backend plus the decrypted metadata
+/// needed to make changes. Mutations are staged in memory until `commit()` is
+/// called; reopening a lockbox after an interrupted commit returns the last
+/// published state.
 #[derive(Debug)]
 pub struct Lockbox {
     storage: StorageBackend,
@@ -117,10 +123,12 @@ impl Lockbox {
         })
     }
 
+    /// Create a new in-memory lockbox protected by a raw content key.
     pub fn create(key: impl AsRef<[u8]>) -> Self {
         Self::create_with_options(key, LockboxOptions::default())
     }
 
+    /// Create a new in-memory lockbox with explicit cache/workload options.
     pub fn create_with_options(key: impl AsRef<[u8]>, options: LockboxOptions) -> Self {
         Self::create_with_lockbox_id_and_options(
             key,
@@ -129,6 +137,7 @@ impl Lockbox {
         )
     }
 
+    /// Create a new in-memory lockbox with a caller-supplied stable id.
     pub fn create_with_lockbox_id(key: impl AsRef<[u8]>, lockbox_id: LockboxId) -> Self {
         Self::create_with_lockbox_id_and_options(key, lockbox_id, LockboxOptions::default())
     }
@@ -186,6 +195,7 @@ impl Lockbox {
         }
     }
 
+    /// Open an existing in-memory lockbox with a raw content key.
     pub fn open(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Self> {
         Self::open_with_options(bytes, key, LockboxOptions::default())
     }
@@ -325,18 +335,22 @@ impl Lockbox {
         }
     }
 
+    /// Return the stable id embedded in this lockbox.
     pub fn lockbox_id(&self) -> LockboxId {
         self.lockbox_id
     }
 
+    /// Return the current persisted storage length in bytes.
     pub fn storage_len(&self) -> Result<u64> {
         self.storage.len()
     }
 
+    /// Set cache behavior tuned for the caller's expected access pattern.
     pub fn set_workload_profile(&mut self, profile: WorkloadProfile) {
         self.workload_profile = profile;
     }
 
+    /// Return the currently selected workload profile.
     pub fn workload_profile(&self) -> WorkloadProfile {
         self.workload_profile
     }
@@ -345,6 +359,7 @@ impl Lockbox {
         matches!(self.workload_profile, WorkloadProfile::BulkImport)
     }
 
+    /// Read only the lockbox id from serialized lockbox bytes.
     pub fn read_lockbox_id(bytes: &[u8]) -> Result<LockboxId> {
         crate::header::read_lockbox_id(bytes)
     }
@@ -594,22 +609,27 @@ impl Lockbox {
         self.page_manager.borrow().has_dirty_pages()
     }
 
+    /// Replace the decoded-page cache size policy.
     pub fn set_cache_limit(&self, limit: CacheLimit) {
         self.page_manager.borrow_mut().set_limit(limit);
     }
 
+    /// Evict decoded pages until the cache fits its configured limit.
     pub fn trim_cache(&self) {
         self.page_manager.borrow_mut().clear();
     }
 
+    /// Evict decoded pages until at most `bytes` remain cached.
     pub fn trim_cache_to(&self, bytes: u64) {
         self.page_manager.borrow_mut().trim_to(bytes);
     }
 
+    /// Return decoded-page cache usage and hit/miss counters.
     pub fn cache_stats(&self) -> CacheStats {
         self.page_manager.borrow().stats()
     }
 
+    /// Return page-level metadata useful for diagnostics and visualization.
     pub fn inspect_pages(&self) -> Result<Vec<crate::PageInspection>> {
         let bytes = self.bytes()?;
         self.key
