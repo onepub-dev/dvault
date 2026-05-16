@@ -43,6 +43,17 @@ cargo clippy -p lockbox_core -p lockbox_cli -p lockbox_vault --all-targets -- -D
 That treats Clippy's default lint groups as errors. It is required, but it is
 not the strongest possible Clippy policy.
 
+## API Docs
+
+Generate the public `lockbox_core` API docs from `rust/`:
+
+```text
+bash tools/generate_api_docs.sh
+```
+
+The generated entry point is `rust/target/doc/lockbox_core/index.html`. The
+generated HTML is build output and is not committed.
+
 ## Advisory Clippy
 
 Run from `rust/`:
@@ -70,7 +81,7 @@ they encode an actual project rule.
 
 - All normal page reads and writes go through the page cache.
 - Passwords are owned and passed as `SecretString`.
-- Long-lived secret bytes use `SecretBytes` or a more specific secret wrapper.
+- Long-lived secret bytes use `SecretVec` or a more specific secret wrapper.
 - Keep `unsafe` blocks tiny, documented, and behind safe wrappers.
 - Avoid `unwrap()`/`expect()` in production code unless the invariant is local
   and explicit.
