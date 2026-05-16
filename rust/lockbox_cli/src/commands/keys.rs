@@ -54,8 +54,8 @@ pub(crate) fn lock(args: &[String]) -> CliResult<()> {
 pub(crate) fn keygen(args: &[String]) -> CliResult<()> {
     let private_path = require_arg(args, 0, "private key path")?;
     let public_path = require_arg(args, 1, "public key path")?;
-    let keypair = MlKemKeyPair::generate();
-    write_private_key(private_path, &keypair.to_seed_bytes())?;
+    let keypair = MlKemKeyPair::generate()?;
+    keypair.with_seed_bytes(|seed| write_private_key(private_path, seed))??;
     fs::write(public_path, encode_hex(&keypair.recipient_key().to_bytes()))?;
     Ok(())
 }

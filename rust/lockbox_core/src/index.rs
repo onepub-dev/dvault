@@ -1,6 +1,6 @@
 use crate::constants::DEFAULT_SYMLINK_PERMISSIONS;
 use crate::file_chunk::{FileChunk, FileFragment};
-use crate::format::decode_file_fragment_payload;
+use crate::file_format::decode_file_fragment_payload;
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::payload::decode_symlink_payload;

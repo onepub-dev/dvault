@@ -1,4 +1,5 @@
 pub(crate) mod entry;
+pub(crate) mod env_sensitivity;
 pub(crate) mod extract_policy;
 pub(crate) mod extracted_file;
 pub(crate) mod extracted_node;

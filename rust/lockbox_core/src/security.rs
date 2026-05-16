@@ -28,6 +28,11 @@ pub(crate) fn validate_env_name(name: &str) -> Result<String> {
 }
 
 pub(crate) fn validate_env_value(value: &str) -> Result<String> {
+    validate_env_value_ref(value)?;
+    Ok(value.to_string())
+}
+
+pub(crate) fn validate_env_value_ref(value: &str) -> Result<()> {
     if value.len() > MAX_ENV_VALUE_BYTES
         || value.contains('\0')
         || value.chars().any(|ch| {
@@ -38,5 +43,5 @@ pub(crate) fn validate_env_value(value: &str) -> Result<String> {
             "environment variable value is invalid or too large".to_string(),
         ));
     }
-    Ok(value.to_string())
+    Ok(())
 }

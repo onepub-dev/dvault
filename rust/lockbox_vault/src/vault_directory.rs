@@ -1,11 +1,14 @@
 use lockbox_core::{
     EntryKind, Error, ListOptions, Lockbox, LockboxCreate, LockboxId, LockboxUnlock, MlKemKeyPair,
-    MlKemRecipientKey, Result, SecretString,
+    MlKemRecipientKey, Result, SecretString, SecretVec,
 };
 use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use zeroize::Zeroize;
+
+use crate::key_format::{export_private_key, import_private_key, KeyFormat};
 
 const VAULT_FILE_NAME: &str = "local-vault.lbox";
 
@@ -34,15 +37,9 @@ impl VaultDirectory {
         create_private_dir(&root)?;
         let path = root.join(VAULT_FILE_NAME);
         let lockbox = if path.exists() {
-            Lockbox::open_file(
-                &path,
-                LockboxUnlock::Password(password.expose_bytes().to_vec()),
-            )?
+            Lockbox::open_file(&path, LockboxUnlock::Password(password))?
         } else {
-            let lockbox = Lockbox::create_file(
-                &path,
-                LockboxCreate::Password(password.expose_bytes().to_vec()),
-            )?;
+            let lockbox = Lockbox::create_file(&path, LockboxCreate::Password(password))?;
             set_private_file_permissions(&path)?;
             lockbox
         };
@@ -62,26 +59,53 @@ impl VaultDirectory {
     }
 
     pub fn store_private_key(&self, name: &str, keypair: &MlKemKeyPair) -> Result<()> {
-        self.put_record(&private_key_record_path(name)?, &keypair.to_seed_bytes())
+        let env_name = private_key_env_name(name)?;
+        let seed = export_private_key(keypair, KeyFormat::RawHex)?;
+        let value = SecretString::from_secure_vec(seed);
+        self.put_secret_env_record(&env_name, &value)
     }
 
     pub fn load_private_key(&self, name: &str) -> Result<MlKemKeyPair> {
-        MlKemKeyPair::from_seed_bytes(&self.get_record(&private_key_record_path(name)?)?)
+        if let Some(value) = self
+            .lockbox
+            .borrow()
+            .get_secret_env(&private_key_env_name(name)?)?
+        {
+            let mut bytes = SecretVec::new();
+            value.append_to_secure_vec(&mut bytes)?;
+            return import_private_key(bytes);
+        }
+
+        let mut seed = self.get_record(&private_key_record_path(name)?)?;
+        let keypair = MlKemKeyPair::from_seed_bytes(&seed);
+        seed.zeroize();
+        keypair
     }
 
     pub fn private_key_exists(&self, name: &str) -> Result<bool> {
-        Ok(self
-            .lockbox
-            .borrow()
-            .stat(&private_key_record_path(name)?)
-            .is_some())
+        let lockbox = self.lockbox.borrow();
+        Ok(lockbox
+            .env_sensitivity(&private_key_env_name(name)?)?
+            .is_some()
+            || lockbox.stat(&private_key_record_path(name)?).is_some())
     }
 
     pub fn list_private_keys(&self) -> Result<Vec<String>> {
-        self.list_record_names("/private_keys", ".key")
+        let mut names = self.list_record_names("/private_keys", ".key")?;
+        let lockbox = self.lockbox.borrow();
+        for env_name in lockbox.list_env()? {
+            let Some(name) = private_key_name_from_env(&env_name) else {
+                continue;
+            };
+            names.push(name?);
+        }
+        names.sort();
+        names.dedup();
+        Ok(names)
     }
 
     pub fn delete_private_key(&self, name: &str) -> Result<()> {
+        self.delete_secret_env_record_if_exists(&private_key_env_name(name)?)?;
         self.delete_record_if_exists(&private_key_record_path(name)?)
     }
 
@@ -146,6 +170,14 @@ impl VaultDirectory {
         Ok(())
     }
 
+    fn put_secret_env_record(&self, name: &str, value: &SecretString) -> Result<()> {
+        let mut lockbox = self.lockbox.borrow_mut();
+        lockbox.set_secret_env(name, value)?;
+        lockbox.commit()?;
+        set_private_file_permissions(&self.path)?;
+        Ok(())
+    }
+
     fn get_record(&self, path: &str) -> Result<Vec<u8>> {
         self.lockbox.borrow().get_file(path)
     }
@@ -154,6 +186,16 @@ impl VaultDirectory {
         let mut lockbox = self.lockbox.borrow_mut();
         if lockbox.stat(path).is_some() {
             lockbox.delete(path)?;
+            lockbox.commit()?;
+            set_private_file_permissions(&self.path)?;
+        }
+        Ok(())
+    }
+
+    fn delete_secret_env_record_if_exists(&self, name: &str) -> Result<()> {
+        let mut lockbox = self.lockbox.borrow_mut();
+        if lockbox.env_sensitivity(name)?.is_some() {
+            lockbox.remove_env(name)?;
             lockbox.commit()?;
             set_private_file_permissions(&self.path)?;
         }
@@ -188,6 +230,19 @@ fn recursive_list(path: &str) -> ListOptions {
 
 fn private_key_record_path(name: &str) -> Result<String> {
     Ok(format!("/private_keys/{}.key", validate_record_name(name)?))
+}
+
+fn private_key_env_name(name: &str) -> Result<String> {
+    let name = validate_record_name(name)?;
+    Ok(format!(
+        "LOCKBOX_VAULT_PRIVATE_KEY_{}",
+        encode_name_hex(name)
+    ))
+}
+
+fn private_key_name_from_env(name: &str) -> Option<Result<String>> {
+    let hex = name.strip_prefix("LOCKBOX_VAULT_PRIVATE_KEY_")?;
+    Some(decode_name_hex(hex).ok_or_else(|| Error::InvalidPath(name.to_string())))
 }
 
 fn trusted_recipient_record_path(name: &str) -> Result<String> {
@@ -259,6 +314,15 @@ fn validate_record_name(name: &str) -> Result<&str> {
     } else {
         Err(Error::InvalidPath(name.to_string()))
     }
+}
+
+fn encode_name_hex(name: &str) -> String {
+    crate::encode_hex(name.as_bytes()).to_ascii_uppercase()
+}
+
+fn decode_name_hex(hex: &str) -> Option<String> {
+    let bytes = crate::decode_hex(hex).ok()?;
+    String::from_utf8(bytes).ok()
 }
 
 fn create_private_dir(path: &Path) -> Result<()> {

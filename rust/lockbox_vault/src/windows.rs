@@ -1,6 +1,6 @@
 use super::{
     decode_hex, encode_forget, encode_forget_all, encode_get, encode_hex, encode_put,
-    parse_request, AgentRequest, SecretBytes, DEFAULT_TTL_SECONDS,
+    parse_request, AgentRequest, SecretVec, DEFAULT_TTL_SECONDS,
 };
 use lockbox_core::LockboxId;
 use std::collections::BTreeMap;
@@ -38,7 +38,7 @@ const PIPE_OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
 
 struct CacheEntry {
-    key: SecretBytes,
+    key: SecretVec,
     expires_at: Instant,
 }
 
@@ -54,20 +54,14 @@ pub(crate) fn serve_agent() -> io::Result<()> {
         }
 
         let pipe = create_pipe()?;
-        let connected = connect_pipe(pipe);
+        let connected = connect_pipe(pipe.as_raw());
         if let Err(err) = connected {
-            unsafe {
-                CloseHandle(pipe);
-            }
             return Err(err);
         }
 
         last_activity = Instant::now();
-        let _ = handle_client(pipe, &current_user_sid, &mut cache);
-        unsafe {
-            DisconnectNamedPipe(pipe);
-            CloseHandle(pipe);
-        }
+        let _ = handle_client(pipe.as_raw(), &current_user_sid, &mut cache);
+        disconnect_pipe(pipe.as_raw());
     }
 }
 
@@ -115,11 +109,8 @@ fn request(message: &str) -> io::Result<String> {
             open_pipe(&pipe_name)?
         }
     };
-    write_all(handle, message.as_bytes())?;
-    let response = read_to_string(handle)?;
-    unsafe {
-        CloseHandle(handle);
-    }
+    write_all(handle.as_raw(), message.as_bytes())?;
+    let response = read_to_string(handle.as_raw())?;
     Ok(response.trim_end_matches(['\r', '\n']).to_string())
 }
 
@@ -135,9 +126,12 @@ fn start_agent() -> io::Result<()> {
     Ok(())
 }
 
-fn create_pipe() -> io::Result<HANDLE> {
+fn create_pipe() -> io::Result<OwnedHandle> {
     let name = wide_pipe_name();
     let mut security = PipeSecurity::current_owner_only()?;
+    // SAFETY: `name` is a null-terminated UTF-16 string, `security` owns a
+    // valid `SECURITY_ATTRIBUTES` for the duration of the call, and no pointer
+    // is retained by Rust after the OS returns.
     let handle = unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
@@ -153,7 +147,38 @@ fn create_pipe() -> io::Result<HANDLE> {
     if handle == INVALID_HANDLE_VALUE {
         Err(io::Error::last_os_error())
     } else {
-        Ok(handle)
+        Ok(OwnedHandle::new(handle))
+    }
+}
+
+struct OwnedHandle {
+    handle: HANDLE,
+}
+
+impl OwnedHandle {
+    fn new(handle: HANDLE) -> Self {
+        Self { handle }
+    }
+
+    fn as_raw(&self) -> HANDLE {
+        self.handle
+    }
+}
+
+impl Drop for OwnedHandle {
+    fn drop(&mut self) {
+        close_handle(self.handle);
+    }
+}
+
+fn close_handle(handle: HANDLE) {
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return;
+    }
+    // SAFETY: `handle` is owned by an `OwnedHandle` or explicit close site and
+    // is not used after this call.
+    unsafe {
+        CloseHandle(handle);
     }
 }
 
@@ -166,6 +191,8 @@ impl PipeSecurity {
     fn current_owner_only() -> io::Result<Self> {
         let sddl = to_wide("D:P(A;;GA;;;OW)");
         let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        // SAFETY: `sddl` is a null-terminated UTF-16 SDDL string and
+        // `descriptor` is a valid out pointer initialized by the OS on success.
         let ok = unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 sddl.as_ptr(),
@@ -195,6 +222,9 @@ impl PipeSecurity {
 impl Drop for PipeSecurity {
     fn drop(&mut self) {
         if !self.descriptor.is_null() {
+            // SAFETY: `descriptor` was allocated by
+            // `ConvertStringSecurityDescriptorToSecurityDescriptorW` and is
+            // released exactly once by this owner.
             unsafe {
                 LocalFree(self.descriptor.cast());
             }
@@ -203,11 +233,13 @@ impl Drop for PipeSecurity {
 }
 
 fn connect_pipe(pipe: HANDLE) -> io::Result<()> {
+    // SAFETY: `pipe` is a named-pipe handle returned by `CreateNamedPipeW`;
+    // `null_mut` means synchronous operation without overlapped state.
     let ok = unsafe { ConnectNamedPipe(pipe, null_mut()) };
     if ok != 0 {
         return Ok(());
     }
-    let err = unsafe { GetLastError() };
+    let err = last_error();
     if err == ERROR_PIPE_CONNECTED {
         Ok(())
     } else {
@@ -215,9 +247,26 @@ fn connect_pipe(pipe: HANDLE) -> io::Result<()> {
     }
 }
 
-fn open_pipe(pipe_name: &[u16]) -> io::Result<HANDLE> {
+fn disconnect_pipe(pipe: HANDLE) {
+    // SAFETY: `pipe` is a connected named-pipe handle owned by the server loop.
+    // Disconnection does not close the handle; `OwnedHandle` closes it later.
+    unsafe {
+        DisconnectNamedPipe(pipe);
+    }
+}
+
+fn last_error() -> u32 {
+    // SAFETY: `GetLastError` reads thread-local OS error state and has no
+    // Rust-side memory invariants.
+    unsafe { GetLastError() }
+}
+
+fn open_pipe(pipe_name: &[u16]) -> io::Result<OwnedHandle> {
     let deadline = Instant::now() + PIPE_OPEN_TIMEOUT;
     loop {
+        // SAFETY: `pipe_name` is a null-terminated UTF-16 string and all
+        // pointer arguments either reference valid data for the call or are
+        // intentionally null per the Windows API contract.
         let handle = unsafe {
             CreateFileW(
                 pipe_name.as_ptr(),
@@ -230,9 +279,9 @@ fn open_pipe(pipe_name: &[u16]) -> io::Result<HANDLE> {
             )
         };
         if handle != INVALID_HANDLE_VALUE {
-            return Ok(handle);
+            return Ok(OwnedHandle::new(handle));
         }
-        let err = unsafe { GetLastError() };
+        let err = last_error();
         if err == ERROR_FILE_NOT_FOUND {
             if Instant::now() >= deadline {
                 return Err(io::Error::from_raw_os_error(err as i32));
@@ -243,6 +292,8 @@ fn open_pipe(pipe_name: &[u16]) -> io::Result<HANDLE> {
         if err != ERROR_PIPE_BUSY {
             return Err(io::Error::from_raw_os_error(err as i32));
         }
+        // SAFETY: `pipe_name` is a null-terminated UTF-16 string valid for the
+        // duration of the wait call.
         let waited = unsafe { WaitNamedPipeW(pipe_name.as_ptr(), 3000) };
         if waited == 0 {
             return Err(io::Error::last_os_error());
@@ -268,13 +319,16 @@ fn handle_client(
             match cache.get_mut(&lockbox_id) {
                 Some(entry) if entry.expires_at > now => {
                     entry.expires_at = now + Duration::from_secs(DEFAULT_TTL_SECONDS);
-                    format!("KEY {}", encode_hex(entry.key.expose()))
+                    entry
+                        .key
+                        .with_bytes(|key| format!("KEY {}", encode_hex(key)))
+                        .map_err(io::Error::other)?
                 }
                 _ => "MISS".to_string(),
             }
         }
         Ok(AgentRequest::Put(lockbox_id, key)) => {
-            let key = SecretBytes::new(key);
+            let key = SecretVec::try_from_vec(key).map_err(io::Error::other)?;
             cache.insert(
                 lockbox_id,
                 CacheEntry {
@@ -298,50 +352,77 @@ fn handle_client(
 }
 
 fn client_matches_current_user(pipe: HANDLE, current_user_sid: &[u8]) -> io::Result<bool> {
-    let impersonated = unsafe { ImpersonateNamedPipeClient(pipe) };
-    if impersonated == 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    let result = (|| {
-        let mut token: HANDLE = null_mut();
-        let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 0, &mut token) };
-        if opened == 0 {
-            let err = unsafe { GetLastError() };
-            if err == ERROR_NO_TOKEN {
-                return Ok(false);
-            }
-            return Err(io::Error::from_raw_os_error(err as i32));
-        }
-        let client_sid = token_user_sid(token);
-        unsafe {
-            CloseHandle(token);
-        }
-        let client_sid = client_sid?;
-        Ok(equal_sid(&client_sid, current_user_sid))
-    })();
-
-    unsafe {
-        RevertToSelf();
-    }
-    result
+    let _impersonation = ImpersonationGuard::new(pipe)?;
+    let Some(token) = open_thread_token()? else {
+        return Ok(false);
+    };
+    let client_sid = token_user_sid(token.as_raw())?;
+    Ok(equal_sid(&client_sid, current_user_sid))
 }
 
 fn current_process_user_sid() -> io::Result<Vec<u8>> {
+    let token = open_process_token()?;
+    token_user_sid(token.as_raw())
+}
+
+struct ImpersonationGuard;
+
+impl ImpersonationGuard {
+    fn new(pipe: HANDLE) -> io::Result<Self> {
+        // SAFETY: `pipe` is the connected named-pipe server handle for the
+        // current client request.
+        let impersonated = unsafe { ImpersonateNamedPipeClient(pipe) };
+        if impersonated == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(Self)
+        }
+    }
+}
+
+impl Drop for ImpersonationGuard {
+    fn drop(&mut self) {
+        // SAFETY: If this guard exists, the current thread successfully
+        // impersonated a pipe client and must be reverted before leaving scope.
+        unsafe {
+            RevertToSelf();
+        }
+    }
+}
+
+fn open_thread_token() -> io::Result<Option<OwnedHandle>> {
     let mut token: HANDLE = null_mut();
+    // SAFETY: `token` is a valid out pointer and the current thread may have
+    // an impersonation token after `ImpersonateNamedPipeClient`.
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 0, &mut token) };
+    if opened == 0 {
+        let err = last_error();
+        if err == ERROR_NO_TOKEN {
+            Ok(None)
+        } else {
+            Err(io::Error::from_raw_os_error(err as i32))
+        }
+    } else {
+        Ok(Some(OwnedHandle::new(token)))
+    }
+}
+
+fn open_process_token() -> io::Result<OwnedHandle> {
+    let mut token: HANDLE = null_mut();
+    // SAFETY: `token` is a valid out pointer and the process pseudo-handle is
+    // valid for querying the current process token.
     let ok = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
     if ok == 0 {
-        return Err(io::Error::last_os_error());
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(OwnedHandle::new(token))
     }
-    let sid = token_user_sid(token);
-    unsafe {
-        CloseHandle(token);
-    }
-    sid
 }
 
 fn token_user_sid(token: HANDLE) -> io::Result<Vec<u8>> {
     let mut needed = 0u32;
+    // SAFETY: This first call intentionally passes a null buffer to query the
+    // required size in `needed`, which is the documented Windows API pattern.
     unsafe {
         GetTokenInformation(token, TokenUser, null_mut(), 0, &mut needed);
     }
@@ -349,6 +430,8 @@ fn token_user_sid(token: HANDLE) -> io::Result<Vec<u8>> {
         return Err(io::Error::last_os_error());
     }
     let mut buffer = vec![0u8; needed as usize];
+    // SAFETY: `buffer` has `needed` bytes of writable storage and `needed`
+    // points to the size value for the duration of the call.
     let ok = unsafe {
         GetTokenInformation(
             token,
@@ -361,26 +444,34 @@ fn token_user_sid(token: HANDLE) -> io::Result<Vec<u8>> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: On success, `buffer` contains a valid `TOKEN_USER` structure as
+    // documented for `GetTokenInformation(TokenUser, ...)`.
     let token_user = unsafe { &*(buffer.as_ptr() as *const TOKEN_USER) };
     let sid = token_user.User.Sid;
-    let sid_len = unsafe { sid_length(sid) }?;
+    let sid_len = sid_length(sid)?;
     let mut out = vec![0u8; sid_len];
+    // SAFETY: `sid` points inside the successful token information buffer and
+    // `out` has exactly `sid_len` writable bytes. The ranges do not overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(sid as *const u8, out.as_mut_ptr(), sid_len);
     }
     Ok(out)
 }
 
-unsafe fn sid_length(sid: *mut c_void) -> io::Result<usize> {
+fn sid_length(sid: *mut c_void) -> io::Result<usize> {
     if sid.is_null() {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "null SID"));
     }
     let revision_ptr = sid as *const u8;
-    let sub_authority_count = *revision_ptr.add(1) as usize;
+    // SAFETY: `sid` is expected to point to a valid SID returned by Windows.
+    // The second byte is the SID sub-authority count in the documented layout.
+    let sub_authority_count = unsafe { *revision_ptr.add(1) as usize };
     Ok(8 + sub_authority_count * 4)
 }
 
 fn equal_sid(left: &[u8], right: &[u8]) -> bool {
+    // SAFETY: `left` and `right` are SID byte buffers copied from Windows token
+    // data and remain valid for the duration of the comparison call.
     unsafe { EqualSid(left.as_ptr() as *mut c_void, right.as_ptr() as *mut c_void) != 0 }
 }
 
@@ -388,6 +479,9 @@ fn write_all(handle: HANDLE, mut bytes: &[u8]) -> io::Result<()> {
     while !bytes.is_empty() {
         let mut written = 0u32;
         let chunk_len = bytes.len().min(PIPE_BUFFER_BYTES as usize) as u32;
+        // SAFETY: `bytes` points to at least `chunk_len` readable bytes,
+        // `written` is a valid out pointer, and the pipe handle is valid for
+        // writing while this function owns the operation.
         let ok = unsafe { WriteFile(handle, bytes.as_ptr(), chunk_len, &mut written, null_mut()) };
         if ok == 0 {
             return Err(io::Error::last_os_error());
@@ -402,6 +496,8 @@ fn read_to_string(handle: HANDLE) -> io::Result<String> {
     let mut buffer = [0u8; 4096];
     loop {
         let mut read = 0u32;
+        // SAFETY: `buffer` and `read` are valid writable storage for the
+        // duration of the call, and the pipe handle is valid for reading.
         let ok = unsafe {
             ReadFile(
                 handle,

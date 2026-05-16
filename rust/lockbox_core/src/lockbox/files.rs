@@ -8,7 +8,7 @@ use crate::constants::{
     DEFAULT_FILE_PERMISSIONS, DEFAULT_MAX_PAGE_BODY_BYTES, DEFAULT_MAX_PAGE_LOGICAL_BYTES,
 };
 use crate::file_chunk::{FileChunk, FileFragment, PackedSmallFile, PendingFileChunk};
-use crate::format::{decode_file_fragment_payload_view, encode_file_fragment_payload};
+use crate::file_format::{decode_file_fragment_payload_view, encode_file_fragment_payload};
 use crate::logical_path::{canonicalize_api_path as canonicalize_path, LogicalPath};
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
@@ -264,29 +264,31 @@ impl Lockbox {
         let mut stored = vec![0u8; compressed_len];
         for fragment in &chunk.fragments {
             self.with_page_object(fragment.page_offset, fragment.object_id, |object| {
-                let decoded = decode_file_fragment_payload_view(&object.payload)?;
-                if decoded.path != chunk.stored_path
-                    || (decoded.total_len != 0 && decoded.total_len != expected_total_len)
-                    || decoded.frame_id != chunk.frame_id
-                    || decoded.file_offset != chunk.file_offset
-                    || decoded.len != chunk.len
-                    || decoded.compressed_len != chunk.compressed_len
-                    || decoded.compression != chunk.compression
-                    || decoded.fragment_offset != fragment.fragment_offset
-                    || decoded.data.len() as u64 != fragment.fragment_len
-                {
-                    return Err(Error::CorruptRecord);
-                }
-                let start =
-                    usize::try_from(fragment.fragment_offset).map_err(|_| Error::CorruptRecord)?;
-                let end = start
-                    .checked_add(decoded.data.len())
-                    .ok_or(Error::CorruptRecord)?;
-                if end > stored.len() {
-                    return Err(Error::CorruptRecord);
-                }
-                stored[start..end].copy_from_slice(decoded.data);
-                Ok(())
+                object.with_payload(|payload| {
+                    let decoded = decode_file_fragment_payload_view(payload)?;
+                    if decoded.path != chunk.stored_path
+                        || (decoded.total_len != 0 && decoded.total_len != expected_total_len)
+                        || decoded.frame_id != chunk.frame_id
+                        || decoded.file_offset != chunk.file_offset
+                        || decoded.len != chunk.len
+                        || decoded.compressed_len != chunk.compressed_len
+                        || decoded.compression != chunk.compression
+                        || decoded.fragment_offset != fragment.fragment_offset
+                        || decoded.data.len() as u64 != fragment.fragment_len
+                    {
+                        return Err(Error::CorruptRecord);
+                    }
+                    let start = usize::try_from(fragment.fragment_offset)
+                        .map_err(|_| Error::CorruptRecord)?;
+                    let end = start
+                        .checked_add(decoded.data.len())
+                        .ok_or(Error::CorruptRecord)?;
+                    if end > stored.len() {
+                        return Err(Error::CorruptRecord);
+                    }
+                    stored[start..end].copy_from_slice(decoded.data);
+                    Ok(())
+                })?
             })?;
         }
         decode_file_frame(chunk.compression, &stored, chunk.len)
@@ -352,10 +354,10 @@ impl Lockbox {
         let frame_id = self.sequence;
         self.sequence += 1;
         let object_id = self.sequence;
-        let object = PageObject {
-            kind: PageObjectKind::FileData,
-            id: object_id,
-            payload: encode_file_fragment_payload(
+        let object = PageObject::new(
+            PageObjectKind::FileData,
+            object_id,
+            encode_file_fragment_payload(
                 &PendingFileChunk {
                     path: path.clone(),
                     permissions,
@@ -369,7 +371,7 @@ impl Lockbox {
                 stored.len() as u64,
                 0,
             ),
-        };
+        );
         let context = PackedSmallFile {
             path: path.clone(),
             permissions,
@@ -779,11 +781,7 @@ impl<'a> FilePageWriter<'a> {
             compressed_len,
             fragment_offset,
         );
-        let object = PageObject {
-            kind: PageObjectKind::FileData,
-            id: object_id,
-            payload,
-        };
+        let object = PageObject::new(PageObjectKind::FileData, object_id, payload);
         let context = PendingFragment {
             chunk_index,
             fragment_offset,

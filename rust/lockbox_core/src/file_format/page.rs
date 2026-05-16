@@ -1,12 +1,18 @@
 #![allow(dead_code)]
 
-use crate::compression::{decode_page_body, encode_page_body};
-use crate::crypto::{open_with_nonce, seal_with_random_nonce, strong_checksum};
+use crate::compression::{decode_page_body, encode_page_body, COMPRESSION_NONE};
+use crate::crypto::{
+    derive_page_content_key, open_with_content_key_secure, open_with_nonce,
+    seal_with_content_key_secure, seal_with_random_nonce, strong_checksum,
+};
 use crate::lockbox_id::LockboxId;
+use crate::page_buffer::PageBuffer;
 use crate::page_inspection::{PageInspection, PageObjectInspection};
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::scan::Scan;
+use crate::secret_bytes::{secure_read_access, SecureVec};
 use crate::{Error, Result};
+use zeroize::Zeroize;
 
 pub(crate) const PAGE_MAGIC: &[u8; 8] = b"LBX2PAG\0";
 pub(crate) const PAGE_HEADER_LEN: usize = 96;
@@ -78,11 +84,112 @@ impl PageObjectKind {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum PagePayload {
+    Normal(Vec<u8>),
+    Secure(SecureVec),
+}
+
+impl PagePayload {
+    pub(crate) fn normal(payload: Vec<u8>) -> Self {
+        Self::Normal(payload)
+    }
+
+    pub(crate) fn secure(payload: SecureVec) -> Self {
+        Self::Secure(payload)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Normal(payload) => payload.len(),
+            Self::Secure(payload) => payload.len(),
+        }
+    }
+
+    pub(crate) fn with_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Result<R> {
+        match self {
+            Self::Normal(payload) => Ok(f(payload)),
+            Self::Secure(payload) => {
+                secure_read_access(|access| payload.with_bytes_in(access, f)).map_err(Into::into)
+            }
+        }
+    }
+
+    pub(crate) fn try_clone(&self) -> Result<Self> {
+        match self {
+            Self::Normal(payload) => Ok(Self::Normal(payload.clone())),
+            Self::Secure(payload) => Ok(Self::Secure(payload.try_clone()?)),
+        }
+    }
+
+    pub(crate) fn as_secure(&self) -> Option<&SecureVec> {
+        match self {
+            Self::Normal(_) => None,
+            Self::Secure(payload) => Some(payload),
+        }
+    }
+}
+
+impl Drop for PagePayload {
+    fn drop(&mut self) {
+        if let Self::Normal(payload) = self {
+            payload.zeroize();
+        }
+    }
+}
+
+impl Clone for PagePayload {
+    fn clone(&self) -> Self {
+        self.try_clone().expect("page payload clone failed")
+    }
+}
+
+impl PartialEq for PagePayload {
+    fn eq(&self, other: &Self) -> bool {
+        self.with_bytes(|left| other.with_bytes(|right| left == right))
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or(false)
+    }
+}
+
+impl Eq for PagePayload {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PageObject {
     pub(crate) kind: PageObjectKind,
     pub(crate) id: u64,
-    pub(crate) payload: Vec<u8>,
+    pub(crate) payload: PagePayload,
+}
+
+impl PageObject {
+    pub(crate) fn new(kind: PageObjectKind, id: u64, payload: Vec<u8>) -> Self {
+        Self {
+            kind,
+            id,
+            payload: PagePayload::normal(payload),
+        }
+    }
+
+    pub(crate) fn new_secure(kind: PageObjectKind, id: u64, payload: SecureVec) -> Self {
+        Self {
+            kind,
+            id,
+            payload: PagePayload::secure(payload),
+        }
+    }
+
+    pub(crate) fn payload_len(&self) -> usize {
+        self.payload.len()
+    }
+
+    pub(crate) fn with_payload<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Result<R> {
+        self.payload.with_bytes(f)
+    }
+
+    pub(crate) fn secure_payload(&self) -> Option<&SecureVec> {
+        self.payload.as_secure()
+    }
 }
 
 pub(crate) fn encoded_object_stream_len(objects: &[PageObject]) -> Result<usize> {
@@ -97,7 +204,7 @@ pub(crate) fn encoded_object_stream_len(objects: &[PageObject]) -> Result<usize>
 
 pub(crate) fn encoded_object_len(object: &PageObject) -> Result<usize> {
     20usize
-        .checked_add(object.payload.len())
+        .checked_add(object.payload_len())
         .ok_or_else(|| Error::SecurityLimitExceeded("page object is too large".to_string()))
 }
 
@@ -115,6 +222,20 @@ pub(crate) struct DecodedPage {
     pub(crate) objects: Vec<PageObject>,
 }
 
+pub(crate) struct SecureSingleObjectPage<'a> {
+    pub(crate) page_size: usize,
+    pub(crate) lockbox_id: LockboxId,
+    pub(crate) page_id: u64,
+    pub(crate) sequence: u64,
+    pub(crate) content_key: &'a [u8; 32],
+    pub(crate) kind: PageObjectKind,
+    pub(crate) id: u64,
+    pub(crate) payload: &'a SecureVec,
+}
+
+// Raw page codecs used by PageCache. Production lockbox read/write paths should
+// not call these directly; recovery and low-level format tests are the
+// exceptions for raw page codecs in this module.
 pub(crate) fn encode_page(
     page_size: usize,
     lockbox_id: LockboxId,
@@ -217,8 +338,11 @@ pub(crate) fn decode_page(page: &[u8], lockbox_id: LockboxId, key: &[u8]) -> Res
         let aad = page_aad(lockbox_id, page_id, sequence, flags, stored_body_len as u32);
         open_with_nonce(stored_body, key, nonce, &aad)?
     };
-    let object_stream = decode_page_body_plaintext(&body)?;
+    let mut body = body;
+    let mut object_stream = decode_page_body_plaintext(&body)?;
+    body.zeroize();
     let objects = decode_object_stream(&object_stream)?;
+    object_stream.zeroize();
     let clear_text = page_objects_are_clear_text(&objects)?;
     if clear_text != (flags & PAGE_FLAG_CLEAR_TEXT != 0) {
         return Err(Error::CorruptRecord);
@@ -230,9 +354,222 @@ pub(crate) fn decode_page(page: &[u8], lockbox_id: LockboxId, key: &[u8]) -> Res
     })
 }
 
+pub(crate) fn decode_single_object_page_secure(
+    page: &mut SecureVec,
+    lockbox_id: LockboxId,
+    content_key: &[u8; 32],
+) -> Result<DecodedPage> {
+    let (page_id, sequence) = decrypt_page_body_secure(page, lockbox_id, content_key)?;
+    decode_page_body_plaintext_in_place(page)?;
+    let (kind, id, payload) = decode_single_object_stream_in_place(page)?;
+    let object = PageObject::new_secure(kind, id, payload);
+    Ok(DecodedPage {
+        page_id,
+        sequence,
+        objects: vec![object],
+    })
+}
+
+pub(crate) fn encode_single_object_page_secure(
+    request: SecureSingleObjectPage<'_>,
+) -> Result<Vec<u8>> {
+    if request.page_size < PAGE_HEADER_LEN {
+        return Err(Error::SecurityLimitExceeded(
+            "page is smaller than the header".to_string(),
+        ));
+    }
+    if request.kind.is_clear_text_page_object() {
+        return Err(Error::CorruptRecord);
+    }
+
+    let mut body = SecureVec::new();
+    body.try_extend_from_slice(&1u32.to_le_bytes())?;
+    body.try_extend_from_slice(&[request.kind as u8, 1])?;
+    body.try_extend_from_slice(&0u16.to_le_bytes())?;
+    body.try_extend_from_slice(&request.id.to_le_bytes())?;
+    body.try_extend_from_slice(&(request.payload.len() as u64).to_le_bytes())?;
+    body.try_extend_from_secure(request.payload)?;
+
+    let object_stream_len = body.len();
+    let mut page_body = SecureVec::new();
+    page_body.try_extend_from_slice(&[PAGE_BODY_VERSION, COMPRESSION_NORMAL, 0, 0])?;
+    page_body.try_extend_from_slice(&(object_stream_len as u64).to_le_bytes())?;
+    page_body.try_extend_from_slice(&0u32.to_le_bytes())?;
+    page_body.try_extend_from_slice(&(object_stream_len as u64).to_le_bytes())?;
+    page_body.try_extend_from_slice(&[COMPRESSION_NONE])?;
+    page_body.try_extend_from_slice(&(object_stream_len as u64).to_le_bytes())?;
+    page_body.try_extend_from_secure(&body)?;
+    body.zeroize()?;
+
+    let encrypted_len = page_body
+        .len()
+        .checked_add(16)
+        .ok_or_else(|| Error::SecurityLimitExceeded("page body is too large".to_string()))?;
+    let encrypted_len = u32::try_from(encrypted_len)
+        .map_err(|_| Error::SecurityLimitExceeded("page body is too large".to_string()))?;
+    let aad = page_aad(
+        request.lockbox_id,
+        request.page_id,
+        request.sequence,
+        0,
+        encrypted_len,
+    );
+    let nonce = seal_with_content_key_secure(&mut page_body, request.content_key, &aad)?;
+    let stored_body_len = u32::try_from(page_body.len())
+        .map_err(|_| Error::SecurityLimitExceeded("page body is too large".to_string()))?;
+    if PAGE_HEADER_LEN + page_body.len() > request.page_size {
+        return Err(Error::SecurityLimitExceeded(
+            "page body exceeds fixed page size".to_string(),
+        ));
+    }
+
+    let mut page = vec![0; request.page_size];
+    page[0..8].copy_from_slice(PAGE_MAGIC);
+    page[8..10].copy_from_slice(&PAGE_VERSION.to_le_bytes());
+    page[10..12].copy_from_slice(&0u16.to_le_bytes());
+    page[12..16].copy_from_slice(&(PAGE_HEADER_LEN as u32).to_le_bytes());
+    page[16..24].copy_from_slice(&request.page_id.to_le_bytes());
+    page[24..32].copy_from_slice(&request.sequence.to_le_bytes());
+    page[32..44].copy_from_slice(&nonce);
+    page[44..48].copy_from_slice(&stored_body_len.to_le_bytes());
+    let header_digest = strong_checksum(&page[0..PAGE_CHECKSUM_START]);
+    page[PAGE_CHECKSUM_START..PAGE_HEADER_LEN].copy_from_slice(&header_digest);
+    secure_read_access(|access| {
+        page_body.with_bytes_in(access, |encrypted| {
+            page[PAGE_HEADER_LEN..PAGE_HEADER_LEN + encrypted.len()].copy_from_slice(encrypted);
+        })
+    })?;
+    page_body.zeroize()?;
+    Ok(page)
+}
+
+fn decrypt_page_body_secure(
+    page: &mut SecureVec,
+    lockbox_id: LockboxId,
+    content_key: &[u8; 32],
+) -> Result<(u64, u64)> {
+    let header: (u64, u64, [u8; 12], u16, usize, usize) = secure_read_access(|access| {
+        page.with_bytes_in(access, |page| {
+            if page.len() < PAGE_HEADER_LEN {
+                return Err(Error::Truncated);
+            }
+            if &page[0..8] != PAGE_MAGIC {
+                return Err(Error::CorruptRecord);
+            }
+            if u16::from_le_bytes(page[8..10].try_into().unwrap()) != PAGE_VERSION {
+                return Err(Error::CorruptRecord);
+            }
+            let flags = u16::from_le_bytes(page[10..12].try_into().unwrap());
+            if flags & !PAGE_FLAG_CLEAR_TEXT != 0 {
+                return Err(Error::CorruptRecord);
+            }
+            let header_len = u32::from_le_bytes(page[12..16].try_into().unwrap()) as usize;
+            if header_len != PAGE_HEADER_LEN || header_len > page.len() {
+                return Err(Error::CorruptRecord);
+            }
+            if page[48..PAGE_CHECKSUM_START].iter().any(|byte| *byte != 0) {
+                return Err(Error::CorruptRecord);
+            }
+            let expected_digest = strong_checksum(&page[0..PAGE_CHECKSUM_START]);
+            if page[PAGE_CHECKSUM_START..PAGE_HEADER_LEN] != expected_digest {
+                return Err(Error::CorruptRecord);
+            }
+            let stored_body_len = u32::from_le_bytes(page[44..48].try_into().unwrap()) as usize;
+            if header_len + stored_body_len > page.len() {
+                return Err(Error::Truncated);
+            }
+            Ok((
+                u64::from_le_bytes(page[16..24].try_into().unwrap()),
+                u64::from_le_bytes(page[24..32].try_into().unwrap()),
+                page[32..44].try_into().unwrap(),
+                flags,
+                header_len,
+                stored_body_len,
+            ))
+        })
+    })??;
+    let (page_id, sequence, nonce, flags, header_len, stored_body_len) = header;
+    if flags & PAGE_FLAG_CLEAR_TEXT != 0 {
+        return Err(Error::CorruptRecord);
+    }
+    page.with_mut_bytes(|bytes| {
+        bytes.copy_within(header_len..header_len + stored_body_len, 0);
+    })?;
+    page.truncate(stored_body_len)?;
+    let aad = page_aad(lockbox_id, page_id, sequence, flags, stored_body_len as u32);
+    open_with_content_key_secure(page, content_key, &nonce, &aad)?;
+    Ok((page_id, sequence))
+}
+
+fn decode_page_body_plaintext_in_place<B: PageBuffer>(body: &mut B) -> Result<()> {
+    let (stored_offset, stored_len) = body.with_bytes(|body| {
+        if body.len() < 33 {
+            return Err(Error::CorruptRecord);
+        }
+        if body[0] != PAGE_BODY_VERSION || body[1] != COMPRESSION_NORMAL {
+            return Err(Error::CorruptRecord);
+        }
+        let expected_len = u64::from_le_bytes(body[4..12].try_into().unwrap()) as usize;
+        let compression = &body[16..];
+        let real_len = u64::from_le_bytes(compression[0..8].try_into().unwrap()) as usize;
+        let algorithm = compression[8];
+        let stored_len = u64::from_le_bytes(compression[9..17].try_into().unwrap()) as usize;
+        if algorithm != COMPRESSION_NONE {
+            return Err(Error::CorruptRecord);
+        }
+        if expected_len != real_len || stored_len != real_len {
+            return Err(Error::CorruptRecord);
+        }
+        let stored_offset = 16usize + 17;
+        if stored_offset + stored_len > body.len() {
+            return Err(Error::CorruptRecord);
+        }
+        Ok((stored_offset, stored_len))
+    })??;
+    body.with_mut_bytes(|bytes| {
+        bytes.copy_within(stored_offset..stored_offset + stored_len, 0);
+    })?;
+    body.truncate(stored_len)?;
+    Ok(())
+}
+
+fn decode_single_object_stream_in_place<B: PageBuffer>(
+    stream: &mut B,
+) -> Result<(PageObjectKind, u64, B)> {
+    let (kind, id, payload_offset, payload_len) = stream.with_bytes(|bytes| {
+        if bytes.len() < 24 {
+            return Err(Error::CorruptRecord);
+        }
+        let count = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+        if count != 1 {
+            return Err(Error::CorruptRecord);
+        }
+        let kind = PageObjectKind::from_u8(bytes[4])?;
+        let version = bytes[5];
+        let flags = u16::from_le_bytes(bytes[6..8].try_into().unwrap());
+        if version != 1 || flags != 0 {
+            return Err(Error::CorruptRecord);
+        }
+        let id = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        let payload_len = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+        let payload_offset = 24usize;
+        if payload_offset + payload_len != bytes.len() {
+            return Err(Error::CorruptRecord);
+        }
+        Ok((kind, id, payload_offset, payload_len))
+    })??;
+    stream.with_mut_bytes(|bytes| {
+        bytes.copy_within(payload_offset..payload_offset + payload_len, 0);
+    })?;
+    stream.truncate(payload_len)?;
+    let payload = stream.try_clone_range(0, payload_len)?;
+    Ok((kind, id, payload))
+}
+
 pub(crate) fn scan_page_records(bytes: &[u8], lockbox_id: LockboxId, key: &[u8]) -> Scan {
     let mut records = Vec::new();
     let mut corrupt_records = 0usize;
+    let mut content_key = derive_page_content_key(key);
     let mut i = crate::constants::HEADER_LEN;
     while i + PAGE_HEADER_LEN <= bytes.len() {
         if &bytes[i..i + 8] == PAGE_MAGIC {
@@ -240,11 +577,20 @@ pub(crate) fn scan_page_records(bytes: &[u8], lockbox_id: LockboxId, key: &[u8])
                 corrupt_records += 1;
                 break;
             };
+            if decode_secure_env_page_inspection(page_bytes, lockbox_id, &content_key).is_some() {
+                i += DEFAULT_METADATA_PAGE_BYTES;
+                continue;
+            }
             match decode_page(page_bytes, lockbox_id, key) {
                 Ok(page) => {
                     let page_size = page_size_for_objects(&page.objects);
                     for object in page.objects {
                         if let Some(kind) = record_kind_from_object_kind(object.kind) {
+                            let Ok(payload) = object.with_payload(|payload| payload.to_vec())
+                            else {
+                                corrupt_records += 1;
+                                continue;
+                            };
                             records.push(DecodedRecord {
                                 header: RecordHeader {
                                     kind,
@@ -253,7 +599,7 @@ pub(crate) fn scan_page_records(bytes: &[u8], lockbox_id: LockboxId, key: &[u8])
                                 },
                                 offset: i as u64,
                                 object_id: object.id,
-                                payload: object.payload,
+                                payload,
                             });
                         }
                     }
@@ -268,6 +614,7 @@ pub(crate) fn scan_page_records(bytes: &[u8], lockbox_id: LockboxId, key: &[u8])
             i += 1;
         }
     }
+    content_key.zeroize();
     records.sort_by_key(|record| record.header.sequence);
     Scan {
         records,
@@ -281,12 +628,20 @@ pub(crate) fn inspect_pages(
     key: &[u8],
 ) -> Vec<PageInspection> {
     let mut pages = Vec::new();
+    let mut content_key = derive_page_content_key(key);
     let mut i = crate::constants::HEADER_LEN;
     while i + PAGE_HEADER_LEN <= bytes.len() {
         if &bytes[i..i + 8] == PAGE_MAGIC {
             let Some(page_bytes) = page_decode_slice(bytes, i) else {
                 break;
             };
+            if let Some(inspection) =
+                inspect_secure_env_page(page_bytes, i as u64, lockbox_id, &content_key)
+            {
+                pages.push(inspection);
+                i += DEFAULT_METADATA_PAGE_BYTES;
+                continue;
+            }
             if let Ok(decoded) = decode_page(page_bytes, lockbox_id, key) {
                 let page_size = page_size_for_objects(&decoded.objects);
                 let encrypted_body_len = u32::from_le_bytes(page_bytes[44..48].try_into().unwrap());
@@ -296,7 +651,7 @@ pub(crate) fn inspect_pages(
                     .map(|object| PageObjectInspection {
                         id: object.id,
                         kind: page_object_kind_name(object.kind),
-                        payload_len: object.payload.len(),
+                        payload_len: object.payload_len(),
                     })
                     .collect::<Vec<_>>();
                 pages.push(PageInspection {
@@ -315,7 +670,58 @@ pub(crate) fn inspect_pages(
             i += 1;
         }
     }
+    content_key.zeroize();
     pages
+}
+
+fn inspect_secure_env_page(
+    page_bytes: &[u8],
+    offset: u64,
+    lockbox_id: LockboxId,
+    content_key: &[u8; 32],
+) -> Option<PageInspection> {
+    let (page_id, sequence, stored_body_len) = public_page_header_metadata(page_bytes)?;
+    let object = decode_secure_env_page_inspection(page_bytes, lockbox_id, content_key)?;
+    Some(PageInspection {
+        offset,
+        page_id,
+        sequence,
+        encrypted_body_len: stored_body_len as u32,
+        object_count: 1,
+        objects: vec![object],
+    })
+}
+
+fn decode_secure_env_page_inspection(
+    page_bytes: &[u8],
+    lockbox_id: LockboxId,
+    content_key: &[u8; 32],
+) -> Option<PageObjectInspection> {
+    let mut page = SecureVec::try_from_slice(page_bytes).ok()?;
+    let decoded = decode_single_object_page_secure(&mut page, lockbox_id, content_key).ok()?;
+    let object = decoded.objects.first()?;
+    if !matches!(
+        object.kind,
+        PageObjectKind::EnvLeaf | PageObjectKind::EnvInternal
+    ) {
+        return None;
+    }
+    Some(PageObjectInspection {
+        id: object.id,
+        kind: page_object_kind_name(object.kind),
+        payload_len: object.payload_len(),
+    })
+}
+
+fn public_page_header_metadata(page: &[u8]) -> Option<(u64, u64, usize)> {
+    if page.len() < PAGE_HEADER_LEN || &page[0..8] != PAGE_MAGIC {
+        return None;
+    }
+    Some((
+        u64::from_le_bytes(page[16..24].try_into().ok()?),
+        u64::from_le_bytes(page[24..32].try_into().ok()?),
+        u32::from_le_bytes(page[44..48].try_into().ok()?) as usize,
+    ))
 }
 
 pub(crate) fn page_decode_slice(bytes: &[u8], offset: usize) -> Option<&[u8]> {
@@ -417,8 +823,8 @@ fn encode_object_stream(objects: &[PageObject]) -> Result<Vec<u8>> {
         out.push(1);
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&object.id.to_le_bytes());
-        out.extend_from_slice(&(object.payload.len() as u64).to_le_bytes());
-        out.extend_from_slice(&object.payload);
+        out.extend_from_slice(&(object.payload_len() as u64).to_le_bytes());
+        object.with_payload(|payload| out.extend_from_slice(payload))?;
     }
     Ok(out)
 }
@@ -450,11 +856,11 @@ fn decode_object_stream(bytes: &[u8]) -> Result<Vec<PageObject>> {
         if offset + payload_len > bytes.len() {
             return Err(Error::CorruptRecord);
         }
-        objects.push(PageObject {
+        objects.push(PageObject::new(
             kind,
             id,
-            payload: bytes[offset..offset + payload_len].to_vec(),
-        });
+            bytes[offset..offset + payload_len].to_vec(),
+        ));
         offset += payload_len;
     }
     if offset != bytes.len() {
@@ -490,16 +896,8 @@ mod tests {
         let lockbox_id = LockboxId::new_random().unwrap();
         let key = b"secret";
         let objects = vec![
-            PageObject {
-                kind: PageObjectKind::TocLeaf,
-                id: 10,
-                payload: b"toc".to_vec(),
-            },
-            PageObject {
-                kind: PageObjectKind::PackedFileData,
-                id: 11,
-                payload: b"file".to_vec(),
-            },
+            PageObject::new(PageObjectKind::TocLeaf, 10, b"toc".to_vec()),
+            PageObject::new(PageObjectKind::PackedFileData, 11, b"file".to_vec()),
         ];
 
         let page = encode_page(128 * 1024, lockbox_id, 3, 7, key, &objects).unwrap();
@@ -516,11 +914,11 @@ mod tests {
     fn page_rejects_tampering() {
         let lockbox_id = LockboxId::new_random().unwrap();
         let key = b"secret";
-        let objects = vec![PageObject {
-            kind: PageObjectKind::TocLeaf,
-            id: 10,
-            payload: b"toc".to_vec(),
-        }];
+        let objects = vec![PageObject::new(
+            PageObjectKind::TocLeaf,
+            10,
+            b"toc".to_vec(),
+        )];
 
         let mut page = encode_page(128 * 1024, lockbox_id, 3, 7, key, &objects).unwrap();
         page[PAGE_HEADER_LEN + 8] ^= 0x01;
@@ -532,11 +930,11 @@ mod tests {
     fn page_rejects_public_header_checksum_tampering() {
         let lockbox_id = LockboxId::new_random().unwrap();
         let key = b"secret";
-        let objects = vec![PageObject {
-            kind: PageObjectKind::TocLeaf,
-            id: 10,
-            payload: b"toc".to_vec(),
-        }];
+        let objects = vec![PageObject::new(
+            PageObjectKind::TocLeaf,
+            10,
+            b"toc".to_vec(),
+        )];
 
         let mut page = encode_page(128 * 1024, lockbox_id, 3, 7, key, &objects).unwrap();
         page[16] ^= 0x01;
@@ -547,11 +945,11 @@ mod tests {
     #[test]
     fn clear_text_page_uses_page_checksum_for_body_integrity() {
         let lockbox_id = LockboxId::new_random().unwrap();
-        let objects = vec![PageObject {
-            kind: PageObjectKind::KeyDirectory,
-            id: 10,
-            payload: b"keys".to_vec(),
-        }];
+        let objects = vec![PageObject::new(
+            PageObjectKind::KeyDirectory,
+            10,
+            b"keys".to_vec(),
+        )];
 
         let mut page = encode_page(128 * 1024, lockbox_id, 3, 7, b"", &objects).unwrap();
         assert_eq!(
@@ -563,5 +961,13 @@ mod tests {
 
         page[PAGE_HEADER_LEN + 40] ^= 0x01;
         assert!(decode_page(&page, LockboxId::from_bytes([0; 16]), b"").is_err());
+    }
+
+    #[test]
+    fn secure_payload_can_be_read_only_through_scoped_access() {
+        let payload = SecureVec::try_from_slice(b"secret").unwrap();
+        let object = PageObject::new_secure(PageObjectKind::EnvLeaf, 10, payload);
+
+        assert!(object.with_payload(|payload| payload == b"secret").unwrap());
     }
 }

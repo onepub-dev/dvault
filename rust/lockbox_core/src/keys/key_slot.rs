@@ -3,8 +3,9 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
-use crate::key_derivation::derive_key_from_password;
+use crate::key_derivation::{derive_key_from_password, derive_key_from_password_bytes};
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey, MlKemWrappedKey};
+use crate::secret_bytes::SecretString;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,13 +56,13 @@ impl KeySlot {
         }
     }
 
-    pub(crate) fn password(
+    pub(crate) fn password_bytes(
         id: u64,
         password: &[u8],
         salt: Vec<u8>,
         content_key: &[u8],
     ) -> Result<Self> {
-        let mut wrapping_key = derive_key_from_password(password, &salt)?;
+        let mut wrapping_key = derive_key_from_password_bytes(password, &salt)?;
         let encrypted_key = encrypt_wrapped_key(&wrapping_key, content_key)?;
         wrapping_key.zeroize();
         Ok(Self::Password {
@@ -82,7 +83,7 @@ impl KeySlot {
         })
     }
 
-    pub(crate) fn try_password(&self, password: &[u8]) -> Result<Vec<u8>> {
+    pub(crate) fn try_password(&self, password: &SecretString) -> Result<Vec<u8>> {
         match self {
             KeySlot::Password {
                 salt,

@@ -3,10 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::commit_root::decode_commit_root;
 use crate::constants::HEADER_LEN;
-use crate::env_btree::{EnvLeaf, EnvTreeNode};
+use crate::env_btree::{EnvLeaf, EnvTreeNode, EnvValue};
 use crate::fast_hash::FastBuildHasher;
 use crate::file_chunk::{PackedSmallFile, PendingFileChunk};
-use crate::format::{
+use crate::file_format::{
     decode_toc_node, read_header, write_header, TocInternal, TocLeaf, TocNode, TocTreeNode,
 };
 use crate::free_index::{decode_free_index_internal, decode_free_index_leaf};
@@ -23,12 +23,13 @@ use crate::page::{
     page_size_for_objects, DecodedPage, PageObject, PageObjectKind, DEFAULT_METADATA_PAGE_BYTES,
     DEFAULT_PAGE_BYTES, PAGE_MAGIC,
 };
-use crate::page_cache::{PageCache, PageWritePolicy};
+use crate::page_cache::{PageCache, PageReadKey, PageSecurity, PageWritePolicy};
 use crate::page_object_packer::PageObjectPacker;
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
-use crate::secret_bytes::SecretBytes;
+use crate::secret_bytes::SecretVec;
 use crate::storage::{Storage, StorageBackend};
 use crate::{CacheLimit, CacheStats, Error, LockboxOptions, Result, WorkloadProfile};
+use zeroize::Zeroize;
 
 mod commit;
 mod env;
@@ -42,10 +43,10 @@ mod symlinks;
 
 pub use key_management::{LockboxCreate, LockboxUnlock, UnlockedContentKey};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Lockbox {
     storage: StorageBackend,
-    key: SecretBytes,
+    key: SecretVec,
     sequence: u64,
     commit_root_offset: u64,
     manifest_offset: u64,
@@ -61,7 +62,7 @@ pub struct Lockbox {
     toc_root: Option<TocTreeNode>,
     toc_leaves: Vec<TocLeaf>,
     dirty_toc_paths: BTreeSet<LogicalPath>,
-    env_vars: RefCell<Option<BTreeMap<String, String>>>,
+    env_vars: RefCell<Option<BTreeMap<String, EnvValue>>>,
     env_root: Option<EnvTreeNode>,
     env_leaves: Vec<EnvLeaf>,
     dirty_env: bool,
@@ -79,6 +80,43 @@ pub struct Lockbox {
 }
 
 impl Lockbox {
+    pub(crate) fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            storage: self.storage.clone(),
+            key: self.key.try_clone()?,
+            sequence: self.sequence,
+            commit_root_offset: self.commit_root_offset,
+            manifest_offset: self.manifest_offset,
+            env_root_offset: self.env_root_offset,
+            free_index_offset: self.free_index_offset,
+            key_directory_offset: self.key_directory_offset,
+            key_directory_mirror_offsets: self.key_directory_mirror_offsets,
+            key_directory_generation: self.key_directory_generation,
+            dirty_key_directory: self.dirty_key_directory,
+            lockbox_id: self.lockbox_id,
+            key_slots: self.key_slots.clone(),
+            manifest: self.manifest.clone(),
+            toc_root: self.toc_root.clone(),
+            toc_leaves: self.toc_leaves.clone(),
+            dirty_toc_paths: self.dirty_toc_paths.clone(),
+            env_vars: RefCell::new(self.env_vars.borrow().clone()),
+            env_root: self.env_root.clone(),
+            env_leaves: self.env_leaves.clone(),
+            dirty_env: self.dirty_env,
+            page_manager: RefCell::new(self.page_manager.borrow().clone()),
+            workload_profile: self.workload_profile,
+            free_space: self.free_space.clone(),
+            record_ref_counts: self.record_ref_counts.clone(),
+            pending_redactions: self.pending_redactions.clone(),
+            redacted_free_slots: self.redacted_free_slots.clone(),
+            pending_small_files: self.pending_small_files.clone(),
+            pending_small_file_bytes: self.pending_small_file_bytes,
+            bulk_small_file_packer: self.bulk_small_file_packer.clone(),
+            pending_symlinks: self.pending_symlinks.clone(),
+            needs_packing: self.needs_packing,
+        })
+    }
+
     pub fn create(key: impl AsRef<[u8]>) -> Self {
         Self::create_with_options(key, LockboxOptions::default())
     }
@@ -100,7 +138,16 @@ impl Lockbox {
         lockbox_id: LockboxId,
         options: LockboxOptions,
     ) -> Self {
-        let key = SecretBytes::new(key.as_ref().to_vec());
+        let key = SecretVec::try_from_slice(key.as_ref())
+            .expect("secure allocation failed while creating lockbox");
+        Self::create_with_secret_key_and_options(key, lockbox_id, options)
+    }
+
+    pub(crate) fn create_with_secret_key_and_options(
+        key: SecretVec,
+        lockbox_id: LockboxId,
+        options: LockboxOptions,
+    ) -> Self {
         let mut bytes = vec![0; HEADER_LEN];
         write_header(&mut bytes, 0, 0, 0, lockbox_id);
         Self {
@@ -156,7 +203,15 @@ impl Lockbox {
         key: impl AsRef<[u8]>,
         options: LockboxOptions,
     ) -> Result<Self> {
-        let key = SecretBytes::new(key.as_ref().to_vec());
+        let key = SecretVec::try_from_slice(key.as_ref())?;
+        Self::open_storage_with_secret_key(storage, key, options)
+    }
+
+    pub(crate) fn open_storage_with_secret_key(
+        storage: StorageBackend,
+        key: SecretVec,
+        options: LockboxOptions,
+    ) -> Result<Self> {
         let header = storage.read_at(0, HEADER_LEN)?;
         let header_result = read_header(&header);
         let scanned_key_directory = if header_result.is_err() {
@@ -342,7 +397,7 @@ impl Lockbox {
             },
             offset,
             object_id: object.id,
-            payload: object.payload.clone(),
+            payload: object.with_payload(|payload| payload.to_vec())?,
         })
     }
 
@@ -350,34 +405,40 @@ impl Lockbox {
         self.with_page(offset, |page| Ok(page.clone()))
     }
 
-    fn decode_page_from_storage(&self, offset: u64) -> Result<crate::page::DecodedPage> {
-        PageCache::read_decoded_page_from_storage(
-            &self.storage,
-            offset,
-            self.lockbox_id,
-            self.key.expose(),
-        )
-    }
-
     pub(crate) fn with_page<R>(
         &self,
         offset: u64,
         f: impl FnOnce(&crate::page::DecodedPage) -> Result<R>,
     ) -> Result<R> {
-        let mut f = Some(f);
-        if let Some(result) = self.page_manager.borrow_mut().with_page(offset, |page| {
-            f.take().expect("page callback present")(page)
-        }) {
-            return result;
-        }
+        let page = self.key.with_bytes(|key| {
+            self.page_manager.borrow_mut().read_page(
+                &self.storage,
+                offset,
+                self.lockbox_id,
+                PageSecurity::Normal,
+                PageReadKey::Normal(key),
+            )
+        })??;
+        f(&page)
+    }
 
-        let page = self.decode_page_from_storage(offset)?;
-        let result = f.take().expect("page callback present")(&page)?;
-        let page_size = page_size_for_objects(&page.objects);
-        self.page_manager
-            .borrow_mut()
-            .insert_page(offset, page, page_size as u64);
-        Ok(result)
+    pub(crate) fn with_secure_page<R>(
+        &self,
+        offset: u64,
+        f: impl FnOnce(&crate::page::DecodedPage) -> Result<R>,
+    ) -> Result<R> {
+        let mut content_key = self
+            .key
+            .with_bytes(crate::crypto::derive_page_content_key)?;
+        let page = self.page_manager.borrow_mut().read_page(
+            &self.storage,
+            offset,
+            self.lockbox_id,
+            PageSecurity::Secure,
+            PageReadKey::Secure(&content_key),
+        );
+        content_key.zeroize();
+        f(&page?)
     }
 
     #[allow(dead_code)]
@@ -397,7 +458,15 @@ impl Lockbox {
             return result;
         }
 
-        let mut page = self.decode_page_from_storage(offset)?;
+        let mut page = self.key.with_bytes(|key| {
+            self.page_manager.borrow_mut().read_page(
+                &self.storage,
+                offset,
+                self.lockbox_id,
+                PageSecurity::Normal,
+                PageReadKey::Normal(key),
+            )
+        })??;
         let result = f.take().expect("page callback present")(&mut page)?;
         let page_size = page_size_for_objects(&page.objects);
         self.page_manager
@@ -502,19 +571,23 @@ impl Lockbox {
     }
 
     pub(crate) fn flush_dirty_pages(&mut self) -> Result<()> {
-        self.page_manager.borrow_mut().flush_dirty_pages(
-            &mut self.storage,
-            self.lockbox_id,
-            self.key.expose(),
-        )
+        self.key.with_bytes(|key| {
+            self.page_manager.borrow_mut().flush_dirty_pages(
+                &mut self.storage,
+                self.lockbox_id,
+                key,
+            )
+        })?
     }
 
     pub(crate) fn flush_discardable_pages(&mut self) -> Result<()> {
-        self.page_manager.borrow_mut().flush_discardable_pages(
-            &mut self.storage,
-            self.lockbox_id,
-            self.key.expose(),
-        )
+        self.key.with_bytes(|key| {
+            self.page_manager.borrow_mut().flush_discardable_pages(
+                &mut self.storage,
+                self.lockbox_id,
+                key,
+            )
+        })?
     }
 
     pub(crate) fn has_dirty_pages(&self) -> bool {
@@ -539,11 +612,8 @@ impl Lockbox {
 
     pub fn inspect_pages(&self) -> Result<Vec<crate::PageInspection>> {
         let bytes = self.bytes()?;
-        Ok(crate::page::inspect_pages(
-            &bytes,
-            self.lockbox_id,
-            self.key.expose(),
-        ))
+        self.key
+            .with_bytes(|key| Ok(crate::page::inspect_pages(&bytes, self.lockbox_id, key)))?
     }
 
     pub(crate) fn mark_toc_dirty(&mut self, path: &str) {
@@ -849,7 +919,7 @@ impl Lockbox {
         }) else {
             return Err(Error::CorruptRecord);
         };
-        Ok(toc_object.payload.clone())
+        toc_object.with_payload(|payload| payload.to_vec())
     }
 
     fn read_commit_root_at(&self, offset: u64) -> Result<crate::commit_root::CommitRoot> {
@@ -861,7 +931,7 @@ impl Lockbox {
         else {
             return Err(Error::CorruptHeader);
         };
-        decode_commit_root(&commit_root_object.payload)
+        commit_root_object.with_payload(decode_commit_root)?
     }
 
     fn find_latest_valid_commit_root(
@@ -903,7 +973,7 @@ impl Lockbox {
             .iter()
             .find(|object| object.kind == PageObjectKind::FreeIndexLeaf)
         {
-            return decode_free_index_leaf(&leaf.payload);
+            return leaf.with_payload(decode_free_index_leaf)?;
         }
         let Some(internal) = decoded
             .objects
@@ -913,7 +983,8 @@ impl Lockbox {
             return Err(Error::CorruptHeader);
         };
         let mut slots = Vec::new();
-        for child in decode_free_index_internal(&internal.payload)? {
+        let children = internal.with_payload(decode_free_index_internal)??;
+        for child in children {
             slots.extend(self.read_free_index_slots(child.offset, depth + 1)?);
         }
         Ok(slots)

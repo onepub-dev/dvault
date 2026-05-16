@@ -1,95 +1,191 @@
 use lockbox_vault::SecretString;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Read, Write};
 
 pub(crate) fn prompt_secret(prompt: &str) -> io::Result<SecretString> {
     print!("{prompt}");
     io::stdout().flush()?;
-    let bytes = read_secret_bytes()?;
+    let secret = read_secret_string()?;
     println!();
-    Ok(SecretString::from_bytes(bytes))
+    Ok(secret)
 }
 
 #[cfg(unix)]
-fn read_secret_bytes() -> io::Result<Vec<u8>> {
-    let fd = libc::STDIN_FILENO;
-    let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
-    let has_tty = unsafe { libc::tcgetattr(fd, &mut termios) == 0 };
-    let original = termios;
-    if has_tty {
+fn read_secret_string() -> io::Result<SecretString> {
+    let _guard = TerminalEchoGuard::disable()?;
+    read_line_secret()
+}
+
+#[cfg(unix)]
+struct TerminalEchoGuard {
+    fd: i32,
+    original: libc::termios,
+}
+
+#[cfg(unix)]
+impl TerminalEchoGuard {
+    fn disable() -> io::Result<Option<Self>> {
+        let fd = libc::STDIN_FILENO;
+        let Some(mut termios) = get_terminal_attributes(fd)? else {
+            return Ok(None);
+        };
+        let original = termios;
         termios.c_lflag &= !libc::ECHO;
-        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        set_terminal_attributes(fd, &termios)?;
+        Ok(Some(Self { fd, original }))
     }
+}
 
-    let result = read_line_bytes();
+#[cfg(unix)]
+impl Drop for TerminalEchoGuard {
+    fn drop(&mut self) {
+        let _ = set_terminal_attributes(self.fd, &self.original);
+    }
+}
 
+#[cfg(unix)]
+fn get_terminal_attributes(fd: i32) -> io::Result<Option<libc::termios>> {
+    // SAFETY: `termios` is a plain C struct. It is immediately initialized by
+    // `tcgetattr` before any successful terminal settings are used.
+    let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
+    // SAFETY: `fd` is the process standard input descriptor and `termios`
+    // points to valid writable storage for the duration of the call.
+    let has_tty = unsafe { libc::tcgetattr(fd, &mut termios) == 0 };
     if has_tty {
-        unsafe {
-            libc::tcsetattr(fd, libc::TCSANOW, &original);
-        }
+        Ok(Some(termios))
+    } else {
+        Ok(None)
     }
-    result
+}
+
+#[cfg(unix)]
+fn set_terminal_attributes(fd: i32, termios: &libc::termios) -> io::Result<()> {
+    // SAFETY: `termios` contains settings returned by `tcgetattr` with limited
+    // flag modifications, and the pointer is valid for this call.
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, termios) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
-fn read_secret_bytes() -> io::Result<Vec<u8>> {
-    read_line_bytes()
+fn read_secret_string() -> io::Result<SecretString> {
+    read_line_secret()
 }
 
-fn read_line_bytes() -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    io::stdin().lock().read_until(b'\n', &mut bytes)?;
-    trim_line_ending(&mut bytes);
-    Ok(bytes)
-}
-
-fn trim_line_ending(bytes: &mut Vec<u8>) {
-    if bytes.last() == Some(&b'\n') {
-        bytes.pop();
+fn read_line_secret() -> io::Result<SecretString> {
+    let mut secret = SecretString::new();
+    let mut stdin = io::stdin().lock();
+    let mut buffer = [0u8; 256];
+    loop {
+        let read = stdin.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let end = buffer[..read]
+            .iter()
+            .position(|byte| matches!(byte, b'\n' | b'\r'));
+        let value_len = end.unwrap_or(read);
+        secret
+            .try_extend_from_slice(&buffer[..value_len])
+            .map_err(io::Error::other)?;
+        clear_buffer(&mut buffer);
+        if end.is_some() {
+            break;
+        }
     }
-    if bytes.last() == Some(&b'\r') {
-        bytes.pop();
+    Ok(secret)
+}
+
+fn clear_buffer(buffer: &mut [u8]) {
+    buffer.fill(0);
+    std::hint::black_box(buffer);
+}
+
+#[cfg(windows)]
+fn read_secret_string() -> io::Result<SecretString> {
+    let Some(guard) = ConsoleEchoGuard::disable()? else {
+        return read_line_secret();
+    };
+    read_console_utf16(guard.handle)
+}
+
+#[cfg(windows)]
+struct ConsoleEchoGuard {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    original: u32,
+}
+
+#[cfg(windows)]
+impl ConsoleEchoGuard {
+    fn disable() -> io::Result<Option<Self>> {
+        use windows_sys::Win32::System::Console::{ENABLE_ECHO_INPUT, STD_INPUT_HANDLE};
+
+        let handle = std_input_handle();
+        if handle.is_null() {
+            return Ok(None);
+        }
+        let Some(original) = console_mode(handle)? else {
+            return Ok(None);
+        };
+        set_console_mode(handle, original & !ENABLE_ECHO_INPUT)?;
+        Ok(Some(Self { handle, original }))
     }
 }
 
 #[cfg(windows)]
-fn read_secret_bytes() -> io::Result<Vec<u8>> {
-    use windows_sys::Win32::System::Console::{
-        GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_ECHO_INPUT, STD_INPUT_HANDLE,
-    };
-
-    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-    if handle.is_null() {
-        return read_line_bytes();
+impl Drop for ConsoleEchoGuard {
+    fn drop(&mut self) {
+        let _ = set_console_mode(self.handle, self.original);
     }
+}
+
+#[cfg(windows)]
+fn std_input_handle() -> windows_sys::Win32::Foundation::HANDLE {
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE};
+
+    // SAFETY: `GetStdHandle` does not require Rust-side memory invariants.
+    unsafe { GetStdHandle(STD_INPUT_HANDLE) }
+}
+
+#[cfg(windows)]
+fn console_mode(handle: windows_sys::Win32::Foundation::HANDLE) -> io::Result<Option<u32>> {
+    use windows_sys::Win32::System::Console::GetConsoleMode;
 
     let mut mode = 0u32;
+    // SAFETY: `mode` points to valid writable storage for the duration of the
+    // call and `handle` is the console handle returned by `GetStdHandle`.
     if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
-        return read_line_bytes();
+        Ok(None)
+    } else {
+        Ok(Some(mode))
     }
-    let original = mode;
-    let no_echo = mode & !ENABLE_ECHO_INPUT;
-    if unsafe { SetConsoleMode(handle, no_echo) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    let result = read_console_utf16(handle);
-
-    unsafe {
-        SetConsoleMode(handle, original);
-    }
-    result
 }
 
 #[cfg(windows)]
-fn read_console_utf16(handle: windows_sys::Win32::Foundation::HANDLE) -> io::Result<Vec<u8>> {
+fn set_console_mode(handle: windows_sys::Win32::Foundation::HANDLE, mode: u32) -> io::Result<()> {
+    use windows_sys::Win32::System::Console::SetConsoleMode;
+
+    // SAFETY: `handle` is a console input handle and `mode` is either the
+    // original mode or derived from it by clearing the echo bit.
+    if unsafe { SetConsoleMode(handle, mode) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn read_console_utf16(handle: windows_sys::Win32::Foundation::HANDLE) -> io::Result<SecretString> {
     use windows_sys::Win32::System::Console::ReadConsoleW;
 
-    let mut units = Vec::new();
+    let mut secret = SecretString::new();
     let mut buffer = [0u16; 256];
     loop {
         let mut read = 0u32;
+        // SAFETY: `buffer` and `read` are valid writable buffers for the
+        // duration of the call, and the console handle is supplied by
+        // `read_secret_bytes`.
         let ok = unsafe {
             ReadConsoleW(
                 handle,
@@ -105,20 +201,19 @@ fn read_console_utf16(handle: windows_sys::Win32::Foundation::HANDLE) -> io::Res
         if read == 0 {
             break;
         }
-        units.extend_from_slice(&buffer[..read as usize]);
-        if units.ends_with(&[b'\n' as u16]) {
+        let mut stop = false;
+        for decoded in char::decode_utf16(buffer[..read as usize].iter().copied()) {
+            let ch = decoded.map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "utf16"))?;
+            if matches!(ch, '\n' | '\r') {
+                stop = true;
+                break;
+            }
+            secret.try_push_utf8_char(ch).map_err(io::Error::other)?;
+        }
+        buffer.fill(0);
+        if stop {
             break;
         }
     }
-    while units.last() == Some(&(b'\n' as u16)) || units.last() == Some(&(b'\r' as u16)) {
-        units.pop();
-    }
-
-    let mut bytes = Vec::new();
-    for decoded in char::decode_utf16(units) {
-        let ch = decoded.map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "utf16"))?;
-        let mut encoded = [0u8; 4];
-        bytes.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
-    }
-    Ok(bytes)
+    Ok(secret)
 }

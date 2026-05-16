@@ -2,9 +2,9 @@ use crate::key_slot::{slot_fingerprint, KeySlot};
 use crate::key_wrap::MlKemWrappedKey;
 use crate::lockbox_id::LockboxId;
 use crate::page::{decode_page, page_decode_slice, DecodedPage, PageObjectKind, PAGE_HEADER_LEN};
-use crate::page_cache::PageCache;
+use crate::page_cache::{PageCache, PageReadKey, PageSecurity};
 use crate::storage::Storage;
-use crate::{Error, Result};
+use crate::{CacheLimit, Error, Result};
 
 const KEY_DIR_MAGIC: &[u8; 8] = b"LBX2KEY\0";
 const KEY_DIR_HEADER_LEN: usize = 64;
@@ -68,7 +68,14 @@ pub(crate) fn read_key_directory_via_page_cache(
     expected_lockbox_id: Option<LockboxId>,
 ) -> Result<DecodedKeyDirectory> {
     let decode_lockbox_id = expected_lockbox_id.unwrap_or(LockboxId::from_bytes([0; 16]));
-    let page = PageCache::read_decoded_page_from_storage(storage, offset, decode_lockbox_id, &[])?;
+    let mut cache = PageCache::new(CacheLimit::Bytes(0));
+    let page = cache.read_page(
+        storage,
+        offset,
+        decode_lockbox_id,
+        PageSecurity::Normal,
+        PageReadKey::Normal(&[]),
+    )?;
     decode_key_directory_decoded_page(&page, offset, expected_lockbox_id)
 }
 
@@ -170,7 +177,9 @@ pub(crate) fn decode_key_directory_decoded_page(
         .iter()
         .find(|object| object.kind == PageObjectKind::KeyDirectory)
         .ok_or(Error::CorruptHeader)?;
-    decode_key_directory_payload(&object.payload, offset, expected_lockbox_id)
+    object.with_payload(|payload| {
+        decode_key_directory_payload(payload, offset, expected_lockbox_id)
+    })?
 }
 
 fn decode_key_directory_payload(

@@ -1,5 +1,5 @@
 use super::Lockbox;
-use crate::format::read_header;
+use crate::file_format::read_header;
 use crate::key_directory::{
     best_key_directory, encode_key_directory, read_key_directory, read_key_directory_backup,
     scan_key_directories,
@@ -7,51 +7,59 @@ use crate::key_directory::{
 use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, KeySlotInfo};
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey};
 use crate::lockbox_id::LockboxId;
-use crate::secret_bytes::SecretBytes;
+use crate::secret_bytes::{SecretString, SecretVec};
 use crate::storage::{Storage, StorageBackend};
 use crate::{EntryKind, Error, LockboxOptions, Result};
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct UnlockedContentKey {
     pub lockbox_id: LockboxId,
-    key: SecretBytes,
+    key: SecretVec,
 }
 
 #[allow(clippy::large_enum_variant)]
-pub enum LockboxCreate {
+pub enum LockboxCreate<'a> {
     RawKey(Vec<u8>),
-    Password(Vec<u8>),
+    Password(&'a SecretString),
     RecipientKey(MlKemRecipientKey),
 }
 
 #[allow(clippy::large_enum_variant)]
-pub enum LockboxUnlock {
+pub enum LockboxUnlock<'a> {
     RawKey(Vec<u8>),
-    Password(Vec<u8>),
+    Password(&'a SecretString),
     RecipientKey(MlKemKeyPair),
 }
 
 impl UnlockedContentKey {
-    pub fn key(&self) -> &[u8] {
-        self.key.expose()
+    pub fn with_key<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Result<R> {
+        Ok(self.key.with_bytes(f)?)
     }
 
-    pub fn into_key_bytes(self) -> Vec<u8> {
-        self.key.clone_exposed()
+    pub fn open_bytes(self, bytes: Vec<u8>) -> Result<Lockbox> {
+        Lockbox::open_storage_with_secret_key(
+            StorageBackend::memory(bytes),
+            self.key,
+            LockboxOptions::default(),
+        )
+    }
+
+    pub fn open_path(self, path: impl AsRef<Path>) -> Result<Lockbox> {
+        Lockbox::open_path_with_secret_key_options(path, self.key, LockboxOptions::default())
     }
 }
 
 impl Lockbox {
-    pub fn create_file(path: impl AsRef<Path>, method: LockboxCreate) -> Result<Self> {
+    pub fn create_file(path: impl AsRef<Path>, method: LockboxCreate<'_>) -> Result<Self> {
         let mut lockbox = match method {
             LockboxCreate::RawKey(key) => Self::create_path(path, key)?,
             LockboxCreate::Password(password) => {
                 let content_key = random_content_key()?;
                 let mut lockbox = Self::create_path(path, content_key)?;
-                lockbox.add_password_slot(&password)?;
+                lockbox.add_password_slot(password)?;
                 lockbox
             }
             LockboxCreate::RecipientKey(recipient) => {
@@ -65,17 +73,17 @@ impl Lockbox {
         Ok(lockbox)
     }
 
-    pub fn open_file(path: impl AsRef<Path>, method: LockboxUnlock) -> Result<Self> {
+    pub fn open_file(path: impl AsRef<Path>, method: LockboxUnlock<'_>) -> Result<Self> {
         let path = path.as_ref();
         match method {
             LockboxUnlock::RawKey(key) => Self::open_path(path, key),
             LockboxUnlock::Password(password) => {
-                let unlocked = Self::unlock_path_with_password(path, &password)?;
-                Self::open_path(path, unlocked.key())
+                let unlocked = Self::unlock_path_with_password(path, password)?;
+                unlocked.open_path(path)
             }
             LockboxUnlock::RecipientKey(recipient) => {
                 let unlocked = Self::unlock_path_with_recipient(path, &recipient)?;
-                Self::open_path(path, unlocked.key())
+                unlocked.open_path(path)
             }
         }
     }
@@ -86,19 +94,22 @@ impl Lockbox {
         crate::header::read_lockbox_id(&header)
     }
 
-    pub fn create_with_password(password: &[u8]) -> Result<Self> {
+    pub fn create_with_password(password: &SecretString) -> Result<Self> {
         let content_key = random_content_key()?;
         let mut lockbox = Self::create(content_key);
         lockbox.add_password_slot(password)?;
         Ok(lockbox)
     }
 
-    pub fn open_with_password(bytes: Vec<u8>, password: &[u8]) -> Result<Self> {
+    pub fn open_with_password(bytes: Vec<u8>, password: &SecretString) -> Result<Self> {
         let unlocked = Self::unlock_with_password(&bytes, password)?;
-        Self::open(bytes, unlocked.key())
+        unlocked.open_bytes(bytes)
     }
 
-    pub fn unlock_with_password(bytes: &[u8], password: &[u8]) -> Result<UnlockedContentKey> {
+    pub fn unlock_with_password(
+        bytes: &[u8],
+        password: &SecretString,
+    ) -> Result<UnlockedContentKey> {
         for directory in key_directories_from_bytes(bytes)? {
             for slot in directory.slots {
                 let Ok(key) = slot.try_password(password) else {
@@ -106,7 +117,7 @@ impl Lockbox {
                 };
                 return Ok(UnlockedContentKey {
                     lockbox_id: directory.lockbox_id,
-                    key: SecretBytes::new(key),
+                    key: SecretVec::try_from_vec(key)?,
                 });
             }
         }
@@ -115,7 +126,7 @@ impl Lockbox {
 
     pub fn unlock_path_with_password(
         path: impl AsRef<Path>,
-        password: &[u8],
+        password: &SecretString,
     ) -> Result<UnlockedContentKey> {
         let storage = StorageBackend::file(path)?;
         for directory in key_directories_from_storage(&storage)? {
@@ -125,7 +136,7 @@ impl Lockbox {
                 };
                 return Ok(UnlockedContentKey {
                     lockbox_id: directory.lockbox_id,
-                    key: SecretBytes::new(key),
+                    key: SecretVec::try_from_vec(key)?,
                 });
             }
         }
@@ -134,7 +145,7 @@ impl Lockbox {
 
     pub fn unlock_key_directory_backup_with_password(
         bytes: &[u8],
-        password: &[u8],
+        password: &SecretString,
     ) -> Result<UnlockedContentKey> {
         let directory = read_key_directory_backup(bytes)?;
         for slot in directory.slots {
@@ -143,7 +154,7 @@ impl Lockbox {
             };
             return Ok(UnlockedContentKey {
                 lockbox_id: directory.lockbox_id,
-                key: SecretBytes::new(key),
+                key: SecretVec::try_from_vec(key)?,
             });
         }
         Err(Error::InvalidKey)
@@ -162,7 +173,7 @@ impl Lockbox {
 
     pub fn open_with_recipient(bytes: Vec<u8>, recipient: &MlKemKeyPair) -> Result<Self> {
         let unlocked = Self::unlock_with_recipient(&bytes, recipient)?;
-        Self::open(bytes, unlocked.key())
+        unlocked.open_bytes(bytes)
     }
 
     pub fn unlock_with_recipient(
@@ -176,7 +187,7 @@ impl Lockbox {
                 };
                 return Ok(UnlockedContentKey {
                     lockbox_id: directory.lockbox_id,
-                    key: SecretBytes::new(key),
+                    key: SecretVec::try_from_vec(key)?,
                 });
             }
         }
@@ -195,7 +206,7 @@ impl Lockbox {
                 };
                 return Ok(UnlockedContentKey {
                     lockbox_id: directory.lockbox_id,
-                    key: SecretBytes::new(key),
+                    key: SecretVec::try_from_vec(key)?,
                 });
             }
         }
@@ -213,15 +224,22 @@ impl Lockbox {
             };
             return Ok(UnlockedContentKey {
                 lockbox_id: directory.lockbox_id,
-                key: SecretBytes::new(key),
+                key: SecretVec::try_from_vec(key)?,
             });
         }
         Err(Error::InvalidKey)
     }
 
-    pub fn add_password_slot(&mut self, password: &[u8]) -> Result<u64> {
+    pub fn add_password_slot(&mut self, password: &SecretString) -> Result<u64> {
         let id = next_key_slot_id(&self.key_slots);
-        let slot = KeySlot::password(id, password, random_salt()?, self.key.expose())?;
+        let salt = random_salt()?;
+        let slot = lockbox_secure::read_access(|access| {
+            access.with_bytes(&self.key, |content_key| {
+                password.with_bytes_in(access, |password| {
+                    KeySlot::password_bytes(id, password, salt, content_key)
+                })
+            })
+        })???;
         self.key_slots.push(slot);
         self.mark_key_directory_dirty();
         Ok(id)
@@ -233,7 +251,9 @@ impl Lockbox {
 
     pub fn add_recipient_key(&mut self, recipient: &MlKemRecipientKey) -> Result<u64> {
         let id = next_key_slot_id(&self.key_slots);
-        let slot = KeySlot::ml_kem_1024(id, recipient, self.key.expose())?;
+        let slot = self
+            .key
+            .with_bytes(|content_key| KeySlot::ml_kem_1024(id, recipient, content_key))??;
         self.key_slots.push(slot);
         self.mark_key_directory_dirty();
         Ok(id)
@@ -254,16 +274,22 @@ impl Lockbox {
     }
 
     pub fn remove_key_slot_and_compact(&mut self, id: u64) -> Result<()> {
-        let mut compacted_source = self.clone();
-        compacted_source.remove_key_slot(id)?;
-        if compacted_source.key_slots.is_empty() {
+        let Some(index) = self.key_slots.iter().position(|slot| slot.id() == id) else {
+            return Err(Error::NotFound(format!("key slot {id}")));
+        };
+        if self.key_slots.len() == 1 {
             return Err(Error::SecurityLimitExceeded(
                 "refusing to remove the last key slot".to_string(),
             ));
         }
-        compacted_source.compact()?;
-        *self = compacted_source;
-        Ok(())
+        let removed = self.key_slots.remove(index);
+        self.mark_key_directory_dirty();
+        let result = self.compact();
+        if result.is_err() {
+            self.key_slots.insert(index, removed);
+            self.mark_key_directory_dirty();
+        }
+        result
     }
 
     pub fn delete_key_slot_and_compact(&mut self, id: u64) -> Result<()> {
@@ -283,7 +309,11 @@ impl Lockbox {
         self.key_slots.iter().map(KeySlot::info).collect()
     }
 
-    pub fn change_password(&mut self, old_password: &[u8], new_password: &[u8]) -> Result<u64> {
+    pub fn change_password(
+        &mut self,
+        old_password: &SecretString,
+        new_password: &SecretString,
+    ) -> Result<u64> {
         let mut matching_id = None;
         for slot in &self.key_slots {
             if slot.try_password(old_password).is_ok() {
@@ -307,13 +337,14 @@ impl Lockbox {
             .filter(|entry| !entry.deleted)
             .cloned()
             .collect::<Vec<_>>();
-        let env = self.get_all_env()?;
+        let env = self.clone_all_env_values()?;
         if let Some(path) = self.storage.path().map(Path::to_path_buf) {
             return self.compact_file_backed(path, entries, env);
         }
 
-        let mut compacted = Lockbox::create_with_lockbox_id_and_options(
-            self.key.expose(),
+        let key = self.key.try_clone()?;
+        let mut compacted = Lockbox::create_with_secret_key_and_options(
+            key,
             self.lockbox_id,
             self.compaction_options(),
         );
@@ -327,16 +358,17 @@ impl Lockbox {
         &mut self,
         path: PathBuf,
         entries: Vec<crate::manifest_entry::ManifestEntry>,
-        env: std::collections::BTreeMap<String, String>,
+        env: std::collections::BTreeMap<String, crate::env_btree::EnvValue>,
     ) -> Result<()> {
         let temp_path = compact_temp_path(&path);
         let _ = fs::remove_file(&temp_path);
-        let key = self.key.expose().to_vec();
         let options = self.compaction_options();
         let result = (|| {
-            let mut compacted = Lockbox::create_path_with_lockbox_id_and_options(
+            let key = self.key.try_clone()?;
+            let reopen_key = key.try_clone()?;
+            let mut compacted = Lockbox::create_path_with_secret_key_and_options(
                 &temp_path,
-                &key,
+                key,
                 self.lockbox_id,
                 options,
             )?;
@@ -344,7 +376,7 @@ impl Lockbox {
             compacted.commit()?;
             drop(compacted);
             replace_file_with_compacted(&temp_path, &path)?;
-            let reopened = Lockbox::open_path_with_options(&path, &key, options)?;
+            let reopened = Lockbox::open_path_with_secret_key_options(&path, reopen_key, options)?;
             *self = reopened;
             Ok(())
         })();
@@ -358,14 +390,14 @@ impl Lockbox {
         &self,
         compacted: &mut Lockbox,
         entries: Vec<crate::manifest_entry::ManifestEntry>,
-        env: std::collections::BTreeMap<String, String>,
+        env: std::collections::BTreeMap<String, crate::env_btree::EnvValue>,
     ) -> Result<()> {
         compacted.key_slots = self.key_slots.clone();
         compacted.key_directory_generation = self.key_directory_generation;
         compacted.dirty_key_directory = !compacted.key_slots.is_empty();
 
         for (name, value) in env {
-            compacted.set_env(&name, &value)?;
+            compacted.set_env_value(name, value)?;
         }
 
         for entry in entries {

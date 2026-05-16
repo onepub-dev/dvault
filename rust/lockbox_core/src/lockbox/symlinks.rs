@@ -1,6 +1,6 @@
 use super::Lockbox;
 use crate::constants::DEFAULT_SYMLINK_PERMISSIONS;
-use crate::format::{decode_symlink_payload, encode_symlink_payload};
+use crate::file_format::{decode_symlink_payload, encode_symlink_payload};
 use crate::logical_path::{canonicalize_api_path as canonicalize_path, LogicalPath};
 use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
@@ -56,11 +56,11 @@ impl Lockbox {
         let mut stream_len = 4usize;
         for (path, target) in pending {
             self.sequence += 1;
-            let object = PageObject {
-                kind: PageObjectKind::Symlink,
-                id: self.sequence,
-                payload: encode_symlink_payload(&path, &target),
-            };
+            let object = PageObject::new(
+                PageObjectKind::Symlink,
+                self.sequence,
+                encode_symlink_payload(&path, &target),
+            );
             let object_len = encoded_object_len(&object)?;
             if !pending_objects.is_empty()
                 && !uncompressed_objects_fit(DEFAULT_METADATA_PAGE_BYTES, stream_len + object_len)
@@ -122,7 +122,7 @@ impl Lockbox {
             if object.kind != PageObjectKind::Symlink {
                 return Err(Error::CorruptRecord);
             }
-            let (path, target) = decode_symlink_payload(&object.payload)?;
+            let (path, target) = object.with_payload(decode_symlink_payload)??;
             if path != entry.path {
                 return Err(Error::CorruptRecord);
             }

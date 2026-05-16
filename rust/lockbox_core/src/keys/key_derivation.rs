@@ -1,8 +1,13 @@
 use argon2::{Algorithm, Argon2, Params, Version};
 
+use crate::secret_bytes::SecretString;
 use crate::{Error, Result};
 
-pub fn derive_key_from_password(password: &[u8], salt: &[u8]) -> Result<[u8; 32]> {
+pub fn derive_key_from_password(password: &SecretString, salt: &[u8]) -> Result<[u8; 32]> {
+    password.with_bytes(|bytes| derive_key_from_password_bytes(bytes, salt))?
+}
+
+pub(crate) fn derive_key_from_password_bytes(password: &[u8], salt: &[u8]) -> Result<[u8; 32]> {
     if salt.len() < 16 {
         return Err(Error::SecurityLimitExceeded(
             "Argon2id salt must be at least 16 bytes".to_string(),

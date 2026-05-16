@@ -1,7 +1,7 @@
 use lockbox_core::{
     derive_key_from_password, CacheLimit, Entry, EntryKind, Error, ExtractPolicy, ExtractedNode,
     KeySlotKind, ListOptions, Lockbox, LockboxCreate, LockboxOptions, LockboxUnlock, MlKemKeyPair,
-    MlKemRecipientKey, RecoveryReportOptions, WorkloadProfile,
+    MlKemRecipientKey, RecoveryReportOptions, SecretString, WorkloadProfile,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -305,21 +305,21 @@ fn file_content_can_be_loaded_and_extracted_with_streaming_apis() {
 #[test]
 fn password_keys_are_derived_with_argon2id() {
     let salt = b"0123456789abcdef";
-    let key_a = derive_key_from_password(b"correct horse", salt).unwrap();
-    let key_b = derive_key_from_password(b"correct horse", salt).unwrap();
-    let key_c = derive_key_from_password(b"different", salt).unwrap();
+    let key_a = derive_key_from_password(&password("correct horse"), salt).unwrap();
+    let key_b = derive_key_from_password(&password("correct horse"), salt).unwrap();
+    let key_c = derive_key_from_password(&password("different"), salt).unwrap();
 
     assert_eq!(key_a, key_b);
     assert_ne!(key_a, key_c);
     assert!(matches!(
-        derive_key_from_password(b"pw", b"short"),
+        derive_key_from_password(&password("pw"), b"short"),
         Err(Error::SecurityLimitExceeded(_))
     ));
 }
 
 #[test]
 fn content_keys_can_be_wrapped_with_ml_kem_1024() {
-    let key_pair = MlKemKeyPair::generate();
+    let key_pair = MlKemKeyPair::generate().unwrap();
     let content_key = [9u8; 32];
 
     let wrapped = key_pair.wrap_key(&content_key).unwrap();
@@ -331,7 +331,8 @@ fn content_keys_can_be_wrapped_with_ml_kem_1024() {
 
 #[test]
 fn password_slots_unlock_the_random_content_key() {
-    let mut lb = Lockbox::create_with_password(b"share-password").unwrap();
+    let share_password = password("share-password");
+    let mut lb = Lockbox::create_with_password(&share_password).unwrap();
     let lockbox_id = lb.lockbox_id();
     lb.put_file("/docs/a.txt", b"alpha").unwrap();
     lb.commit().unwrap();
@@ -339,11 +340,11 @@ fn password_slots_unlock_the_random_content_key() {
     let bytes = lb.to_bytes();
     assert_eq!(Lockbox::read_lockbox_id(&bytes).unwrap(), lockbox_id);
     assert!(matches!(
-        Lockbox::open_with_password(bytes.clone(), b"wrong-password"),
+        Lockbox::open_with_password(bytes.clone(), &password("wrong-password")),
         Err(Error::InvalidKey)
     ));
 
-    let reopened = Lockbox::open_with_password(bytes, b"share-password").unwrap();
+    let reopened = Lockbox::open_with_password(bytes, &share_password).unwrap();
     assert_eq!(reopened.lockbox_id(), lockbox_id);
     assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
     assert_eq!(reopened.list_key_slots()[0].kind, KeySlotKind::Password);
@@ -351,20 +352,22 @@ fn password_slots_unlock_the_random_content_key() {
 
 #[test]
 fn password_unlock_recovers_when_header_is_corrupt() {
-    let mut lb = Lockbox::create_with_password(b"share-password").unwrap();
+    let share_password = password("share-password");
+    let mut lb = Lockbox::create_with_password(&share_password).unwrap();
     lb.put_file("/docs/a.txt", b"alpha").unwrap();
     lb.commit().unwrap();
 
     let mut bytes = lb.to_bytes();
     bytes[0] ^= 0xff;
 
-    let reopened = Lockbox::open_with_password(bytes, b"share-password").unwrap();
+    let reopened = Lockbox::open_with_password(bytes, &share_password).unwrap();
     assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
 }
 
 #[test]
 fn password_unlock_recovers_when_primary_key_directory_is_corrupt() {
-    let mut lb = Lockbox::create_with_password(b"share-password").unwrap();
+    let share_password = password("share-password");
+    let mut lb = Lockbox::create_with_password(&share_password).unwrap();
     lb.put_file("/docs/a.txt", b"alpha").unwrap();
     lb.commit().unwrap();
 
@@ -373,20 +376,21 @@ fn password_unlock_recovers_when_primary_key_directory_is_corrupt() {
         u64::from_le_bytes(bytes[32..40].try_into().unwrap()) as usize;
     bytes[primary_key_directory_offset] ^= 0xff;
 
-    let reopened = Lockbox::open_with_password(bytes, b"share-password").unwrap();
+    let reopened = Lockbox::open_with_password(bytes, &share_password).unwrap();
     assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
 }
 
 #[test]
 fn multiple_key_slots_are_tried_until_one_unlocks() {
-    let alice = MlKemKeyPair::generate();
-    let bob = MlKemKeyPair::generate();
-    let outsider = MlKemKeyPair::generate();
+    let alice = MlKemKeyPair::generate().unwrap();
+    let bob = MlKemKeyPair::generate().unwrap();
+    let outsider = MlKemKeyPair::generate().unwrap();
     let bob_public = MlKemRecipientKey::from_bytes(&bob.recipient_key().to_bytes()).unwrap();
 
     let mut lb = Lockbox::create_with_recipient_key(&alice.recipient_key()).unwrap();
     lb.add_recipient_key(&bob_public).unwrap();
-    lb.add_password_slot(b"backup-password").unwrap();
+    let backup_password = password("backup-password");
+    lb.add_password_slot(&backup_password).unwrap();
     lb.put_file("/shared/report.txt", b"report").unwrap();
     lb.commit().unwrap();
 
@@ -399,7 +403,7 @@ fn multiple_key_slots_are_tried_until_one_unlocks() {
     let by_bob = Lockbox::open_with_recipient(bytes.clone(), &bob).unwrap();
     assert_eq!(by_bob.get_file("/shared/report.txt").unwrap(), b"report");
 
-    let by_password = Lockbox::open_with_password(bytes, b"backup-password").unwrap();
+    let by_password = Lockbox::open_with_password(bytes, &backup_password).unwrap();
     assert_eq!(
         by_password.get_file("/shared/report.txt").unwrap(),
         b"report"
@@ -409,33 +413,37 @@ fn multiple_key_slots_are_tried_until_one_unlocks() {
 
 #[test]
 fn key_slots_can_be_removed_and_passwords_changed() {
-    let mut lb = Lockbox::create_with_password(b"old-password").unwrap();
-    let extra_id = lb.add_password_slot(b"temporary-password").unwrap();
+    let old_password = password("old-password");
+    let temporary_password = password("temporary-password");
+    let new_password = password("new-password");
+    let mut lb = Lockbox::create_with_password(&old_password).unwrap();
+    let extra_id = lb.add_password_slot(&temporary_password).unwrap();
     lb.remove_key_slot(extra_id).unwrap();
-    lb.change_password(b"old-password", b"new-password")
-        .unwrap();
+    lb.change_password(&old_password, &new_password).unwrap();
     lb.put_file("/docs/a.txt", b"alpha").unwrap();
     lb.commit().unwrap();
 
     let bytes = lb.to_bytes();
     assert!(matches!(
-        Lockbox::open_with_password(bytes.clone(), b"old-password"),
+        Lockbox::open_with_password(bytes.clone(), &old_password),
         Err(Error::InvalidKey)
     ));
     assert!(matches!(
-        Lockbox::open_with_password(bytes.clone(), b"temporary-password"),
+        Lockbox::open_with_password(bytes.clone(), &temporary_password),
         Err(Error::InvalidKey)
     ));
 
-    let reopened = Lockbox::open_with_password(bytes, b"new-password").unwrap();
+    let reopened = Lockbox::open_with_password(bytes, &new_password).unwrap();
     assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
     assert_eq!(reopened.list_key_slots().len(), 1);
 }
 
 #[test]
 fn key_slot_removal_compacts_old_key_material() {
-    let mut lb = Lockbox::create_with_password(b"primary-password").unwrap();
-    let temporary_id = lb.add_password_slot(b"temporary-password").unwrap();
+    let primary_password = password("primary-password");
+    let temporary_password = password("temporary-password");
+    let mut lb = Lockbox::create_with_password(&primary_password).unwrap();
+    let temporary_id = lb.add_password_slot(&temporary_password).unwrap();
     lb.put_file("/docs/a.txt", b"alpha").unwrap();
     lb.commit().unwrap();
     let before = lb.to_bytes().len();
@@ -445,10 +453,10 @@ fn key_slot_removal_compacts_old_key_material() {
 
     assert!(bytes.len() <= before);
     assert!(matches!(
-        Lockbox::open_with_password(bytes.clone(), b"temporary-password"),
+        Lockbox::open_with_password(bytes.clone(), &temporary_password),
         Err(Error::InvalidKey)
     ));
-    let reopened = Lockbox::open_with_password(bytes, b"primary-password").unwrap();
+    let reopened = Lockbox::open_with_password(bytes, &primary_password).unwrap();
     assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
     assert_eq!(reopened.list_key_slots().len(), 1);
 }
@@ -456,9 +464,10 @@ fn key_slot_removal_compacts_old_key_material() {
 #[test]
 fn path_backed_key_slot_removal_compacts_and_remains_file_backed() {
     let path = temp_path("path-backed-key-compaction");
-    let mut lb =
-        Lockbox::create_file(&path, LockboxCreate::Password(b"primary-password".to_vec())).unwrap();
-    let temporary_id = lb.add_password_slot(b"temporary-password").unwrap();
+    let primary_password = password("primary-password");
+    let temporary_password = password("temporary-password");
+    let mut lb = Lockbox::create_file(&path, LockboxCreate::Password(&primary_password)).unwrap();
+    let temporary_id = lb.add_password_slot(&temporary_password).unwrap();
     lb.put_file("/docs/a.txt", b"alpha").unwrap();
     lb.commit().unwrap();
     let before = std::fs::metadata(&path).unwrap().len();
@@ -470,14 +479,10 @@ fn path_backed_key_slot_removal_compacts_and_remains_file_backed() {
 
     assert!(after <= before + 4 * PAGE_BYTES as u64);
     assert!(matches!(
-        Lockbox::open_file(
-            &path,
-            LockboxUnlock::Password(b"temporary-password".to_vec())
-        ),
+        Lockbox::open_file(&path, LockboxUnlock::Password(&temporary_password)),
         Err(Error::InvalidKey)
     ));
-    let reopened =
-        Lockbox::open_file(&path, LockboxUnlock::Password(b"primary-password".to_vec())).unwrap();
+    let reopened = Lockbox::open_file(&path, LockboxUnlock::Password(&primary_password)).unwrap();
     assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
     assert_eq!(reopened.get_file("/docs/b.txt").unwrap(), b"bravo");
 
@@ -486,7 +491,8 @@ fn path_backed_key_slot_removal_compacts_and_remains_file_backed() {
 
 #[test]
 fn oversized_key_directories_are_rejected() {
-    let mut lb = Lockbox::create_with_password(b"share-password").unwrap();
+    let share_password = password("share-password");
+    let mut lb = Lockbox::create_with_password(&share_password).unwrap();
     lb.commit().unwrap();
 
     let mut bytes = lb.to_bytes();
@@ -501,7 +507,7 @@ fn oversized_key_directories_are_rejected() {
     }
 
     assert!(matches!(
-        Lockbox::open_with_password(bytes, b"share-password"),
+        Lockbox::open_with_password(bytes, &share_password),
         Err(Error::SecurityLimitExceeded(_) | Error::InvalidKey | Error::CorruptHeader)
     ));
 }
@@ -1328,6 +1334,101 @@ fn env_vars_can_be_removed_and_replaced() {
 }
 
 #[test]
+fn secret_env_vars_preserve_sensitivity_until_delete() {
+    let mut lb = Lockbox::create(KEY);
+    let first = password("first-secret");
+    let second = password("second-secret");
+
+    lb.set_secret_env("API_TOKEN", &first).unwrap();
+    lb.commit().unwrap();
+
+    let mut reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+    assert_eq!(
+        reopened.env_sensitivity("API_TOKEN").unwrap(),
+        Some(lockbox_core::EnvSensitivity::Secret)
+    );
+    assert!(matches!(
+        reopened.get_env("API_TOKEN"),
+        Err(Error::SecurityLimitExceeded(_))
+    ));
+    assert_eq!(
+        reopened
+            .with_secret_env("API_TOKEN", str::to_string)
+            .unwrap()
+            .as_deref(),
+        Some("first-secret")
+    );
+    assert!(!reopened.get_all_env().unwrap().contains_key("API_TOKEN"));
+    assert!(matches!(
+        reopened.set_env("API_TOKEN", "normal"),
+        Err(Error::SecurityLimitExceeded(_))
+    ));
+
+    reopened.set_secret_env("API_TOKEN", &second).unwrap();
+    reopened.commit().unwrap();
+    let mut reopened = Lockbox::open(reopened.to_bytes(), KEY).unwrap();
+    assert_eq!(
+        reopened
+            .with_secret_env("API_TOKEN", str::to_string)
+            .unwrap()
+            .as_deref(),
+        Some("second-secret")
+    );
+
+    reopened.delete_env_var("API_TOKEN").unwrap();
+    reopened.set_env("API_TOKEN", "normal").unwrap();
+    assert_eq!(
+        reopened.env_sensitivity("API_TOKEN").unwrap(),
+        Some(lockbox_core::EnvSensitivity::Normal)
+    );
+    assert!(matches!(
+        reopened.set_secret_env("API_TOKEN", &first),
+        Err(Error::SecurityLimitExceeded(_))
+    ));
+}
+
+#[test]
+fn secret_env_access_caches_secure_decoded_page() {
+    let mut lb = Lockbox::create_with_options(
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            ..LockboxOptions::default()
+        },
+    );
+    let secret = password("cache-secret");
+    lb.set_secret_env("API_TOKEN", &secret).unwrap();
+    lb.commit().unwrap();
+
+    let reopened = Lockbox::open_with_options(
+        lb.to_bytes(),
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            ..LockboxOptions::default()
+        },
+    )
+    .unwrap();
+    reopened.trim_cache();
+    assert_eq!(reopened.cache_stats().entries, 0);
+
+    assert_eq!(
+        reopened
+            .with_secret_env("API_TOKEN", str::to_string)
+            .unwrap()
+            .as_deref(),
+        Some("cache-secret")
+    );
+    assert_eq!(reopened.cache_stats().entries, 1);
+
+    assert_eq!(
+        reopened.env_sensitivity("API_TOKEN").unwrap(),
+        Some(lockbox_core::EnvSensitivity::Secret)
+    );
+    assert_eq!(reopened.cache_stats().entries, 1);
+}
+
+#[test]
 fn many_env_vars_are_packed_into_leaf_pages() {
     let mut lb = Lockbox::create(KEY);
     for index in 0..200 {
@@ -1916,4 +2017,8 @@ fn temp_path(label: &str) -> std::path::PathBuf {
             .unwrap()
             .as_nanos()
     ))
+}
+
+fn password(value: &str) -> SecretString {
+    SecretString::try_from_bytes(value.as_bytes().to_vec()).unwrap()
 }

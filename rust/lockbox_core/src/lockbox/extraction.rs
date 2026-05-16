@@ -243,7 +243,7 @@ impl Lockbox {
         let parallel_result = std::thread::scope(|scope| {
             let mut handles = Vec::new();
             for chunk in file_entries.chunks(chunk_size) {
-                let worker = self.clone();
+                let worker = self.try_clone()?;
                 handles.push(scope.spawn(move || {
                     for (path_id, entry) in chunk {
                         let out_path = checked_destination(destination, &entry.path)?;

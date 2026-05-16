@@ -5,10 +5,10 @@ use ml_kem::MlKem1024;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
-use crate::{Error, Result};
+use crate::{secret_bytes::SecretVec, Error, Result};
 
 pub struct MlKemKeyPair {
-    decapsulation_key: ml_kem::DecapsulationKey1024,
+    decapsulation_seed: SecretVec,
     encapsulation_key: ml_kem::EncapsulationKey1024,
 }
 
@@ -24,12 +24,13 @@ pub struct MlKemWrappedKey {
 }
 
 impl MlKemKeyPair {
-    pub fn generate() -> Self {
+    pub fn generate() -> Result<Self> {
         let (decapsulation_key, encapsulation_key) = MlKem1024::generate_keypair();
-        Self {
-            decapsulation_key,
+        let decapsulation_seed = SecretVec::try_from_vec(decapsulation_key.to_bytes().to_vec())?;
+        Ok(Self {
+            decapsulation_seed,
             encapsulation_key,
-        }
+        })
     }
 
     pub fn wrap_key(&self, content_key: &[u8]) -> Result<MlKemWrappedKey> {
@@ -37,17 +38,21 @@ impl MlKemKeyPair {
     }
 
     pub fn unwrap_key(&self, wrapped: &MlKemWrappedKey) -> Result<Vec<u8>> {
-        let shared_secret = self.decapsulation_key.decapsulate(&wrapped.ciphertext);
-        let mut wrapping_key = derive_wrapping_key(shared_secret.as_ref());
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&wrapping_key));
-        let key = cipher
-            .decrypt(
-                Nonce::from_slice(&[0u8; 12]),
-                wrapped.encrypted_key.as_ref(),
-            )
-            .map_err(|_| Error::InvalidKey);
-        wrapping_key.zeroize();
-        key
+        self.decapsulation_seed.with_bytes(|seed_bytes| {
+            let seed = ml_kem::Seed::try_from(seed_bytes).map_err(|_| Error::InvalidKey)?;
+            let decapsulation_key = ml_kem::DecapsulationKey1024::from_seed(seed);
+            let shared_secret = decapsulation_key.decapsulate(&wrapped.ciphertext);
+            let mut wrapping_key = derive_wrapping_key(shared_secret.as_ref());
+            let cipher = ChaCha20Poly1305::new(Key::from_slice(&wrapping_key));
+            let key = cipher
+                .decrypt(
+                    Nonce::from_slice(&[0u8; 12]),
+                    wrapped.encrypted_key.as_ref(),
+                )
+                .map_err(|_| Error::InvalidKey);
+            wrapping_key.zeroize();
+            key
+        })?
     }
 
     pub fn recipient_key(&self) -> MlKemRecipientKey {
@@ -60,14 +65,35 @@ impl MlKemKeyPair {
         let seed = ml_kem::Seed::try_from(bytes).map_err(|_| Error::InvalidKey)?;
         let decapsulation_key = ml_kem::DecapsulationKey1024::from_seed(seed);
         let encapsulation_key = decapsulation_key.encapsulation_key().clone();
+        let decapsulation_seed = SecretVec::try_from_slice(bytes)?;
         Ok(Self {
-            decapsulation_key,
+            decapsulation_seed,
             encapsulation_key,
         })
     }
 
-    pub fn to_seed_bytes(&self) -> Vec<u8> {
-        self.decapsulation_key.to_bytes().to_vec()
+    pub fn from_seed_secure(decapsulation_seed: SecretVec) -> Result<Self> {
+        let encapsulation_key = decapsulation_seed.with_bytes(|bytes| {
+            let seed = ml_kem::Seed::try_from(bytes).map_err(|_| Error::InvalidKey)?;
+            let decapsulation_key = ml_kem::DecapsulationKey1024::from_seed(seed);
+            Ok::<_, Error>(decapsulation_key.encapsulation_key().clone())
+        })??;
+        Ok(Self {
+            decapsulation_seed,
+            encapsulation_key,
+        })
+    }
+
+    pub fn with_seed_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Result<R> {
+        Ok(self.decapsulation_seed.with_bytes(f)?)
+    }
+
+    pub fn to_seed_secure(&self) -> Result<SecretVec> {
+        self.decapsulation_seed.try_clone().map_err(Into::into)
+    }
+
+    pub fn to_seed_bytes(&self) -> Result<Vec<u8>> {
+        self.with_seed_bytes(|bytes| bytes.to_vec())
     }
 }
 

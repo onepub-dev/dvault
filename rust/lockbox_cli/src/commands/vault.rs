@@ -1,10 +1,11 @@
 use super::context::{default_vault, require_arg, CliResult};
 use lockbox_core::MlKemKeyPair;
 use lockbox_vault::{
-    default_vault_dir, export_private_key, export_public_key, import_private_key,
+    default_vault_dir, export_private_key, export_public_key, import_private_key_from_vec,
     import_public_key, KeyFormat, VaultDirectory,
 };
 use std::fs;
+use std::io::Write;
 
 pub(crate) fn run(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault command")?;
@@ -52,7 +53,7 @@ fn keygen(args: &[String]) -> CliResult<()> {
         return Err(format!("vault private key already exists: {name}").into());
     }
 
-    let keypair = MlKemKeyPair::generate();
+    let keypair = MlKemKeyPair::generate()?;
     vault.store_private_key(name, &keypair)?;
     if let Some(path) = public_path {
         fs::write(path, export_public_key(&keypair.recipient_key(), format)?)?;
@@ -87,7 +88,7 @@ fn import_key(args: &[String]) -> CliResult<()> {
     if vault.private_key_exists(name)? {
         return Err(format!("vault private key already exists: {name}").into());
     }
-    let keypair = import_private_key(&fs::read(private_path)?)?;
+    let keypair = import_private_key_from_vec(fs::read(private_path)?)?;
     vault.store_private_key(name, &keypair)?;
     if let Some(path) = public_path {
         fs::write(
@@ -147,7 +148,7 @@ fn export_key(args: &[String]) -> CliResult<()> {
         [] => return Err("missing private key path".into()),
     };
     let keypair = default_vault()?.load_private_key(name)?;
-    fs::write(destination, export_private_key(&keypair, format)?)?;
+    write_private_key(destination, &export_private_key(&keypair, format)?)?;
     Ok(())
 }
 
@@ -169,4 +170,23 @@ fn parse_format(args: &[String]) -> CliResult<(Vec<String>, KeyFormat)> {
         }
     }
     Ok((out, format))
+}
+
+fn write_private_key(path: &str, bytes: &lockbox_vault::SecretVec) -> CliResult<()> {
+    let mut file = fs::File::create(path)?;
+    bytes.with_bytes(|bytes| file.write_all(bytes))??;
+    set_private_key_permissions(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_key_permissions(path: &str) -> CliResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_key_permissions(_path: &str) -> CliResult<()> {
+    Ok(())
 }

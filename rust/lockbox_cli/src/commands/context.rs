@@ -81,30 +81,30 @@ pub(crate) fn remove_global_flag(args: &mut Vec<String>, flag: &str) -> bool {
 }
 
 pub(crate) fn read_password(prompt: &str) -> CliResult<SecretString> {
-    if let Ok(password) = env::var("LOCKBOX_PASSWORD") {
-        return Ok(SecretString::from_bytes(password.into_bytes()));
+    if let Some(password) = SecretString::try_from_env("LOCKBOX_PASSWORD")? {
+        return Ok(password);
     }
     Ok(prompt_secret(prompt)?)
 }
 
 pub(crate) fn read_vault_password() -> CliResult<SecretString> {
-    if let Ok(password) = env::var("LOCKBOX_VAULT_PASSWORD") {
-        return Ok(SecretString::from_bytes(password.into_bytes()));
+    if let Some(password) = SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
+        return Ok(password);
     }
     Ok(prompt_secret("Vault password: ")?)
 }
 
 pub(crate) fn read_new_password() -> CliResult<SecretString> {
-    if let Ok(password) = env::var("LOCKBOX_PASSWORD") {
-        return Ok(SecretString::from_bytes(password.into_bytes()));
+    if let Some(password) = SecretString::try_from_env("LOCKBOX_PASSWORD")? {
+        return Ok(password);
     }
     let password = prompt_secret("New password: ")?;
     let mut confirm = prompt_secret("Confirm password: ")?;
-    if password.expose_bytes() != confirm.expose_bytes() {
-        confirm.zeroize();
+    if password != confirm {
+        confirm.zeroize()?;
         return Err("passwords do not match".into());
     }
-    confirm.zeroize();
+    confirm.zeroize()?;
     Ok(password)
 }
 

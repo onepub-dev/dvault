@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use lockbox_core::{ExtractPolicy, ListOptions, Lockbox};
+use lockbox_core::{secure_read_access, ExtractPolicy, ListOptions, Lockbox, SecretString};
 use std::fs;
 use std::io::{Read, Result as IoResult};
 use std::path::PathBuf;
@@ -310,6 +310,77 @@ fn bench_metadata_operations(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_secure_string_store(c: &mut Criterion) {
+    let mut group = c.benchmark_group("secure_string_store");
+    group.sample_size(10);
+
+    group.bench_function("from_bytes_1000x64", |b| {
+        b.iter_batched(
+            || secure_payloads(1000, 64),
+            |payloads| {
+                let secrets = payloads
+                    .into_iter()
+                    .map(|payload| SecretString::try_from_bytes(payload).unwrap())
+                    .collect::<Vec<_>>();
+                black_box(secrets.len());
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("push_byte_64", |b| {
+        b.iter_batched(
+            || secure_payload(64),
+            |payload| {
+                let mut secret = SecretString::new();
+                for byte in payload {
+                    secret.try_push_byte(byte).unwrap();
+                }
+                black_box(secret);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("extend_slice_64", |b| {
+        b.iter_batched(
+            || secure_payload(64),
+            |payload| {
+                let mut secret = SecretString::new();
+                secret.try_extend_from_slice(&payload).unwrap();
+                black_box(secret);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    let secrets = secure_strings(1000, 64);
+    group.bench_function("read_1000x64_individual_guard", |b| {
+        b.iter(|| {
+            let mut total = 0usize;
+            for secret in &secrets {
+                total += secret.with_str(str::len).unwrap();
+            }
+            black_box(total);
+        });
+    });
+
+    group.bench_function("read_1000x64_shared_guard", |b| {
+        b.iter(|| {
+            let total = secure_read_access(|access| {
+                let mut total = 0usize;
+                for secret in &secrets {
+                    total += access.with_str(secret, str::len).unwrap();
+                }
+                total
+            });
+            black_box(total);
+        });
+    });
+
+    group.finish();
+}
+
 fn prepared_small_lockbox(files: usize, file_size: usize) -> Lockbox {
     let payload = vec![b'x'; file_size];
     let mut lockbox = Lockbox::create(KEY);
@@ -401,6 +472,27 @@ fn fill_randomish(buf: &mut [u8], offset: usize) {
     }
 }
 
+fn secure_payloads(count: usize, len: usize) -> Vec<Vec<u8>> {
+    (0..count)
+        .map(|index| {
+            let mut payload = secure_payload(len);
+            payload[0] = b'a' + (index % 26) as u8;
+            payload
+        })
+        .collect()
+}
+
+fn secure_payload(len: usize) -> Vec<u8> {
+    (0..len).map(|index| b'a' + (index % 26) as u8).collect()
+}
+
+fn secure_strings(count: usize, len: usize) -> Vec<SecretString> {
+    secure_payloads(count, len)
+        .into_iter()
+        .map(|payload| SecretString::try_from_bytes(payload).unwrap())
+        .collect()
+}
+
 criterion_group!(
     benches,
     bench_small_files,
@@ -408,6 +500,7 @@ criterion_group!(
     bench_large_file,
     bench_append_delete,
     bench_toc_structure,
-    bench_metadata_operations
+    bench_metadata_operations,
+    bench_secure_string_store
 );
 criterion_main!(benches);

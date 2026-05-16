@@ -1,6 +1,6 @@
 use super::{
     decode_hex, encode_forget, encode_forget_all, encode_get, encode_hex, encode_put,
-    max_request_bytes, parse_request, AgentRequest, SecretBytes, DEFAULT_TTL_SECONDS,
+    max_request_bytes, parse_request, AgentRequest, SecretVec, DEFAULT_TTL_SECONDS,
 };
 use lockbox_core::LockboxId;
 use std::collections::BTreeMap;
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 const IDLE_EXIT_SECONDS: u64 = 10 * 60;
 
 struct CacheEntry {
-    key: SecretBytes,
+    key: SecretVec,
     expires_at: Instant,
 }
 
@@ -139,13 +139,16 @@ fn handle_client(
             match cache.get_mut(&lockbox_id) {
                 Some(entry) if entry.expires_at > now => {
                     entry.expires_at = now + Duration::from_secs(DEFAULT_TTL_SECONDS);
-                    format!("KEY {}", encode_hex(entry.key.expose()))
+                    entry
+                        .key
+                        .with_bytes(|key| format!("KEY {}", encode_hex(key)))
+                        .map_err(io::Error::other)?
                 }
                 _ => "MISS".to_string(),
             }
         }
         Ok(AgentRequest::Put(lockbox_id, key)) => {
-            let key = SecretBytes::new(key);
+            let key = SecretVec::try_from_vec(key).map_err(io::Error::other)?;
             cache.insert(
                 lockbox_id,
                 CacheEntry {

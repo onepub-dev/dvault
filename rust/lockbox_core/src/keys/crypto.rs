@@ -1,9 +1,11 @@
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::aead::{Aead, AeadInPlace, KeyInit, Payload};
+use chacha20poly1305::Tag;
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use getrandom::getrandom;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
+use crate::secret_bytes::SecureVec;
 use crate::{Error, Result};
 
 pub(crate) fn seal_with_random_nonce(
@@ -37,6 +39,52 @@ pub(crate) fn open_with_nonce(
     cipher
         .decrypt(Nonce::from_slice(nonce), Payload { msg: payload, aad })
         .map_err(|_| Error::InvalidKey)
+}
+
+pub(crate) fn open_with_content_key_secure(
+    payload: &mut SecureVec,
+    content_key: &[u8; 32],
+    nonce: &[u8],
+    aad: &[u8],
+) -> Result<()> {
+    if nonce.len() != 12 {
+        return Err(Error::CorruptRecord);
+    }
+    if payload.len() < 16 {
+        return Err(Error::CorruptRecord);
+    }
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(content_key));
+    payload.with_mut_bytes(|bytes| {
+        let tag_offset = bytes.len() - 16;
+        let (message, tag_bytes) = bytes.split_at_mut(tag_offset);
+        let tag = Tag::clone_from_slice(tag_bytes);
+        cipher
+            .decrypt_in_place_detached(Nonce::from_slice(nonce), aad, message, &tag)
+            .map_err(|_| Error::InvalidKey)
+    })??;
+    payload.truncate(payload.len() - 16)?;
+    Ok(())
+}
+
+pub(crate) fn seal_with_content_key_secure(
+    payload: &mut SecureVec,
+    content_key: &[u8; 32],
+    aad: &[u8],
+) -> Result<[u8; 12]> {
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(content_key));
+    let mut nonce = [0u8; 12];
+    getrandom(&mut nonce).expect("system random source failed");
+    let tag = payload.with_mut_bytes(|bytes| {
+        cipher
+            .encrypt_in_place_detached(Nonce::from_slice(&nonce), aad, bytes)
+            .expect("ChaCha20-Poly1305 encryption should not fail")
+    })?;
+    payload.try_extend_from_slice(&tag)?;
+    Ok(nonce)
+}
+
+pub(crate) fn derive_page_content_key(key: &[u8]) -> [u8; 32] {
+    derive_content_key(key)
 }
 
 pub(crate) fn strong_checksum(data: &[u8]) -> [u8; 32] {

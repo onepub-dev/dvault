@@ -1,5 +1,8 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxId, LockboxUnlock, Result};
-pub use lockbox_core::{SecretBytes, SecretString};
+pub use lockbox_core::{SecretString, SecretVec};
 use std::io;
 use std::path::Path;
 
@@ -7,7 +10,8 @@ mod key_format;
 mod vault_directory;
 
 pub use key_format::{
-    export_private_key, export_public_key, import_private_key, import_public_key, KeyFormat,
+    export_private_key, export_public_key, import_private_key, import_private_key_from_vec,
+    import_public_key, KeyFormat,
 };
 pub use vault_directory::{
     default_vault_dir, default_vault_path, StoredTrustedRecipient, VaultDirectory,
@@ -104,10 +108,7 @@ impl<S: ContentKeyStore> Vault<S> {
         path: impl AsRef<Path>,
         password: &SecretString,
     ) -> Result<Lockbox> {
-        self.create_lockbox(
-            path,
-            LockboxCreate::Password(password.expose_bytes().to_vec()),
-        )
+        self.create_lockbox(path, LockboxCreate::Password(password))
     }
 
     pub fn unlock_lockbox_with_password(
@@ -115,13 +116,14 @@ impl<S: ContentKeyStore> Vault<S> {
         path: impl AsRef<Path>,
         password: &SecretString,
     ) -> Result<Lockbox> {
-        self.unlock_lockbox(
-            path,
-            LockboxUnlock::Password(password.expose_bytes().to_vec()),
-        )
+        self.unlock_lockbox(path, LockboxUnlock::Password(password))
     }
 
-    pub fn create_lockbox(&self, path: impl AsRef<Path>, method: LockboxCreate) -> Result<Lockbox> {
+    pub fn create_lockbox(
+        &self,
+        path: impl AsRef<Path>,
+        method: LockboxCreate<'_>,
+    ) -> Result<Lockbox> {
         let path = path.as_ref();
         match method {
             LockboxCreate::RawKey(key) => {
@@ -130,12 +132,11 @@ impl<S: ContentKeyStore> Vault<S> {
                 Ok(lockbox)
             }
             LockboxCreate::Password(password) => {
-                let lockbox =
-                    Lockbox::create_file(path, LockboxCreate::Password(password.clone()))?;
-                let unlocked = Lockbox::unlock_path_with_password(path, &password)?;
-                if let Err(err) = self
-                    .store
-                    .put_content_key(unlocked.lockbox_id, unlocked.key())
+                let lockbox = Lockbox::create_file(path, LockboxCreate::Password(password))?;
+                let unlocked = Lockbox::unlock_path_with_password(path, password)?;
+                if let Err(err) = unlocked
+                    .with_key(|key| self.store.put_content_key(unlocked.lockbox_id, key))
+                    .and_then(|result| result)
                 {
                     if !matches!(err, Error::Io(_)) {
                         return Err(err);
@@ -158,7 +159,11 @@ impl<S: ContentKeyStore> Vault<S> {
         Lockbox::open_file(path, LockboxUnlock::RawKey(key))
     }
 
-    pub fn unlock_lockbox(&self, path: impl AsRef<Path>, method: LockboxUnlock) -> Result<Lockbox> {
+    pub fn unlock_lockbox(
+        &self,
+        path: impl AsRef<Path>,
+        method: LockboxUnlock<'_>,
+    ) -> Result<Lockbox> {
         let path = path.as_ref();
         match method {
             LockboxUnlock::RawKey(key) => {
@@ -167,16 +172,14 @@ impl<S: ContentKeyStore> Vault<S> {
                 Ok(lockbox)
             }
             LockboxUnlock::Password(password) => {
-                let unlocked = unlock_path_or_backup_with_password(path, &password)?;
-                self.store
-                    .put_content_key(unlocked.lockbox_id, unlocked.key())?;
-                Lockbox::open_file(path, LockboxUnlock::RawKey(unlocked.into_key_bytes()))
+                let unlocked = unlock_path_or_backup_with_password(path, password)?;
+                unlocked.with_key(|key| self.store.put_content_key(unlocked.lockbox_id, key))??;
+                unlocked.open_path(path)
             }
             LockboxUnlock::RecipientKey(recipient) => {
                 let unlocked = unlock_path_or_backup_with_recipient(path, &recipient)?;
-                self.store
-                    .put_content_key(unlocked.lockbox_id, unlocked.key())?;
-                Lockbox::open_file(path, LockboxUnlock::RawKey(unlocked.into_key_bytes()))
+                unlocked.with_key(|key| self.store.put_content_key(unlocked.lockbox_id, key))??;
+                unlocked.open_path(path)
             }
         }
     }
@@ -193,7 +196,7 @@ impl<S: ContentKeyStore> Vault<S> {
 
 fn unlock_path_or_backup_with_password(
     path: &Path,
-    password: &[u8],
+    password: &SecretString,
 ) -> Result<lockbox_core::UnlockedContentKey> {
     match Lockbox::unlock_path_with_password(path, password) {
         Ok(unlocked) => Ok(unlocked),
@@ -230,9 +233,7 @@ fn unlock_path_or_backup_with_recipient(
 }
 
 fn vault_password_from_env() -> Result<SecretString> {
-    std::env::var("LOCKBOX_VAULT_PASSWORD")
-        .map(|password| SecretString::from_bytes(password.into_bytes()))
-        .map_err(|_| Error::InvalidKey)
+    SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")?.ok_or(Error::InvalidKey)
 }
 
 impl ContentKeyStore for AgentClient {

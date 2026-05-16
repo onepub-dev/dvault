@@ -153,6 +153,90 @@ fn raw_key_create_does_not_mirror_empty_key_directory() {
 }
 
 #[test]
+fn cli_secret_env_requires_explicit_source_and_redacts_export() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("secret-env");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("env.lbox");
+    let secret_file = dir.join("secret.txt");
+    fs::write(&secret_file, "file-secret").unwrap();
+
+    run(
+        bin,
+        &[
+            "env",
+            "set",
+            lockbox.to_str().unwrap(),
+            "APP_MODE",
+            "-v",
+            "prod",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "env",
+            "set",
+            lockbox.to_str().unwrap(),
+            "-s",
+            "API_TOKEN",
+            "-f",
+            secret_file.to_str().unwrap(),
+        ],
+    );
+
+    let listing = run_output(bin, &["env", "list", lockbox.to_str().unwrap()]);
+    assert_success(&listing);
+    let listing = String::from_utf8_lossy(&listing.stdout);
+    assert!(listing.contains("APP_MODE"));
+    assert!(listing.contains("API_TOKEN\tsecret"));
+
+    let export = run_output(bin, &["env", "export", lockbox.to_str().unwrap()]);
+    assert_success(&export);
+    let export = String::from_utf8_lossy(&export.stdout);
+    assert!(export.contains("APP_MODE='prod'"));
+    assert!(!export.contains("API_TOKEN"));
+    assert!(!export.contains("file-secret"));
+
+    let secret_get = run_output(
+        bin,
+        &["env", "get", lockbox.to_str().unwrap(), "-s", "API_TOKEN"],
+    );
+    assert_success(&secret_get);
+    assert_eq!(
+        String::from_utf8_lossy(&secret_get.stdout).trim(),
+        "file-secret"
+    );
+
+    let rejected = run_output(
+        bin,
+        &[
+            "env",
+            "set",
+            lockbox.to_str().unwrap(),
+            "API_TOKEN",
+            "positional-secret",
+        ],
+    );
+    assert!(!rejected.status.success());
+
+    let rejected_value = run_output(
+        bin,
+        &[
+            "env",
+            "set",
+            lockbox.to_str().unwrap(),
+            "-s",
+            "OTHER_TOKEN",
+            "--value",
+            "argument-secret",
+        ],
+    );
+    assert!(!rejected_value.status.success());
+}
+
+#[test]
 fn vault_key_import_export_formats_are_accepted_by_cli() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("key-formats");

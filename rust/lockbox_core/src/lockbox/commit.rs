@@ -1,6 +1,6 @@
 use super::Lockbox;
 use crate::commit_root::{encode_commit_root, CommitRoot};
-use crate::format::{
+use crate::file_format::{
     encode_toc_internal, encode_toc_leaf, toc_child_groups, toc_leaf_groups, write_header,
     TocChild, TocInternal, TocLeaf, TocTreeNode,
 };
@@ -35,8 +35,17 @@ impl Lockbox {
         key: impl AsRef<[u8]>,
         options: LockboxOptions,
     ) -> Result<Self> {
+        let key = crate::SecretVec::try_from_slice(key.as_ref())?;
+        Self::open_path_with_secret_key_options(path, key, options)
+    }
+
+    pub(crate) fn open_path_with_secret_key_options(
+        path: impl AsRef<Path>,
+        key: crate::SecretVec,
+        options: LockboxOptions,
+    ) -> Result<Self> {
         let path = HostPath::new(path);
-        Self::open_storage(StorageBackend::file(path.as_path())?, key, options)
+        Self::open_storage_with_secret_key(StorageBackend::file(path.as_path())?, key, options)
     }
 
     pub fn create_path(path: impl AsRef<Path>, key: impl AsRef<[u8]>) -> Result<Self> {
@@ -62,10 +71,20 @@ impl Lockbox {
         lockbox_id: crate::lockbox_id::LockboxId,
         options: LockboxOptions,
     ) -> Result<Self> {
+        let key = crate::SecretVec::try_from_slice(key.as_ref())?;
+        Self::create_path_with_secret_key_and_options(path, key, lockbox_id, options)
+    }
+
+    pub(crate) fn create_path_with_secret_key_and_options(
+        path: impl AsRef<Path>,
+        key: crate::SecretVec,
+        lockbox_id: crate::lockbox_id::LockboxId,
+        options: LockboxOptions,
+    ) -> Result<Self> {
         let path = HostPath::new(path);
         let mut bytes = vec![0; crate::constants::HEADER_LEN];
         write_header(&mut bytes, 0, 0, 0, lockbox_id);
-        let mut lockbox = Self::open_storage(
+        let mut lockbox = Self::open_storage_with_secret_key(
             StorageBackend::create_file(path.as_path(), &bytes)?,
             key,
             options,
@@ -172,11 +191,8 @@ impl Lockbox {
                 self.key_directory_generation,
                 copy_index as u32,
             )?;
-            let object = PageObject {
-                kind: PageObjectKind::KeyDirectory,
-                id: self.sequence,
-                payload: key_directory,
-            };
+            let object =
+                PageObject::new(PageObjectKind::KeyDirectory, self.sequence, key_directory);
             let page_offset = self
                 .allocate_page_offset(page_size_for_objects(std::slice::from_ref(&object)) as u64)?;
             self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
@@ -293,7 +309,7 @@ impl Lockbox {
                 .any(|path| path.as_str() >= first && next.is_none_or(|next| path.as_str() < next));
             let _should_consider_merge = overlaps_dirty
                 && crate::toc_btree::toc_leaf_fill_percent(replacement_entries)
-                    < crate::format::TOC_MIN_FILL_PERCENT;
+                    < crate::file_format::TOC_MIN_FILL_PERCENT;
             if !overlaps_dirty && same_leaf_entries(&leaf.entries, replacement_entries) {
                 rebuilt_leaves.push(leaf.clone());
                 continue;
@@ -436,11 +452,7 @@ impl Lockbox {
     }
 
     fn append_toc_page(&mut self, kind: PageObjectKind, payload: Vec<u8>) -> Result<u64> {
-        let object = PageObject {
-            kind,
-            id: self.sequence,
-            payload,
-        };
+        let object = PageObject::new(kind, self.sequence, payload);
         let page_offset =
             self.allocate_page_offset(page_size_for_objects(std::slice::from_ref(&object)) as u64)?;
         self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
@@ -485,22 +497,14 @@ impl Lockbox {
 
     fn write_free_index_page(&mut self, kind: PageObjectKind, payload: Vec<u8>) -> Result<u64> {
         let page_offset = self.next_append_page_offset()?;
-        let object = PageObject {
-            kind,
-            id: self.sequence,
-            payload,
-        };
+        let object = PageObject::new(kind, self.sequence, payload);
         self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
         Ok(page_offset)
     }
 
     fn append_commit_root_page(&mut self, payload: Vec<u8>) -> Result<u64> {
         let page_offset = self.next_append_page_offset()?;
-        let object = PageObject {
-            kind: PageObjectKind::CommitRoot,
-            id: self.sequence,
-            payload,
-        };
+        let object = PageObject::new(PageObjectKind::CommitRoot, self.sequence, payload);
         self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
         Ok(page_offset)
     }
@@ -524,7 +528,7 @@ struct CommitRollback {
     toc_root: Option<TocTreeNode>,
     toc_leaves: Vec<TocLeaf>,
     dirty_toc_paths: std::collections::BTreeSet<crate::logical_path::LogicalPath>,
-    env_vars: Option<std::collections::BTreeMap<String, String>>,
+    env_vars: Option<std::collections::BTreeMap<String, crate::env_btree::EnvValue>>,
     env_root: Option<crate::env_btree::EnvTreeNode>,
     env_leaves: Vec<crate::env_btree::EnvLeaf>,
     dirty_env: bool,
@@ -711,18 +715,25 @@ mod tests {
         lb.commit().unwrap();
 
         let bytes = lb.to_bytes();
-        let (header_root_offset, _, _, _) = crate::format::read_header(&bytes).unwrap();
+        let (header_root_offset, _, _, _) = crate::file_format::read_header(&bytes).unwrap();
         assert_eq!(header_root_offset, lb.commit_root_offset);
         assert_ne!(header_root_offset, lb.manifest_offset);
 
         let page = crate::page::page_decode_slice(&bytes, header_root_offset as usize).unwrap();
-        let decoded = crate::page::decode_page(page, lb.lockbox_id, lb.key.expose()).unwrap();
+        let decoded = lb
+            .key
+            .with_bytes(|key| crate::page::decode_page(page, lb.lockbox_id, key))
+            .unwrap()
+            .unwrap();
         let commit_object = decoded
             .objects
             .iter()
             .find(|object| object.kind == PageObjectKind::CommitRoot)
             .unwrap();
-        let commit_root = crate::commit_root::decode_commit_root(&commit_object.payload).unwrap();
+        let commit_root = commit_object
+            .with_payload(crate::commit_root::decode_commit_root)
+            .unwrap()
+            .unwrap();
         assert_eq!(commit_root.toc_root_offset, lb.manifest_offset);
     }
 
@@ -800,7 +811,11 @@ mod tests {
         let bytes = lb.to_bytes();
         let root_page =
             crate::page::page_decode_slice(&bytes, lb.free_index_offset as usize).unwrap();
-        let decoded = crate::page::decode_page(root_page, lb.lockbox_id, lb.key.expose()).unwrap();
+        let decoded = lb
+            .key
+            .with_bytes(|key| crate::page::decode_page(root_page, lb.lockbox_id, key))
+            .unwrap()
+            .unwrap();
         assert!(decoded
             .objects
             .iter()

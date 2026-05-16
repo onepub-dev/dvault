@@ -11,7 +11,9 @@ pub(crate) fn usage(verbose: bool) {
   lockbox list <lockbox> [path]
   lockbox rm <lockbox> <lockbox-path>
   lockbox rename <lockbox> <from> <to>
-  lockbox env set|get|list|export|rm ...
+  lockbox env set [-s] <lockbox> <name> <value|-i|-v value|-f file|-t|-e env>
+  lockbox env get [-s] <lockbox> <name>
+  lockbox env list|export|rm ...
   lockbox recover <lockbox>
   lockbox doctor
   lockbox lock <lockbox>

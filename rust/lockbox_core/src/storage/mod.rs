@@ -4,6 +4,7 @@ pub(crate) mod free_slot;
 pub(crate) mod memory_pressure;
 pub(crate) mod page_cache;
 
+use crate::secret_bytes::SecureVec;
 use crate::{Error, Result};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -13,8 +14,16 @@ use std::sync::{Arc, Mutex};
 pub(crate) trait Storage: Clone + std::fmt::Debug {
     fn len(&self) -> Result<u64>;
     fn read_at(&self, offset: u64, len: usize) -> Result<Vec<u8>>;
+    fn read_at_into(&self, offset: u64, out: &mut [u8]) -> Result<()>;
     fn append(&mut self, bytes: &[u8]) -> Result<u64>;
     fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()>;
+
+    fn read_at_secure(&self, offset: u64, len: usize) -> Result<SecureVec> {
+        let mut out = SecureVec::new();
+        out.resize_zeroed(len)?;
+        out.with_mut_bytes(|bytes| self.read_at_into(offset, bytes))??;
+        Ok(out)
+    }
 
     fn read_all(&self) -> Result<Vec<u8>> {
         let len = self.len()?;
@@ -66,6 +75,13 @@ impl Storage for StorageBackend {
         match self {
             Self::Memory(store) => store.read_at(offset, len),
             Self::File(store) => store.read_at(offset, len),
+        }
+    }
+
+    fn read_at_into(&self, offset: u64, out: &mut [u8]) -> Result<()> {
+        match self {
+            Self::Memory(store) => store.read_at_into(offset, out),
+            Self::File(store) => store.read_at_into(offset, out),
         }
     }
 
@@ -153,6 +169,18 @@ impl Storage for MemoryStore {
             return Err(Error::Truncated);
         }
         Ok(self.bytes[start..end].to_vec())
+    }
+
+    fn read_at_into(&self, offset: u64, out: &mut [u8]) -> Result<()> {
+        let start = offset as usize;
+        let end = start
+            .checked_add(out.len())
+            .ok_or_else(|| Error::Io("storage read offset overflow".to_string()))?;
+        if end > self.bytes.len() {
+            return Err(Error::Truncated);
+        }
+        out.copy_from_slice(&self.bytes[start..end]);
+        Ok(())
     }
 
     fn append(&mut self, bytes: &[u8]) -> Result<u64> {
@@ -260,18 +288,22 @@ impl Storage for FileStore {
     }
 
     fn read_at(&self, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let mut out = vec![0; len];
+        self.read_at_into(offset, &mut out)?;
+        Ok(out)
+    }
+
+    fn read_at_into(&self, offset: u64, out: &mut [u8]) -> Result<()> {
         let mut file = self.lock_file()?;
         file.seek(SeekFrom::Start(offset))
             .map_err(|err| Error::Io(format!("seek {}: {err}", self.path.display())))?;
-        let mut out = vec![0; len];
-        file.read_exact(&mut out).map_err(|err| {
+        file.read_exact(out).map_err(|err| {
             if err.kind() == std::io::ErrorKind::UnexpectedEof {
                 Error::Truncated
             } else {
                 Error::Io(format!("read {}: {err}", self.path.display()))
             }
-        })?;
-        Ok(out)
+        })
     }
 
     fn append(&mut self, bytes: &[u8]) -> Result<u64> {

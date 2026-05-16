@@ -13,11 +13,15 @@ path = "src/lib.rs"
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 getrandom = "0.2"
+lockbox_secure = { path = "../lockbox_secure" }
 ml-kem = { version = "0.3", features = ["getrandom"] }
 sha2 = "0.10"
 unicode-normalization = "0.1"
 zeroize = "1"
 oxiarc-zstd = "0.2"
+sysinfo = { version = "0.38.4", default-features = false, features = [
+    "system",
+] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
@@ -26,18 +30,9 @@ getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 [dev-dependencies]
 criterion = "0.5"
 
-[[bench]]
-name = "performance"
-harness = false
-
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-mach2 = "0.6"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
-    "Win32_System_Memory",
-    "Win32_System_SystemInformation",
-] }
+[[bench]]
+name = "performance"
+harness = false
