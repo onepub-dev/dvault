@@ -2,7 +2,7 @@
 name = "lockbox_vault"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license-file = "../../LICENSE"
 description = "Reusable Lockbox local vault and agent transport"
 
 [lib]

@@ -505,4 +505,11 @@ through FFI/WASM bindings rather than maintaining independent format logic.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE).
+Dvault Source Available License 1.0 - see [LICENSE](LICENSE).
+
+The source remains available for inspection, modification, and redistribution.
+Derivative works must publish their corresponding source code in a publicly
+accessible repository such as GitHub or a similar service. The license also
+restricts third parties from offering dvault, modified dvault, or substantially
+similar dvault-derived functionality as a hosted, managed, or network-accessible
+service without a separate written license.

@@ -2,7 +2,7 @@
 name = "lockbox_core"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license-file = "../../LICENSE"
 description = "Lockbox v2 format core with manifest, reuse, and recovery APIs"
 
 [lib]

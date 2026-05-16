@@ -1,21 +1,87 @@
-MIT License
+Dvault Source Available License 1.0
 
-Copyright (c) 2021 Noojee I.T. Pty Ltd
+Copyright (c) 2021 OnePub IP Pty Ltd
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license applies to the dvault software and associated documentation files
+(the "Software").
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Grant of Rights
+
+Subject to this license, you may use, copy, modify, merge, publish, distribute,
+and create derivative works of the Software.
+
+You may use the Software for personal, educational, research, evaluation,
+development, testing, and internal business purposes. You may also use the
+Software as an internal component of your own products or services, provided
+that you do not offer the Software itself, or substantially similar
+functionality derived from it, as a hosted, managed, or network-accessible
+service for third parties.
+
+2. Service Restriction
+
+You may not, without a separate written license from OnePub IP Pty Ltd:
+
+- offer the Software, or a modified version of it, as a hosted or managed
+  service;
+- provide access to the Software's vault, key-management, encrypted-storage, or
+  related functionality through a SaaS product, API, backend service, or other
+  network-accessible service for third parties;
+- build or operate a commercial product or service whose primary purpose is to
+  provide functionality substantially similar to the Software to third parties;
+  or
+- enable another party to do any of the above.
+
+This restriction does not prevent you from using the Software internally to
+operate your own systems, or from building applications that store or process
+their own data with the Software, so long as third parties are not being offered
+the Software's functionality as a service.
+
+3. Publication of Derivative Works
+
+If you create a derivative work of the Software, you must publish the complete
+corresponding source code for that derivative work in a publicly accessible
+source code repository, such as GitHub, GitLab, Codeberg, or a substantially
+similar public repository service.
+
+The published source code must include the files needed to build, test, and use
+the derivative work, including modifications, build scripts, configuration
+templates, and documentation reasonably necessary to understand the changes. You
+may omit secrets, private keys, credentials, customer data, production
+configuration values, and other sensitive operational data.
+
+You must publish the source code before making the derivative work available to
+others, or within 30 days after first creating the derivative work if it is used
+only internally. You must keep the public repository available for as long as
+you use, distribute, or make available the derivative work, unless you have a
+separate written license from OnePub IP Pty Ltd.
+
+4. Redistribution
+
+If you distribute the Software or a derivative work, you must include this
+license and the copyright notice above. Any redistribution of the Software or a
+derivative work must be under this license or a later version published by
+OnePub IP Pty Ltd, unless you have a separate written license.
+
+5. No Trademark Rights
+
+This license does not grant permission to use the names, trademarks, service
+marks, or logos of OnePub IP Pty Ltd except as required for reasonable and
+customary attribution.
+
+6. Termination
+
+Your rights under this license terminate automatically if you violate the
+license and do not cure the violation within 30 days after becoming aware of it.
+After termination, you must stop using, copying, modifying, publishing,
+distributing, and operating the Software, except as permitted by a separate
+written license.
+
+7. Disclaimer of Warranty
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
