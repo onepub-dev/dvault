@@ -1,4 +1,7 @@
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "page-format helpers are exercised by format scanners, diagnostics, and unit tests as the format evolves"
+)]
 
 use crate::compression::{decode_page_body, encode_page_body, COMPRESSION_NONE};
 use crate::crypto::{

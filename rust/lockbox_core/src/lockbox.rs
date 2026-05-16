@@ -456,40 +456,6 @@ impl Lockbox {
         f(&page?)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn with_page_mut<R>(
-        &mut self,
-        offset: u64,
-        f: impl FnOnce(&mut crate::page::DecodedPage) -> Result<R>,
-    ) -> Result<R> {
-        let mut f = Some(f);
-        if let Some(result) = self
-            .page_manager
-            .borrow_mut()
-            .with_page_mut(offset, |page| {
-                f.take().expect("page callback present")(page)
-            })
-        {
-            return result;
-        }
-
-        let mut page = self.key.with_bytes(|key| {
-            self.page_manager.borrow_mut().read_page(
-                &self.storage,
-                offset,
-                self.lockbox_id,
-                PageSecurity::Normal,
-                PageReadKey::Normal(key),
-            )
-        })??;
-        let result = f.take().expect("page callback present")(&mut page)?;
-        let page_size = page_size_for_objects(&page.objects);
-        self.page_manager
-            .borrow_mut()
-            .stage_decoded_page(offset, page_size, page)?;
-        Ok(result)
-    }
-
     pub(crate) fn with_page_object<R>(
         &self,
         offset: u64,
@@ -500,23 +466,6 @@ impl Lockbox {
             let object = page
                 .objects
                 .iter()
-                .find(|object| object.id == object_id)
-                .ok_or(Error::CorruptRecord)?;
-            f(object)
-        })
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn with_page_object_mut<R>(
-        &mut self,
-        offset: u64,
-        object_id: u64,
-        f: impl FnOnce(&mut PageObject) -> Result<R>,
-    ) -> Result<R> {
-        self.with_page_mut(offset, |page| {
-            let object = page
-                .objects
-                .iter_mut()
                 .find(|object| object.id == object_id)
                 .ok_or(Error::CorruptRecord)?;
             f(object)

@@ -1,6 +1,5 @@
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use crate::key_derivation::{derive_key_from_password, derive_key_from_password_bytes};
@@ -145,11 +144,4 @@ pub(crate) fn random_salt() -> Result<Vec<u8>> {
     let mut salt = vec![0u8; 16];
     getrandom::getrandom(&mut salt).map_err(|err| Error::Io(err.to_string()))?;
     Ok(salt)
-}
-
-pub(crate) fn slot_fingerprint(data: &[u8]) -> u64 {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let digest = hasher.finalize();
-    u64::from_le_bytes(digest[0..8].try_into().unwrap())
 }

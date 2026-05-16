@@ -3,8 +3,8 @@ use crate::fast_hash::FastBuildHasher;
 use crate::lockbox_id::LockboxId;
 use crate::page::{
     decode_page, decode_single_object_page_secure, encode_page, encode_single_object_page_secure,
-    page_size_for_objects, DecodedPage, PageObject, PageObjectKind, SecureSingleObjectPage,
-    DEFAULT_METADATA_PAGE_BYTES, PAGE_HEADER_LEN, PAGE_MAGIC,
+    DecodedPage, PageObject, PageObjectKind, SecureSingleObjectPage, DEFAULT_METADATA_PAGE_BYTES,
+    PAGE_HEADER_LEN, PAGE_MAGIC,
 };
 use crate::secret_bytes::SecureVec;
 use crate::storage::Storage;
@@ -154,20 +154,6 @@ impl PageCache {
             _ => return Err(Error::CorruptRecord),
         };
         Ok((page, read_len as u64))
-    }
-
-    pub(crate) fn stage_decoded_page(
-        &mut self,
-        offset: u64,
-        page_size: usize,
-        page: DecodedPage,
-    ) -> Result<()> {
-        self.stage_decoded_page_with_policy(
-            offset,
-            page_size,
-            page,
-            PageWritePolicy::RetainAfterFlush,
-        )
     }
 
     pub(crate) fn stage_decoded_page_with_policy(
@@ -360,7 +346,7 @@ impl PageCache {
         !self.dirty_offsets.is_empty() || !self.zeroed_pages.is_empty()
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn get_page(&mut self, offset: u64) -> Option<DecodedPage> {
         self.refresh_limit_if_needed();
         if self.zeroed_pages.contains_key(&offset) {
@@ -381,7 +367,7 @@ impl PageCache {
         Some(entry.page.clone())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn with_page_mut<R>(
         &mut self,
         offset: u64,
@@ -405,7 +391,7 @@ impl PageCache {
         self.recent.push_back(offset);
         let old_weight = entry.weight;
         let result = f(&mut entry.page);
-        let new_weight = page_size_for_objects(&entry.page.objects) as u64;
+        let new_weight = crate::page::page_size_for_objects(&entry.page.objects) as u64;
         entry.weight = new_weight;
         self.used_bytes = self
             .used_bytes
@@ -415,7 +401,7 @@ impl PageCache {
         Some(result)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn insert_page(&mut self, offset: u64, page: DecodedPage, weight: u64) {
         self.zeroed_pages.remove(&offset);
         self.discard_after_flush.remove(&offset);

@@ -1,4 +1,4 @@
-use crate::key_slot::{slot_fingerprint, KeySlot};
+use crate::key_slot::KeySlot;
 use crate::key_wrap::MlKemWrappedKey;
 use crate::lockbox_id::LockboxId;
 use crate::page::{decode_page, page_decode_slice, DecodedPage, PageObjectKind, PAGE_HEADER_LEN};
@@ -289,11 +289,6 @@ fn read_bytes(payload: &[u8], offset: &mut usize) -> Result<Vec<u8>> {
     let bytes = payload[*offset..*offset + len].to_vec();
     *offset += len;
     Ok(bytes)
-}
-
-#[allow(dead_code)]
-pub(crate) fn key_slot_id_for_bytes(bytes: &[u8]) -> u64 {
-    slot_fingerprint(bytes)
 }
 
 #[cfg(test)]
