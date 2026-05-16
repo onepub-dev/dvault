@@ -5,7 +5,7 @@ use getrandom::getrandom;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
-use crate::secret_bytes::SecureVec;
+use crate::secret_vec::SecureVec;
 use crate::{Error, Result};
 
 pub(crate) fn seal_with_random_nonce(

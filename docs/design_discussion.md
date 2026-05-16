@@ -184,7 +184,7 @@ Potential mitigations:
 Current state:
 
 - `MlKemKeyPair` stores the long-lived private decapsulation seed in
-  `SecretBytes`.
+  `SecretVec`.
 - `MlKemKeyPair::generate()` and `to_seed_bytes()` are fallible because secure
   storage can fail.
 - Vault private-key storage uses scoped secret access instead of cloning the

@@ -6,7 +6,7 @@ use crate::page::{
     DecodedPage, PageObject, PageObjectKind, SecureSingleObjectPage, DEFAULT_METADATA_PAGE_BYTES,
     PAGE_HEADER_LEN, PAGE_MAGIC,
 };
-use crate::secret_bytes::SecureVec;
+use crate::secret_vec::SecureVec;
 use crate::storage::Storage;
 use crate::{Error, Result};
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -539,7 +539,7 @@ mod tests {
     use super::*;
     use crate::crypto::derive_page_content_key;
     use crate::page::{encode_page, DecodedPage, PageObject, PageObjectKind};
-    use crate::secret_bytes::SecureVec;
+    use crate::secret_vec::SecureVec;
     use crate::storage::StorageBackend;
 
     #[test]

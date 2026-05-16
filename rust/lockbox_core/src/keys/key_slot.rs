@@ -4,7 +4,7 @@ use zeroize::Zeroize;
 
 use crate::key_derivation::{derive_key_from_password, derive_key_from_password_bytes};
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey, MlKemWrappedKey};
-use crate::secret_bytes::SecretString;
+use crate::secret_vec::SecretString;
 use crate::{Error, Result};
 
 /// Type of key slot that can unlock a lockbox content key.

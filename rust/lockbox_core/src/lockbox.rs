@@ -26,7 +26,7 @@ use crate::page::{
 use crate::page_cache::{PageCache, PageReadKey, PageSecurity, PageWritePolicy};
 use crate::page_object_packer::PageObjectPacker;
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
-use crate::secret_bytes::SecretVec;
+use crate::secret_vec::SecretVec;
 use crate::storage::{Storage, StorageBackend};
 use crate::{CacheLimit, CacheStats, Error, LockboxOptions, Result, WorkloadProfile};
 use zeroize::Zeroize;

@@ -185,7 +185,7 @@ fn read_console_utf16(handle: windows_sys::Win32::Foundation::HANDLE) -> io::Res
         let mut read = 0u32;
         // SAFETY: `buffer` and `read` are valid writable buffers for the
         // duration of the call, and the console handle is supplied by
-        // `read_secret_bytes`.
+        // `read_secret_vec`.
         let ok = unsafe {
             ReadConsoleW(
                 handle,

@@ -4,7 +4,7 @@ pub(crate) mod free_slot;
 pub(crate) mod memory_pressure;
 pub(crate) mod page_cache;
 
-use crate::secret_bytes::SecureVec;
+use crate::secret_vec::SecureVec;
 use crate::{Error, Result};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};

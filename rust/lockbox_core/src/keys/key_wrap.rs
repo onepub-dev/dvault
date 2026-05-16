@@ -5,7 +5,7 @@ use ml_kem::MlKem1024;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
-use crate::{secret_bytes::SecretVec, Error, Result};
+use crate::{secret_vec::SecretVec, Error, Result};
 
 /// ML-KEM-1024 private recipient keypair.
 ///

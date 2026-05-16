@@ -7,7 +7,7 @@ use crate::key_directory::{
 use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, KeySlotInfo};
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey};
 use crate::lockbox_id::LockboxId;
-use crate::secret_bytes::{SecretString, SecretVec};
+use crate::secret_vec::{SecretString, SecretVec};
 use crate::storage::{Storage, StorageBackend};
 use crate::{EntryKind, Error, LockboxOptions, Result};
 use std::fs;

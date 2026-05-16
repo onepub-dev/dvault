@@ -237,11 +237,11 @@ fn public_api_secret_lockbox_id_and_ml_kem_wrappers_flow() {
     assert!(secret.is_empty());
     assert!(format!("{secret:?}").contains("redacted"));
 
-    let secret_bytes = SecretVec::try_from_vec(vec![1, 2, 3]).unwrap();
-    secret_bytes
+    let secret_vec = SecretVec::try_from_vec(vec![1, 2, 3]).unwrap();
+    secret_vec
         .with_bytes(|bytes| assert_eq!(bytes, &[1, 2, 3]))
         .unwrap();
-    assert!(format!("{secret_bytes:?}").contains("redacted"));
+    assert!(format!("{secret_vec:?}").contains("redacted"));
 
     let lockbox_id = LockboxId::from_bytes([
         0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x80, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc,

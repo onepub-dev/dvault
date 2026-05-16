@@ -6,7 +6,7 @@ use crate::page_tree::{
     decode_page_tree_children, encode_page_tree_children, group_by_encoded_size,
     page_tree_child_encoded_len, PageTreeChild,
 };
-use crate::secret_bytes::{secure_read_access, SecureVec};
+use crate::secret_vec::{secure_read_access, SecureVec};
 use crate::security::{validate_env_name, validate_env_value_ref};
 use crate::{EnvSensitivity, Error, Result, SecretString};
 

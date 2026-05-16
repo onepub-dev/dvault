@@ -11,7 +11,7 @@ use crate::free_slot::FreeSlot;
 use crate::page::{page_size_for_objects, PageObject, PageObjectKind};
 use crate::page_cache::SecurePageAppend;
 use crate::security::{validate_env_name, validate_env_value, validate_env_value_ref};
-use crate::{crypto::derive_page_content_key, secret_bytes::SecureVec};
+use crate::{crypto::derive_page_content_key, secret_vec::SecureVec};
 use crate::{EnvSensitivity, Error, Result, SecretString};
 use zeroize::Zeroize;
 

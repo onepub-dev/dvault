@@ -25,7 +25,7 @@ mod toc;
 pub(crate) use file_format::{
     commit_root, header, key_directory, page, page_buffer, page_inspection, page_scanner, payload,
 };
-pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_bytes};
+pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_vec};
 pub(crate) use model::{
     entry, env_sensitivity, extract_policy, extracted_file, extracted_node, extracted_symlink,
     file_chunk, list_iter, list_options, lockbox_id, node_kind, page_object_packer, record,
@@ -53,7 +53,7 @@ pub use lockbox_id::LockboxId;
 pub use page_inspection::{PageInspection, PageObjectInspection};
 pub use recovery_report::RecoveryReport;
 pub use recovery_report_options::RecoveryReportOptions;
-pub use secret_bytes::{
+pub use secret_vec::{
     secure_allocation_chunk_bytes, secure_memory_capabilities, secure_read_access,
     set_secure_allocation_chunk_bytes, set_weakened_allocation_allowed,
     weakened_allocation_allowed, AllocationSecurity, SecretString, SecretVec,

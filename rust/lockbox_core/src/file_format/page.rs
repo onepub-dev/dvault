@@ -13,7 +13,7 @@ use crate::page_buffer::PageBuffer;
 use crate::page_inspection::{PageInspection, PageObjectInspection};
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::scan::Scan;
-use crate::secret_bytes::{secure_read_access, SecureVec};
+use crate::secret_vec::{secure_read_access, SecureVec};
 use crate::{Error, Result};
 use zeroize::Zeroize;
 

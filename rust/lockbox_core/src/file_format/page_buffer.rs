@@ -1,4 +1,4 @@
-use crate::secret_bytes::{secure_read_access, SecureVec};
+use crate::secret_vec::{secure_read_access, SecureVec};
 use crate::{Error, Result};
 
 pub(crate) trait PageBuffer: Sized {
