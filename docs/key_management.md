@@ -236,6 +236,28 @@ stored in the platform-specific vault directory. It can store:
 - trusted recipient public keys
 - local key-directory backups keyed by lockbox UUID
 
+The vault is itself an ordinary lockbox, but `lockbox_vault::VaultDirectory`
+uses a fixed internal record layout:
+
+```text
+local-vault.lbox
+  secret env LOCKBOX_VAULT_PRIVATE_KEY_<HEX_NAME>
+      Hex encoded ML-KEM private seed stored in secure env pages.
+      <HEX_NAME> is the upper-case hex encoding of the user-visible key name.
+
+  /trusted_recipients/<name>.pub
+      Trusted recipient public key bytes.
+
+  /key_directories/<lockbox-id>.keydir
+      Encrypted key-directory backup for the referenced lockbox UUID.
+```
+
+The private-key records intentionally use the secure env-page path rather than
+ordinary file records. Loading a vault private key therefore asks the page cache
+for a secure page and materializes the seed into `SecretVec`, not `Vec<u8>`.
+Trusted recipient keys and key-directory backups are not private-key seed
+material, so they remain normal lockbox file records.
+
 These records are local recovery and convenience data. They are not required for
 a password-shared lockbox to be portable, and they are not the canonical copy of
 lockbox metadata.
@@ -245,7 +267,7 @@ prompts for that password interactively, or reads `LOCKBOX_VAULT_PASSWORD` for
 automation. Trusted public keys and key-directory backups are records inside
 the vault lockbox.
 
-When loaded, the long-lived ML-KEM private seed is held in `SecretBytes`.
+When loaded, the long-lived ML-KEM private seed is held in `SecretVec`.
 Unlock/export operations derive the ML-KEM decapsulation key only for the
 duration of the operation. Export remains explicit plaintext output and is not
 protected after it is written to a caller-owned buffer or file.
