@@ -47,11 +47,13 @@ cryptographic review.
   same-user local channel, but request limits and parser tests must continue to
   expand.
 - `LOCKBOX_PASSWORD` is useful for tests but should remain hidden in verbose
-  help only and should be discouraged for real use.
+  help only and should be discouraged for real use. Any password environment
+  variable path must construct `SecretString` directly with
+  `SecretString::try_from_env`, not via a normal `String`.
 - The core still exposes raw-key APIs for developer/testing use. Normal bindings
   should guide callers toward password/recipient unlock APIs.
 - The live storage path now uses fixed-size page-cache managed pages. Format
-  review should treat `docs/format.md` as the current contract. Normal writes,
+  review should treat `docs/file_formats.md` as the current contract. Normal writes,
   including compaction rewrites, pass through the page cache. Unlock reads of
   current key-directory pages also go through the page-cache page read/decode
   boundary because key directories are clear-text pages. Direct raw storage

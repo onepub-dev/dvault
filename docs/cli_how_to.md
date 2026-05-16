@@ -108,12 +108,38 @@ Set a variable:
 
 ```bash
 lockbox env set secrets.lbox DATABASE_URL 'postgres://localhost/app'
+lockbox env set secrets.lbox DATABASE_URL --value 'postgres://localhost/app'
 ```
+
+Set a secret variable with an explicit value source:
+
+```bash
+lockbox env set secrets.lbox --secret API_TOKEN --interactive
+lockbox env set secrets.lbox --secret API_TOKEN --file ./api-token.txt
+lockbox env set secrets.lbox --secret API_TOKEN --stdin
+lockbox env set secrets.lbox --secret API_TOKEN --from-env API_TOKEN
+lockbox env set secrets.lbox --secret API_TOKEN --value "$API_TOKEN"
+```
+
+Short forms are also supported:
+
+```bash
+lockbox env set secrets.lbox -s API_TOKEN -i
+lockbox env set secrets.lbox -s API_TOKEN -f ./api-token.txt
+lockbox env set secrets.lbox -s API_TOKEN -t
+lockbox env set secrets.lbox -s API_TOKEN -e API_TOKEN
+lockbox env set secrets.lbox -s API_TOKEN -v "$API_TOKEN"
+```
+
+Sensitivity is declared when a variable is created. Updating the value preserves
+that sensitivity. To change a variable from secret to non-secret, or the other
+way around, delete it and recreate it.
 
 Get a variable:
 
 ```bash
 lockbox env get secrets.lbox DATABASE_URL
+lockbox env get secrets.lbox --secret API_TOKEN
 ```
 
 List variable names:

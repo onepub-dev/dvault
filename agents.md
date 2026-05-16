@@ -10,11 +10,11 @@ DVault is a secure, encrypted file vault format designed for:
 ## Requirements
 
 ### 0. Page Cache Ownership
-All normal lockbox reads and writes must go through the page cache. The page
-cache owns page encoding, encryption policy, dirty tracking, flushing, COW
-replacement, zeroing of superseded physical pages, and publication of freed
-ranges for reuse. Higher-level code must not write storage directly to append,
-replace, redact, or update pages.
+All lockbox page reads and writes must go through the page cache, including
+secure env pages. The page cache owns page encoding, encryption policy, dirty
+tracking, flushing, COW replacement, zeroing of superseded physical pages, and
+publication of freed ranges for reuse. Higher-level code must not write storage
+directly to append, replace, redact, or update pages.
 
 Allowed exceptions:
 -   **Fixed header access**: the lockbox header is fixed at offset `0` and may
@@ -41,7 +41,7 @@ indexes, commit roots, and key-directory pages are page-cache-managed data.
 Some page classes may be marked as **clear-text** so they can be read before
 the content key is available, or for other format-level purposes. Clear-text
 pages are still page-cache-managed pages: callers must write them through the
-normal page-cache page-writing APIs. The page cache/page format layer owns the
+page-cache page-writing APIs. The page cache/page format layer owns the
 clear-text page policy and must add and validate a checksum when writing and
 reading clear-text pages.
 
@@ -51,6 +51,69 @@ higher-level code must not add independent checksums for encrypted page
 payloads. Clear-text page payloads rely on the page-cache/page-format checksum;
 clear-text object formats such as the key directory should not implement their
 own nested payload checksums.
+
+### 0.1 Password Ownership
+Passwords must be owned and passed as `SecretString`. Public Rust APIs must not
+accept or store password byte slices, `Vec<u8>`, or `String` values as password
+state. Temporary borrowed views may be produced only at the cryptographic call
+boundary, such as Argon2 input, and must not be retained.
+
+Interactive UI and CLI input must append each byte/character directly into a
+`SecretString` and immediately clear the temporary input buffer. Environment
+variable password support is an automation/testing escape hatch; it must use
+`SecretString::from_env` so the Rust side does not first materialize the value
+as a normal `String`.
+
+### 0.2 Rust Development Rules
+Rust changes must follow the project's local invariants first, then general
+Rust idioms. The Rust API Guidelines are the baseline for public API shape, and
+Clippy/rustfmt are the enforcement tools.
+
+Required checks before Rust work is considered complete:
+-   `bash rust/tools/check_required.sh`
+
+`-D warnings` runs Clippy's default lint groups as errors. That is not the
+strictest possible Clippy configuration. For deep review, public API work,
+unsafe work, crypto/key handling, compression, parsers, page-cache changes, or
+large refactors, also run a stricter advisory pass:
+
+```text
+bash rust/tools/clippy_advisory.sh
+```
+
+Treat findings from the advisory pass as review input. Fix correctness,
+security, clarity, and maintainability issues. Do not blindly require zero
+warnings from `pedantic`, `nursery`, or `cargo` until the project has explicitly
+accepted each lint; these groups can be noisy or unstable across toolchain
+versions.
+
+Do not enable `clippy::restriction` wholesale. It contains policy lints rather
+than a coherent idiomatic-Rust profile, and some lints conflict with normal Rust
+style. Cherry-pick specific restriction lints only when they encode an actual
+project rule. Existing required restriction-style rules include:
+-   `#![deny(unsafe_op_in_unsafe_fn)]`
+-   `#![deny(clippy::undocumented_unsafe_blocks)]`
+
+Code style rules:
+-   Prefer small, explicit `Result`-returning functions over panics in
+    production paths.
+-   Do not use `unwrap()` or `expect()` in production code unless a local
+    invariant makes failure impossible; when used, include specific context.
+-   Keep `unsafe` blocks tiny, wrapped in safe abstractions, and documented
+    with `// SAFETY:` comments.
+-   Keep Rust modules focused. Do not place a whole crate or large feature in
+    one source file when it has separable concerns such as public types,
+    allocator state, platform bindings, and tests.
+-   Prefer borrowing (`&T`, `&str`, iterators) for read-only access and clone
+    only at ownership boundaries.
+-   Use concrete domain types for security-sensitive state rather than raw
+    `Vec<u8>`/`String` values.
+-   Add abstractions only when they remove real duplication or protect an
+    invariant such as page-cache ownership, secret ownership, or path safety.
+-   Tests should cover public APIs directly as well as through CLI flows.
+
+Reference `docs/rust_development.md` for the selected published Rust skill
+reference and the Clippy policy rationale.
 
 ### 1. Page-Based Format
 The vault is divided into fixed-size "Pages" (e.g., 64KB).

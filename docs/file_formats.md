@@ -344,8 +344,15 @@ The env structure is commit-root referenced. The commit root points to an env
 root object, or zero when no env vars exist. Env entries are packed into
 encrypted env leaf pages so many small env vars share a page. Env internal pages
 contain only sorted routing names and child page offsets; env values exist only
-in env leaves. Normal `get_env`, `list_env`, and `get_all_env` operations load
-from the env root and must not discover env vars by scanning the whole lockbox.
+in env leaves.
+
+Each env leaf entry stores its sensitivity bit. Sensitivity is declared when the
+env var is created, updates preserve it, and changing sensitivity requires
+delete plus recreate. All env values are encrypted at rest. In memory, normal
+values use ordinary string access and secret values use secure string storage
+and scoped access. Normal `get_env`, `list_env`, and `get_all_env` operations
+load from the env root and must not discover env vars by scanning the whole
+lockbox; `get_all_env` only returns non-secret values.
 
 Env pages must not embed forward or backward linked-list pointers as the primary
 structure. Page-embedded linked lists interact poorly with copy-on-write: when a
@@ -365,7 +372,8 @@ An env update follows the same secret-redaction rule as file replacement:
 
 Appending a tombstone or replacement record without redacting the old value is
 not acceptable for env vars. Such a log can be useful for non-secret audit data,
-but env vars are treated as active secrets by default.
+but env vars are encrypted active configuration values and may include declared
+secrets.
 
 No backwards-compatible env-history scan is supported. The format is still
 pre-release and there are no existing production vaults to migrate.
@@ -464,10 +472,12 @@ removal as a conservative maintenance operation:
 
 ## Page Cache
 
-The core uses a unified page cache for reads and dirty writes. Clean decoded
-pages are held in a weighted LRU cache. Dirty pages stay in the cache and are
+The core uses a unified page cache for reads and writes. Clean decoded pages
+are held in a weighted LRU cache. Normal dirty pages stay in the cache and are
 visible to reads from the same opened lockbox, but they are not written to the
 backing store until `commit()` flushes them and publishes a new commit root.
+Secure env pages are appended through the cache's secure write path, which
+encodes and writes the encrypted page and caches a secure-backed `DecodedPage`.
 There is no background writer.
 
 The cache is given explicit workload policy by the caller-facing lockbox layer.

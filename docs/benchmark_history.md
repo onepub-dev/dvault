@@ -816,3 +816,62 @@ long-lived `PageObjectPacker` and flushes before the current packed page would
 overflow, so it keeps roughly one file-data page plus import metadata resident
 instead of the whole source corpus. A density regression test checks that
 non-tail file-data pages are not left mostly empty.
+
+## 2026-05-15 - Secure String Store Benchmark and Protection Batching
+
+Description: added Criterion coverage for the page-pooled secure string store
+after introducing secret env vars. The benchmark separates secure string
+creation, byte-wise append, slice append, and repeated reads with either one
+guard per secret or one shared access guard. The first profile showed avoidable
+page-protection churn around canary checks, data writes, zeroization, and free.
+The secure heap now checks both canaries and performs the data operation inside
+one full-allocation page-protection window for those paths.
+
+Command:
+
+```bash
+cd rust
+cargo bench -p lockbox_core --bench performance secure_string_store
+```
+
+An attempted local flamegraph run was blocked by the host kernel's
+`perf_event_paranoid=4` setting, so this entry records Criterion timing only
+and does not include a profile artifact.
+
+After lowering `perf_event_paranoid` to `1`, local flamegraph capture worked:
+
+- `rust/target/flamegraph-secure-string-store.svg`
+- `rust/target/flamegraph-secure-string-store-optimized.svg`
+
+Environment:
+
+- Host: `Linux slayer4 6.11.0-26-generic x86_64`
+- CPU: `AMD Ryzen 7 3700X 8-Core Processor`, 8 cores / 16 threads
+- Rust: `rustc 1.94.1 (e408947bf 2026-03-25)`
+- Benchmark harness: Criterion, sample size 10 per benchmark
+- Baseline source: new benchmark group; comparisons below are within the same
+  run
+
+Results:
+
+| Benchmark | Baseline mean | Optimized mean | Change |
+| --- | ---: | ---: | ---: |
+| `secure_string_store/from_bytes_1000x64` | 74.675 ms | 19.717 ms | -73.6% |
+| `secure_string_store/push_byte_64` | 941.14 us | 325.71 us | -65.4% |
+| `secure_string_store/extend_slice_64` | 57.249 us | 14.791 us | -74.2% |
+| `secure_string_store/read_1000x64_individual_guard` | 6.3705 ms | 6.1294 ms | -3.5% |
+| `secure_string_store/read_1000x64_shared_guard` | 107.15 us | 101.81 us | -5.8% |
+
+Conclusion:
+
+- Byte-at-a-time construction is expensive because each append touches the
+  protected heap. The CLI secret prompt now appends input in chunks through
+  `SecretString::try_extend_from_slice`.
+- A shared read-access scope is roughly two orders of magnitude faster than
+  creating a scope per string for repeated reads in this workload. Code that
+  reads many secrets should use `secure_read_access()` / `read_access()`.
+- Construction still has fixed overhead from secure heap locking and page
+  permission changes. The optimized flamegraph still shows `mprotect` as the
+  remaining significant secure-store cost, which is expected for protected
+  pages. Further reductions would require a larger API or policy change, such
+  as a write access guard for batch construction or an explicitly weaker mode.

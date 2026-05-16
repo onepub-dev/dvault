@@ -142,7 +142,7 @@ lockbox UUID. No password, private-key passphrase, bearer token, or content key
 is written to a cache file.
 
 See [docs/key_management.md](docs/key_management.md) for design intent and CLI
-direction. See [docs/format.md](docs/format.md) for the current header,
+direction. See [docs/file_formats.md](docs/file_formats.md) for the current header,
 key-directory, and fixed page layout.
 
 ## Rust API
@@ -365,6 +365,7 @@ Current review notes:
 - [Rust idioms review](docs/rust_idioms_review.md)
 - [Fuzzing](docs/fuzzing.md)
 - [CI secret storage comparison](docs/ci_secret_storage_comparison.md)
+- [Encrypted file comparison](docs/encrypted_file_comparison.md)
 
 ## Browser And Web Service Access
 

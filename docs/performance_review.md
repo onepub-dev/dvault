@@ -142,6 +142,19 @@ logical bytes, lockbox bytes, add time, commit time, list time, extraction or
 delete/replace time, large-file range-read latency, and lockbox/logical size
 ratio.
 
+Repeatable microbenchmarks live in
+`rust/lockbox_core/benches/performance.rs` and run with:
+
+```bash
+cd rust
+cargo bench -p lockbox_core --bench performance
+```
+
+The Criterion suite includes storage workflows, metadata operations, TOC
+structure changes, and secure string storage. The `secure_string_store` group
+tracks secure string construction, byte-wise append, slice append, and repeated
+secret reads with individual versus shared access guards.
+
 The large-file scenario is intended for GB-class baselines. It uses a streaming
 reader so the generated input does not need a separate GB fixture on disk. With
 `LOCKBOX_PERF_BACKEND=file`, pages are written to and read from the lockbox file by

@@ -140,7 +140,8 @@ error.
 This avoids labels as a required concept and keeps the default UX simple:
 
 ```rust
-let lockbox = Lockbox::open_with_password(bytes, b"shared password")?;
+let password = SecretString::try_from_bytes(b"shared password".to_vec())?;
+let lockbox = Lockbox::open_with_password(bytes, &password)?;
 let lockbox = Lockbox::open_with_recipient(bytes, &my_private_key)?;
 ```
 
@@ -180,13 +181,13 @@ The native vault API uses `SecretString`/secret byte wrappers for passwords and
 cached content keys. These wrappers are implemented once in `lockbox_core` and
 re-exported by `lockbox_vault`. They zeroize memory on drop, redact debug
 output, and try to pin the backing allocation with `mlock` on Unix or
-`VirtualLock` on Windows. Pinning can fail because of OS limits, sandboxing, or
-platform policy; the API still zeroizes in that case.
+`VirtualLock` on Windows. Secure construction and mutation are fallible because
+pinning, page protection, and corruption checks can fail.
 
 Interactive CLI prompting reads bytes directly into `SecretString` rather than
 building a password `String`. Language bindings should do the same where the
 host platform allows it: accept a byte buffer, pass it over FFI/WASM as bytes,
-and construct `SecretString::from_bytes` immediately on the Rust side. If a host
+and construct `SecretString::try_from_bytes` immediately on the Rust side. If a host
 language can only provide immutable strings, that should be documented as a
 weaker interop path because the host runtime may retain extra copies outside
 Rust's control.
@@ -194,7 +195,9 @@ Rust's control.
 Passwords supplied through process environment variables may also exist in
 OS/process environment storage outside the wrapper, so env-based passwords
 remain a testing and automation escape hatch rather than the preferred
-interactive path.
+interactive path. Rust code that supports those variables must use
+`SecretString::try_from_env` rather than first materializing the value as a normal
+`String`.
 
 Core key handling follows the same rule. Long-lived content keys and unlocked
 content-key return values are stored in a secret wrapper that zeroizes memory on
@@ -241,6 +244,11 @@ Local vault private keys are protected by the vault lockbox password. The CLI
 prompts for that password interactively, or reads `LOCKBOX_VAULT_PASSWORD` for
 automation. Trusted public keys and key-directory backups are records inside
 the vault lockbox.
+
+When loaded, the long-lived ML-KEM private seed is held in `SecretBytes`.
+Unlock/export operations derive the ML-KEM decapsulation key only for the
+duration of the operation. Export remains explicit plaintext output and is not
+protected after it is written to a caller-owned buffer or file.
 
 ## Key File Formats
 
