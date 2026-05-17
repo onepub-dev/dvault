@@ -443,7 +443,7 @@ fn multiple_key_slots_are_tried_until_one_unlocks() {
     let mut lb = Lockbox::create_with_recipient_public_key(&alice.recipient_public_key()).unwrap();
     lb.add_recipient_public_key(&bob_public).unwrap();
     let backup_password = password("backup-password");
-    lb.add_password_slot(&backup_password).unwrap();
+    lb.add_password(&backup_password).unwrap();
     lb.add_file(&p("/shared/report.txt"), b"report", false)
         .unwrap();
     lb.commit().unwrap();
@@ -474,9 +474,9 @@ fn key_slots_can_be_removed_and_passwords_changed() {
     let temporary_password = password("temporary-password");
     let new_password = password("new-password");
     let mut lb = Lockbox::create_with_password(&old_password).unwrap();
-    let extra_id = lb.add_password_slot(&temporary_password).unwrap();
+    let extra_id = lb.add_password(&temporary_password).unwrap();
     lb.delete_key(extra_id).unwrap();
-    lb.change_password(&old_password, &new_password).unwrap();
+    lb.replace_password(&old_password, &new_password).unwrap();
     lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
     lb.commit().unwrap();
 
@@ -500,7 +500,7 @@ fn key_slot_removal_compacts_old_key_material() {
     let primary_password = password("primary-password");
     let temporary_password = password("temporary-password");
     let mut lb = Lockbox::create_with_password(&primary_password).unwrap();
-    let temporary_id = lb.add_password_slot(&temporary_password).unwrap();
+    let temporary_id = lb.add_password(&temporary_password).unwrap();
     lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
     lb.commit().unwrap();
     let before = lb.to_bytes().len();
@@ -524,7 +524,7 @@ fn path_backed_key_slot_removal_compacts_and_remains_file_backed() {
     let primary_password = password("primary-password");
     let temporary_password = password("temporary-password");
     let mut lb = Lockbox::create_file(&path, LockboxCreate::Password(&primary_password)).unwrap();
-    let temporary_id = lb.add_password_slot(&temporary_password).unwrap();
+    let temporary_id = lb.add_password(&temporary_password).unwrap();
     lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
     lb.commit().unwrap();
     let before = std::fs::metadata(&path).unwrap().len();

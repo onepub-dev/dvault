@@ -194,7 +194,7 @@ fn public_api_password_and_recipient_key_management_flow() {
     let mut reopened =
         Lockbox::open_file(&lockbox_path, LockboxUnlock::Password(&old_password)).unwrap();
     let new_slot = reopened
-        .change_password(&old_password, &new_password)
+        .replace_password(&old_password, &new_password)
         .unwrap();
     reopened.commit().unwrap();
 

@@ -45,15 +45,18 @@ new keypair per lockbox.
 
 ### Password Sharing
 
-The user creates or updates a lockbox with a password slot:
+The user can create a lockbox with a password or add another password later:
 
 ```text
-password -> Argon2id -> unwrap content key -> open lockbox
+password -> Argon2id -> wrap or unwrap content key
 ```
 
 This is for simple sharing where a recipient does not have a public key yet.
 The password should be one-time or lockbox-specific, not the sender's normal
 private-key passphrase.
+
+Passwords do not encrypt file content directly. The lockbox content key is
+random; each password entry wraps that same content key independently.
 
 ### Public-Key Sharing
 
@@ -155,8 +158,8 @@ limit violation.
 The user does not need to know which slot belongs to them.
 
 When opening with a password, the library reads the key directory and tries each
-password slot until one decrypts and authenticates the wrapped content key. When
-opening with a private recipient key, it tries each ML-KEM-1024 slot until one
+embedded password entry until one decrypts and authenticates the wrapped content key. When
+opening with a private recipient key, it tries each ML-KEM-1024 entry until one
 decapsulates and authenticates. If none work, opening fails with an invalid-key
 error.
 

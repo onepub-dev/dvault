@@ -115,7 +115,7 @@ impl Lockbox {
                     LockboxId::new_random()?,
                     LockboxOptions::default(),
                 )?;
-                lockbox.add_password_slot(password)?;
+                lockbox.add_password(password)?;
                 lockbox
             }
             LockboxCreate::RecipientPublicKey(recipient) => {
@@ -174,7 +174,7 @@ impl Lockbox {
     pub fn create_with_password(password: &SecretString) -> Result<Self> {
         let content_key = random_content_key()?;
         let mut lockbox = Self::create(content_key);
-        lockbox.add_password_slot(password)?;
+        lockbox.add_password(password)?;
         Ok(lockbox)
     }
 
@@ -319,11 +319,16 @@ impl Lockbox {
         Err(Error::InvalidKey)
     }
 
-    /// Add a password key to the lockbox and return its key id.
+    /// Add another password that can unlock this lockbox and return its key id.
+    ///
+    /// A password does not encrypt file content directly. The lockbox content
+    /// key is random; each password wraps that same content key in an embedded
+    /// key-directory entry. `Lockbox::open_file` with `LockboxUnlock::Password`
+    /// tries each embedded password entry until one unwraps the content key.
     ///
     /// Returns `Error::SecurityLimitExceeded` if secure memory access, random
     /// salt generation, or password wrapping fails.
-    pub fn add_password_slot(&mut self, password: &SecretString) -> Result<u64> {
+    pub fn add_password(&mut self, password: &SecretString) -> Result<u64> {
         let id = next_key_slot_id(&self.key_slots);
         let salt = random_salt()?;
         let slot = lockbox_secure::read_access(|access| {
@@ -414,8 +419,14 @@ impl Lockbox {
         self.key_slots.iter().map(KeySlot::info).collect()
     }
 
-    /// Replace a password key and return the new key id.
-    pub fn change_password(
+    /// Replace one existing password with a new password and return the new key id.
+    ///
+    /// The old password is used only to find a matching embedded password entry.
+    /// Other passwords and recipient keys are left unchanged. Returns
+    /// `Error::InvalidKey` if no embedded password entry matches `old_password`;
+    /// returns storage or encoding errors if compaction fails after the
+    /// replacement.
+    pub fn replace_password(
         &mut self,
         old_password: &SecretString,
         new_password: &SecretString,
@@ -430,7 +441,7 @@ impl Lockbox {
         let Some(old_id) = matching_id else {
             return Err(Error::InvalidKey);
         };
-        let new_id = self.add_password_slot(new_password)?;
+        let new_id = self.add_password(new_password)?;
         self.remove_key_slot(old_id)?;
         self.compact()?;
         Ok(new_id)
