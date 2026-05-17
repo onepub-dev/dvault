@@ -869,7 +869,7 @@ Conclusion:
   `SecretString::try_extend_from_slice`.
 - A shared read-access scope is roughly two orders of magnitude faster than
   creating a scope per string for repeated reads in this workload. Code that
-  reads many secrets should use `secure_read_access()` / `read_access()`.
+  reads many secrets should use `lockbox_secure::read_access()`.
 - Construction still has fixed overhead from secure heap locking and page
   permission changes. The optimized flamegraph still shows `mprotect` as the
   remaining significant secure-store cost, which is expected for protected

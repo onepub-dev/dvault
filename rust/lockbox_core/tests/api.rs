@@ -1,7 +1,7 @@
 use lockbox_core::{
-    derive_key_from_password, CacheLimit, Entry, EntryKind, Error, ExtractPolicy, ExtractedNode,
-    KeySlotKind, ListOptions, Lockbox, LockboxCreate, LockboxOptions, LockboxUnlock, MlKemKeyPair,
-    MlKemRecipientKey, RecoveryReportOptions, SecretString, WorkloadProfile,
+    CacheLimit, Entry, EntryKind, Error, ExtractPolicy, ExtractedNode, KeySlotKind, ListOptions,
+    Lockbox, LockboxCreate, LockboxOptions, LockboxUnlock, MlKemKeyPair, MlKemRecipientKey,
+    RecoveryReportOptions, SecretString, WorkloadProfile,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -300,21 +300,6 @@ fn file_content_can_be_loaded_and_extracted_with_streaming_apis() {
     lb.write_file_to("/large/stream.bin", &mut extracted)
         .unwrap();
     assert_eq!(extracted, content);
-}
-
-#[test]
-fn password_keys_are_derived_with_argon2id() {
-    let salt = b"0123456789abcdef";
-    let key_a = derive_key_from_password(&password("correct horse"), salt).unwrap();
-    let key_b = derive_key_from_password(&password("correct horse"), salt).unwrap();
-    let key_c = derive_key_from_password(&password("different"), salt).unwrap();
-
-    assert_eq!(key_a, key_b);
-    assert_ne!(key_a, key_c);
-    assert!(matches!(
-        derive_key_from_password(&password("pw"), b"short"),
-        Err(Error::SecurityLimitExceeded(_))
-    ));
 }
 
 #[test]

@@ -43,7 +43,6 @@ pub use extract_policy::ExtractPolicy;
 pub use extracted_file::ExtractedFile;
 pub use extracted_node::ExtractedNode;
 pub use extracted_symlink::ExtractedSymlink;
-pub use key_derivation::derive_key_from_password;
 pub use key_slot::{KeySlotInfo, KeySlotKind};
 pub use key_wrap::{MlKemKeyPair, MlKemRecipientKey, MlKemWrappedKey};
 pub use list_iter::ListIter;
@@ -53,9 +52,4 @@ pub use lockbox_id::LockboxId;
 pub use page_inspection::{PageInspection, PageObjectInspection};
 pub use recovery_report::RecoveryReport;
 pub use recovery_report_options::RecoveryReportOptions;
-pub use secret_vec::{
-    secure_allocation_chunk_bytes, secure_memory_capabilities, secure_read_access,
-    set_secure_allocation_chunk_bytes, set_weakened_allocation_allowed,
-    weakened_allocation_allowed, AllocationSecurity, SecretString, SecretVec,
-    SecureMemoryCapabilities, SecureReadAccess,
-};
+pub use secret_vec::{SecretString, SecretVec};

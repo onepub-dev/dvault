@@ -3,7 +3,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use crate::secret_vec::SecretString;
 use crate::{Error, Result};
 
-pub fn derive_key_from_password(password: &SecretString, salt: &[u8]) -> Result<[u8; 32]> {
+pub(crate) fn derive_key_from_password(password: &SecretString, salt: &[u8]) -> Result<[u8; 32]> {
     password.with_bytes(|bytes| derive_key_from_password_bytes(bytes, salt))?
 }
 

@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use lockbox_core::{secure_read_access, ExtractPolicy, ListOptions, Lockbox, SecretString};
+use lockbox_core::{ExtractPolicy, ListOptions, Lockbox, SecretString};
+use lockbox_secure::read_access as secure_read_access;
 use std::fs;
 use std::io::{Read, Result as IoResult};
 use std::path::PathBuf;
