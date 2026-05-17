@@ -1,6 +1,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
+//! Native vault and unlock-cache support for Lockbox.
+//!
+//! This crate layers local workstation/server conveniences on top of
+//! `lockbox_core`: an agent-backed content-key cache, a password-protected
+//! local vault file, and helpers for importing and exporting recipient keys.
+//! It is intended for native applications. Browser and other sandboxed
+//! environments should usually use `lockbox_core` directly.
 
+/// Secure string type re-exported from `lockbox_core`.
 pub use lockbox_core::{SecretString, SecretVec};
 
 mod agent_client;

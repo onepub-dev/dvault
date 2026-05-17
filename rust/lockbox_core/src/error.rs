@@ -7,6 +7,8 @@ pub enum Error {
     CorruptHeader,
     /// An encrypted record or decoded page failed validation.
     CorruptRecord,
+    /// Stored vault metadata failed validation.
+    CorruptVaultRecord(String),
     /// The supplied key was wrong or authentication failed.
     InvalidKey,
     /// A requested logical path was not found.
@@ -17,8 +19,16 @@ pub enum Error {
     InvalidPath(String),
     /// A caller supplied invalid non-path input.
     InvalidInput(String),
+    /// Key bytes, key text, or a key file could not be decoded as the expected key type.
+    InvalidKeyMaterial(String),
     /// The requested operation conflicts with the current lockbox state.
     InvalidOperation(String),
+    /// A vault-backed operation could not use the local vault or unlock cache.
+    VaultUnavailable(String),
+    /// A required host or process configuration value is missing or invalid.
+    Configuration(String),
+    /// A host filesystem path cannot be imported by the requested operation.
+    UnsupportedHostPath(String),
     /// Filesystem or platform IO failed.
     Io(String),
     /// A configured safety limit rejected the operation.
@@ -37,6 +47,9 @@ impl Error {
             Error::CorruptRecord => {
                 "The lockbox contents failed validation; try recovery or restore from a clean copy."
             }
+            Error::CorruptVaultRecord(_) => {
+                "The local vault metadata is inconsistent; delete or recreate the named vault record after confirming it is not needed."
+            }
             Error::InvalidKey => "Check the password, content key, recipient keypair, or local vault unlock state.",
             Error::NotFound(_) => {
                 "Check the logical lockbox path and list the parent directory to see available entries."
@@ -50,8 +63,20 @@ impl Error {
             Error::InvalidInput(_) => {
                 "Check the supplied value and use the documented input format."
             }
+            Error::InvalidKeyMaterial(_) => {
+                "Check the key file, key encoding, key format, and whether a public key was supplied where a private key was required."
+            }
             Error::InvalidOperation(_) => {
                 "Check the current entry state and use the API intended for that state."
+            }
+            Error::VaultUnavailable(_) => {
+                "Unlock the lockbox with a password, recipient keypair, or content key, or configure the local vault before retrying."
+            }
+            Error::Configuration(_) => {
+                "Set the required environment variable or pass an explicit path/value."
+            }
+            Error::UnsupportedHostPath(_) => {
+                "Use a regular file or directory with valid UTF-8 path components, or add unsupported filesystem objects explicitly."
             }
             Error::Io(_) => {
                 "Check filesystem permissions, whether the path exists, and whether another process is using the file."
@@ -83,6 +108,9 @@ impl fmt::Display for Error {
             Error::CorruptRecord => {
                 write!(f, "corrupt lockbox page or record. {}", self.guidance())
             }
+            Error::CorruptVaultRecord(message) => {
+                write!(f, "corrupt vault record: {message}. {}", self.guidance())
+            }
             Error::InvalidKey => {
                 write!(
                     f,
@@ -106,8 +134,20 @@ impl fmt::Display for Error {
             Error::InvalidInput(message) => {
                 write!(f, "invalid input: {message}. {}", self.guidance())
             }
+            Error::InvalidKeyMaterial(message) => {
+                write!(f, "invalid key material: {message}. {}", self.guidance())
+            }
             Error::InvalidOperation(message) => {
                 write!(f, "invalid operation: {message}. {}", self.guidance())
+            }
+            Error::VaultUnavailable(message) => {
+                write!(f, "vault unavailable: {message}. {}", self.guidance())
+            }
+            Error::Configuration(message) => {
+                write!(f, "configuration error: {message}. {}", self.guidance())
+            }
+            Error::UnsupportedHostPath(message) => {
+                write!(f, "unsupported host path: {message}. {}", self.guidance())
             }
             Error::Io(message) => write!(f, "io error: {message}. {}", self.guidance()),
             Error::SecurityLimitExceeded(message) => {
@@ -143,11 +183,28 @@ mod tests {
         assert!(invalid_key.contains("unlock failed"));
         assert!(invalid_key.contains("password"));
 
+        let corrupt_vault_record =
+            Error::CorruptVaultRecord("bad private key record".to_string()).to_string();
+        assert!(corrupt_vault_record.contains("corrupt vault record: bad private key record"));
+
         let invalid_input = Error::InvalidInput("bad env value".to_string()).to_string();
         assert!(invalid_input.contains("invalid input: bad env value"));
+
+        let invalid_key_material =
+            Error::InvalidKeyMaterial("bad public key".to_string()).to_string();
+        assert!(invalid_key_material.contains("invalid key material: bad public key"));
 
         let invalid_operation =
             Error::InvalidOperation("environment variable is secret".to_string()).to_string();
         assert!(invalid_operation.contains("invalid operation: environment variable is secret"));
+
+        let vault = Error::VaultUnavailable("no cached key".to_string()).to_string();
+        assert!(vault.contains("vault unavailable: no cached key"));
+
+        let config = Error::Configuration("HOME is not set".to_string()).to_string();
+        assert!(config.contains("configuration error: HOME is not set"));
+
+        let host_path = Error::UnsupportedHostPath("socket".to_string()).to_string();
+        assert!(host_path.contains("unsupported host path: socket"));
     }
 }

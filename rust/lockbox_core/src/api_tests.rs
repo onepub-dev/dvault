@@ -1416,11 +1416,11 @@ fn symlink_recovery_records_spill_across_metadata_pages() {
         .iter()
         .filter(|entry| entry.kind == LockboxEntryKind::Symlink)
         .map(|entry| entry.path.as_str())
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(recovered.len(), 1400);
     for index in 0..1400 {
         let path = format!("/links/{index:04}/{}", "l".repeat(40));
-        assert!(recovered.contains_key(path.as_str()));
+        assert!(recovered.contains(path.as_str()));
     }
 }
 

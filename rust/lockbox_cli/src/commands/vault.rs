@@ -20,7 +20,7 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "list" => list(),
         "export-key" => export_key(&args[1..]),
         "export-public" => export_public(&args[1..]),
-        _ => Err(format!("unknown vault command: {command}").into()),
+        _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
     }
 }
 
@@ -50,7 +50,7 @@ fn keygen(args: &[String]) -> CliResult<()> {
     let public_path = args.get(1).map(String::as_str);
     let vault = default_vault()?;
     if vault.private_key_exists(name)? && !overwrite {
-        return Err(format!("vault private key already exists: {name}").into());
+        return Err(Error::AlreadyExists(format!("vault private key {name}")).into());
     }
 
     let keypair = RecipientKeyPair::generate()?;
@@ -73,7 +73,7 @@ fn trust(args: &[String]) -> CliResult<()> {
     let public_path = require_arg(&args, 1, "public key path")?;
     let vault = default_vault()?;
     if vault.trusted_recipient_exists(name)? && !overwrite {
-        return Err(format!("trusted recipient already exists: {name}").into());
+        return Err(Error::AlreadyExists(format!("trusted recipient {name}")).into());
     }
     let recipient = import_public_key(&fs::read(public_path)?)?;
     vault.store_trusted_recipient(name, &recipient)?;
@@ -86,7 +86,7 @@ fn import_key(args: &[String]) -> CliResult<()> {
     let public_path = args.get(2).map(String::as_str);
     let vault = default_vault()?;
     if vault.private_key_exists(name)? {
-        return Err(format!("vault private key already exists: {name}").into());
+        return Err(Error::AlreadyExists(format!("vault private key {name}")).into());
     }
     let keypair = import_private_key_file(private_path)?;
     vault.store_private_key(name, &keypair)?;

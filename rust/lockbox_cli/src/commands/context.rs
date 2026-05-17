@@ -45,7 +45,9 @@ pub(crate) fn open_existing(path: &str, access: &Access) -> Result<Lockbox, Erro
         Access::ContentKey(key) => {
             Vault::new(NoopStore).unlock_lockbox(path, LockboxUnlock::ContentKey(key.try_clone()?))
         }
-        Access::PromptPassword => Err(Error::InvalidKey),
+        Access::PromptPassword => Err(Error::InvalidOperation(
+            "password prompting is only used when creating a new lockbox; pass --key or open through the local vault".to_string(),
+        )),
         Access::CacheOnly => local_vault().open_lockbox(path),
     }
 }
@@ -67,7 +69,9 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> Result<Lockbox, Err
                 mirror_key_directory(&lockbox)?;
                 Ok(lockbox)
             }
-            Access::CacheOnly => Err(Error::InvalidKey),
+            Access::CacheOnly => Err(Error::VaultUnavailable(
+                "lockbox does not exist and no creation unlock method was supplied".to_string(),
+            )),
         }
     }
 }

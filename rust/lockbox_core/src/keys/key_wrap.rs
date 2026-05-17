@@ -59,11 +59,14 @@ impl RecipientKeyPair {
 
     /// Decrypt a content key previously encrypted for this keypair.
     ///
-    /// Returns `Error::InvalidKey` if the seed or ciphertext is invalid, or
-    /// `Error::SecurityLimitExceeded` if secure memory access fails.
+    /// Returns `Error::InvalidKey` if authenticated decrypt fails,
+    /// `Error::InvalidKeyMaterial` if the stored private seed cannot be decoded,
+    /// or `Error::SecurityLimitExceeded` if secure memory access fails.
     pub fn decrypt(&self, wrapped: &RecipientWrappedKey) -> Result<Vec<u8>> {
         self.decapsulation_seed.with_bytes(|seed_bytes| {
-            let seed = ml_kem::Seed::try_from(seed_bytes).map_err(|_| Error::InvalidKey)?;
+            let seed = ml_kem::Seed::try_from(seed_bytes).map_err(|_| {
+                Error::InvalidKeyMaterial("ML-KEM private seed has the wrong length".to_string())
+            })?;
             let decapsulation_key = ml_kem::DecapsulationKey1024::from_seed(seed);
             let shared_secret = decapsulation_key.decapsulate(&wrapped.ciphertext);
             let mut wrapping_key = derive_wrapping_key(shared_secret.as_ref());
@@ -88,12 +91,14 @@ impl RecipientKeyPair {
 
     /// Construct a keypair by taking ownership of a private seed buffer.
     ///
-    /// Returns `Error::InvalidKey` if the seed does not encode an ML-KEM-1024
-    /// decapsulation key, or `Error::SecurityLimitExceeded` if secure memory
-    /// access fails.
+    /// Returns `Error::InvalidKeyMaterial` if the seed does not encode an
+    /// ML-KEM-1024 decapsulation key, or `Error::SecurityLimitExceeded` if
+    /// secure memory access fails.
     pub fn from_private_seed(decapsulation_seed: SecretVec) -> Result<Self> {
         let encapsulation_key = decapsulation_seed.with_bytes(|bytes| {
-            let seed = ml_kem::Seed::try_from(bytes).map_err(|_| Error::InvalidKey)?;
+            let seed = ml_kem::Seed::try_from(bytes).map_err(|_| {
+                Error::InvalidKeyMaterial("ML-KEM private seed has the wrong length".to_string())
+            })?;
             let decapsulation_key = ml_kem::DecapsulationKey1024::from_seed(seed);
             Ok::<_, Error>(decapsulation_key.encapsulation_key().clone())
         })??;
@@ -115,13 +120,18 @@ impl RecipientKeyPair {
 impl RecipientPublicKey {
     /// Decode a public recipient key from its byte representation.
     ///
-    /// Returns `Error::CorruptHeader` if the bytes do not encode an
+    /// Returns `Error::InvalidKeyMaterial` if the bytes do not encode an
     /// ML-KEM-1024 recipient key.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let key = ml_kem::kem::Key::<ml_kem::EncapsulationKey1024>::try_from(bytes)
-            .map_err(|_| Error::CorruptHeader)?;
-        let encapsulation_key =
-            ml_kem::EncapsulationKey1024::new(&key).map_err(|_| Error::CorruptHeader)?;
+        let key =
+            ml_kem::kem::Key::<ml_kem::EncapsulationKey1024>::try_from(bytes).map_err(|_| {
+                Error::InvalidKeyMaterial(
+                    "ML-KEM public key bytes have the wrong length".to_string(),
+                )
+            })?;
+        let encapsulation_key = ml_kem::EncapsulationKey1024::new(&key).map_err(|_| {
+            Error::InvalidKeyMaterial("ML-KEM public key bytes are invalid".to_string())
+        })?;
         Ok(Self { encapsulation_key })
     }
 
@@ -151,11 +161,15 @@ impl RecipientPublicKey {
 impl RecipientWrappedKey {
     /// Reconstruct a wrapped key from serialized ciphertext components.
     ///
-    /// Returns `Error::CorruptHeader` if the ciphertext bytes are not a valid
+    /// Returns `Error::InvalidKeyMaterial` if the ciphertext bytes are not a valid
     /// ML-KEM-1024 ciphertext.
     pub fn from_parts(ciphertext: Vec<u8>, encrypted_key: Vec<u8>) -> Result<Self> {
-        let ciphertext = ml_kem::Ciphertext::<MlKem1024>::try_from(ciphertext.as_slice())
-            .map_err(|_| Error::CorruptHeader)?;
+        let ciphertext =
+            ml_kem::Ciphertext::<MlKem1024>::try_from(ciphertext.as_slice()).map_err(|_| {
+                Error::InvalidKeyMaterial(
+                    "ML-KEM ciphertext bytes have the wrong length".to_string(),
+                )
+            })?;
         Ok(Self {
             ciphertext,
             encrypted_key,

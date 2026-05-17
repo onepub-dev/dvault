@@ -104,7 +104,7 @@ fn add_source_path(lockbox: &mut Lockbox, source: &Path, lockbox_root: &str) -> 
         add_directory(lockbox, source, source, &lockbox_root)?;
         return Ok(());
     }
-    Err(format!("unsupported source path: {}", source.display()).into())
+    Err(Error::UnsupportedHostPath(source.display().to_string()).into())
 }
 
 fn add_directory(
@@ -135,10 +135,18 @@ fn join_lockbox_path(lockbox_root: &LockboxPath, relative: &Path) -> CliResult<L
     }
     for component in relative.components() {
         let std::path::Component::Normal(part) = component else {
-            return Err(Error::InvalidPath("unsupported source path component".to_string()).into());
+            return Err(Error::UnsupportedHostPath(format!(
+                "unsupported source path component in {}",
+                relative.display()
+            ))
+            .into());
         };
         let Some(part) = part.to_str() else {
-            return Err(Error::InvalidPath("source path is not valid UTF-8".to_string()).into());
+            return Err(Error::UnsupportedHostPath(format!(
+                "source path is not valid UTF-8: {}",
+                relative.display()
+            ))
+            .into());
         };
         if !out.ends_with('/') {
             out.push('/');

@@ -45,6 +45,11 @@ mod platform {
     }
 }
 
+/// Content-key store backed by the platform lockbox agent.
+///
+/// On Unix this uses the crate's Unix-domain-socket transport. On Windows it
+/// uses the named-pipe transport. Unsupported platforms expose a client that
+/// cannot store keys and returns cache misses for lookups.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AgentClient;
 
@@ -70,26 +75,38 @@ fn io_to_core(err: io::Error) -> Error {
     Error::Io(err.to_string())
 }
 
+/// Runs the platform content-key agent in the current process.
+///
+/// The function blocks while serving requests and returns when the platform
+/// transport exits or fails.
 pub fn serve_agent() -> io::Result<()> {
     platform::serve_agent()
 }
 
+/// Verifies that the current platform agent transport is configured securely.
+///
+/// This checks platform-specific transport requirements, such as local-only
+/// access and owner restrictions where those concepts exist.
 pub fn verify_agent_transport_security() -> io::Result<()> {
     platform::verify_agent_transport_security()
 }
 
+/// Reads a cached content key from the platform agent.
 pub fn get(lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
     platform::get(lockbox_id)
 }
 
+/// Stores a content key in the platform agent.
 pub fn put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<()> {
     platform::put(lockbox_id, key)
 }
 
+/// Removes one content key from the platform agent.
 pub fn forget(lockbox_id: LockboxId) -> io::Result<()> {
     platform::forget(lockbox_id)
 }
 
+/// Removes all content keys from the platform agent.
 pub fn forget_all() -> io::Result<()> {
     platform::forget_all()
 }

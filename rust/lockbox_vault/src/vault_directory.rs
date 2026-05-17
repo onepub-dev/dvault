@@ -12,12 +12,21 @@ use crate::key_format::{export_private_key, import_private_key, KeyFormat};
 
 const VAULT_FILE_NAME: &str = "local-vault.lbox";
 
+/// Trusted recipient entry stored in a `VaultDirectory`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredTrustedRecipient {
+    /// User-assigned recipient name.
     pub name: String,
+
+    /// Recipient public key associated with `name`.
     pub key: RecipientPublicKey,
 }
 
+/// Password-protected local vault file for native Lockbox metadata.
+///
+/// A `VaultDirectory` stores its data in `local-vault.lbox` under a private
+/// directory. It can hold recipient private keys, trusted recipient public keys,
+/// and key-directory backups used by `Vault` recovery fallback paths.
 #[derive(Debug)]
 pub struct VaultDirectory {
     root: PathBuf,
@@ -26,12 +35,20 @@ pub struct VaultDirectory {
 }
 
 impl VaultDirectory {
+    /// Default name used for the primary local recipient key.
     pub const DEFAULT_KEY_NAME: &'static str = "default";
 
+    /// Opens the default vault directory using `password`.
+    ///
+    /// The directory is chosen by `default_vault_dir`.
     pub fn open_default(password: &SecretString) -> Result<Self> {
         Self::open(default_vault_dir()?, password)
     }
 
+    /// Opens or creates a vault directory at `root`.
+    ///
+    /// The vault file is protected with `password`. When a new vault file is
+    /// created, private file permissions are applied on supported platforms.
     pub fn open(root: impl AsRef<Path>, password: &SecretString) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         create_private_dir(&root)?;
@@ -50,14 +67,19 @@ impl VaultDirectory {
         })
     }
 
+    /// Returns the root directory that contains the local vault file.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    /// Returns the path to the `local-vault.lbox` file.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    /// Stores a recipient private key under `name`.
+    ///
+    /// Names must contain only ASCII letters, digits, `-`, or `_`.
     pub fn store_private_key(&self, name: &str, keypair: &RecipientKeyPair) -> Result<()> {
         let env_name = private_key_env_name(name)?;
         let seed = export_private_key(keypair, KeyFormat::RawHex)?;
@@ -65,6 +87,7 @@ impl VaultDirectory {
         self.put_secret_env_record(&env_name, &value)
     }
 
+    /// Loads a recipient private key previously stored under `name`.
     pub fn load_private_key(&self, name: &str) -> Result<RecipientKeyPair> {
         let env_name = private_key_env_name(name)?;
         let secret = self
@@ -72,12 +95,13 @@ impl VaultDirectory {
             .borrow()
             .with_secret_env(&env_name, SecretString::try_clone)?
             .transpose()?
-            .ok_or_else(|| Error::InvalidPath(format!("private key not found: {name}")))?;
+            .ok_or_else(|| Error::NotFound(format!("vault private key {name}")))?;
         let mut bytes = SecretVec::new();
         secret.append_to_secure_vec(&mut bytes)?;
         import_private_key(bytes)
     }
 
+    /// Returns whether a private key exists under `name`.
     pub fn private_key_exists(&self, name: &str) -> Result<bool> {
         let lockbox = self.lockbox.borrow();
         Ok(lockbox
@@ -85,6 +109,7 @@ impl VaultDirectory {
             .is_some())
     }
 
+    /// Lists private-key names stored in this vault.
     pub fn list_private_keys(&self) -> Result<Vec<String>> {
         let mut names = Vec::new();
         let lockbox = self.lockbox.borrow();
@@ -99,18 +124,24 @@ impl VaultDirectory {
         Ok(names)
     }
 
+    /// Deletes the private key stored under `name`, if present.
     pub fn delete_private_key(&self, name: &str) -> Result<()> {
         self.delete_secret_env_record_if_exists(&private_key_env_name(name)?)
     }
 
+    /// Stores a trusted recipient public key under `name`.
+    ///
+    /// Names must contain only ASCII letters, digits, `-`, or `_`.
     pub fn store_trusted_recipient(&self, name: &str, key: &RecipientPublicKey) -> Result<()> {
         self.put_record(&trusted_recipient_record_path(name)?, &key.to_bytes())
     }
 
+    /// Loads a trusted recipient public key by name.
     pub fn load_trusted_recipient(&self, name: &str) -> Result<RecipientPublicKey> {
         RecipientPublicKey::from_bytes(&self.get_record(&trusted_recipient_record_path(name)?)?)
     }
 
+    /// Returns whether a trusted recipient exists under `name`.
     pub fn trusted_recipient_exists(&self, name: &str) -> Result<bool> {
         Ok(self
             .lockbox
@@ -119,10 +150,12 @@ impl VaultDirectory {
             .is_some())
     }
 
+    /// Deletes the trusted recipient stored under `name`, if present.
     pub fn delete_trusted_recipient(&self, name: &str) -> Result<()> {
         self.delete_record_if_exists(&trusted_recipient_record_path(name)?)
     }
 
+    /// Lists trusted recipients stored in this vault.
     pub fn list_trusted_recipients(&self) -> Result<Vec<StoredTrustedRecipient>> {
         let mut out = Vec::new();
         for name in self.list_record_names("/trusted_recipients", ".pub")? {
@@ -134,6 +167,10 @@ impl VaultDirectory {
         Ok(out)
     }
 
+    /// Stores an exported key-directory backup for `lockbox_id`.
+    ///
+    /// Backups can be used by `Vault` to recover unlockability when the
+    /// embedded key directory in a lockbox file is damaged.
     pub fn store_key_directory_backup(
         &self,
         lockbox_id: LockboxId,
@@ -142,10 +179,12 @@ impl VaultDirectory {
         self.put_record(&key_directory_backup_record_path(lockbox_id), key_directory)
     }
 
+    /// Loads the key-directory backup for `lockbox_id`.
     pub fn load_key_directory_backup(&self, lockbox_id: LockboxId) -> Result<Vec<u8>> {
         self.get_record(&key_directory_backup_record_path(lockbox_id))
     }
 
+    /// Counts key-directory backups stored in this vault.
     pub fn key_directory_backup_count(&self) -> Result<usize> {
         Ok(self
             .lockbox
@@ -208,7 +247,12 @@ impl VaultDirectory {
                 .rsplit('/')
                 .next()
                 .and_then(|file| file.strip_suffix(extension))
-                .ok_or_else(|| Error::InvalidPath(entry.path.to_string()))?;
+                .ok_or_else(|| {
+                    Error::CorruptVaultRecord(format!(
+                        "record path {} does not end with expected extension {extension}",
+                        entry.path
+                    ))
+                })?;
             out.push(name.to_string());
         }
         out.sort();
@@ -233,7 +277,9 @@ fn private_key_env_name(name: &str) -> Result<EnvName> {
 
 fn private_key_name_from_env(name: &str) -> Option<Result<String>> {
     let hex = name.strip_prefix("LOCKBOX_VAULT_PRIVATE_KEY_")?;
-    Some(decode_name_hex(hex).ok_or_else(|| Error::InvalidPath(name.to_string())))
+    Some(decode_name_hex(hex).ok_or_else(|| {
+        Error::CorruptVaultRecord(format!("private key record name is not valid hex: {name}"))
+    }))
 }
 
 fn trusted_recipient_record_path(name: &str) -> Result<LockboxPath> {
@@ -248,6 +294,10 @@ fn key_directory_backup_record_path(lockbox_id: LockboxId) -> LockboxPath {
         .expect("key directory backup path is a valid lockbox path")
 }
 
+/// Returns the default directory for the local vault.
+///
+/// `LOCKBOX_VAULT_DIR` overrides the platform default. Without an override,
+/// the path follows the operating system's application-data conventions.
 pub fn default_vault_dir() -> Result<PathBuf> {
     if let Ok(path) = env::var("LOCKBOX_VAULT_DIR") {
         return Ok(PathBuf::from(path));
@@ -255,6 +305,7 @@ pub fn default_vault_dir() -> Result<PathBuf> {
     default_vault_dir_for_os()
 }
 
+/// Returns the default path to the local vault file.
 pub fn default_vault_path() -> Result<PathBuf> {
     Ok(default_vault_dir()?.join(VAULT_FILE_NAME))
 }
@@ -263,7 +314,7 @@ pub fn default_vault_path() -> Result<PathBuf> {
 fn default_vault_dir_for_os() -> Result<PathBuf> {
     let base = env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
-        .ok_or_else(|| Error::Io("LOCALAPPDATA is not set".to_string()))?;
+        .ok_or_else(|| Error::Configuration("LOCALAPPDATA is not set".to_string()))?;
     Ok(base.join("Lockbox").join("vault"))
 }
 
@@ -293,7 +344,7 @@ fn default_vault_dir_for_os() -> Result<PathBuf> {
 fn home_dir() -> Result<PathBuf> {
     env::var_os("HOME")
         .map(PathBuf::from)
-        .ok_or_else(|| Error::Io("HOME is not set".to_string()))
+        .ok_or_else(|| Error::Configuration("HOME is not set".to_string()))
 }
 
 fn validate_record_name(name: &str) -> Result<&str> {
@@ -304,7 +355,9 @@ fn validate_record_name(name: &str) -> Result<&str> {
     if valid {
         Ok(name)
     } else {
-        Err(Error::InvalidPath(name.to_string()))
+        Err(Error::InvalidInput(format!(
+            "vault record name must contain only ASCII letters, digits, '-' or '_': {name}"
+        )))
     }
 }
 

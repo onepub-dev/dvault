@@ -6,28 +6,39 @@ use std::path::Path;
 
 use crate::{AgentClient, ContentKeyStore, VaultDirectory};
 
+/// Vault using the default platform agent as its content-key store.
 pub type LocalVault = Vault<AgentClient>;
 
+/// Creates a `Vault` backed by the default platform agent.
 pub fn local_vault() -> LocalVault {
     Vault::new(AgentClient)
 }
 
+/// High-level lockbox helper that integrates unlock operations with a key cache.
+///
+/// `Vault` wraps a `ContentKeyStore`. Creating or unlocking a lockbox stores
+/// the resulting content key in that store. `open_lockbox` then reopens the
+/// lockbox from the cached key without requiring the original password or
+/// recipient private key.
 #[derive(Debug, Clone)]
 pub struct Vault<S = AgentClient> {
     store: S,
 }
 
 impl<S> Vault<S> {
+    /// Creates a vault around a custom content-key store.
     pub fn new(store: S) -> Self {
         Self { store }
     }
 
+    /// Returns the content-key store used by this vault.
     pub fn store(&self) -> &S {
         &self.store
     }
 }
 
 impl<S: ContentKeyStore> Vault<S> {
+    /// Creates a password-protected lockbox and caches its content key.
     pub fn create_lockbox_with_password(
         &self,
         path: impl AsRef<Path>,
@@ -36,6 +47,7 @@ impl<S: ContentKeyStore> Vault<S> {
         self.create_lockbox(path, LockboxProtection::Password(password))
     }
 
+    /// Unlocks a password-protected lockbox and caches its content key.
     pub fn unlock_lockbox_with_password(
         &self,
         path: impl AsRef<Path>,
@@ -44,6 +56,11 @@ impl<S: ContentKeyStore> Vault<S> {
         self.unlock_lockbox(path, LockboxUnlock::Password(password))
     }
 
+    /// Creates a lockbox with the supplied protection mode.
+    ///
+    /// Content-key and password modes cache the unlocked content key after the
+    /// file is created. Recipient-public-key mode creates the file but cannot
+    /// cache a content key because no private material is available.
     pub fn create_lockbox(
         &self,
         path: impl AsRef<Path>,
@@ -77,16 +94,27 @@ impl<S: ContentKeyStore> Vault<S> {
         }
     }
 
+    /// Opens a lockbox using only a content key already present in the store.
+    ///
+    /// This fails if the key store has no cached key for the lockbox id.
     pub fn open_lockbox(&self, path: impl AsRef<Path>) -> Result<Lockbox> {
         let path = path.as_ref();
         let lockbox_id = VaultUnlock::read_lockbox_id(path)?;
         let Some(key) = self.store.get_content_key(lockbox_id)? else {
-            return Err(Error::InvalidKey);
+            return Err(Error::VaultUnavailable(format!(
+                "no cached content key for lockbox {lockbox_id}"
+            )));
         };
         let key = SecretVec::try_from_vec(key)?;
         Lockbox::open_file(path, LockboxUnlock::ContentKey(key))
     }
 
+    /// Unlocks a lockbox with explicit unlock material and caches its content key.
+    ///
+    /// Password and recipient-key-pair unlocks may fall back to a key-directory
+    /// backup stored in the default `VaultDirectory` when the embedded key
+    /// directory cannot be read. That fallback requires `LOCKBOX_VAULT_PASSWORD`
+    /// to be set so the default vault directory can be opened.
     pub fn unlock_lockbox(
         &self,
         path: impl AsRef<Path>,
@@ -114,11 +142,13 @@ impl<S: ContentKeyStore> Vault<S> {
         }
     }
 
+    /// Removes this lockbox's cached content key from the store.
     pub fn lock_lockbox(&self, path: impl AsRef<Path>) -> Result<()> {
         let lockbox_id = VaultUnlock::read_lockbox_id(path.as_ref())?;
         self.store.forget_content_key(lockbox_id)
     }
 
+    /// Removes every cached content key from the store.
     pub fn lock_all(&self) -> Result<()> {
         self.store.forget_all_content_keys()
     }
@@ -161,5 +191,6 @@ fn unlock_path_or_backup_with_recipient(
 }
 
 fn vault_password_from_env() -> Result<SecretString> {
-    SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")?.ok_or(Error::InvalidKey)
+    SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")?
+        .ok_or_else(|| Error::VaultUnavailable("LOCKBOX_VAULT_PASSWORD is not set".to_string()))
 }

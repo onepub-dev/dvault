@@ -15,22 +15,34 @@ const KTY: &str = "AKP";
 const ALG: &str = "ML-KEM-1024";
 const CRV: &str = "ML-KEM-1024";
 
+/// Supported recipient key serialization formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyFormat {
+    /// Lockbox PEM envelope containing a Lockbox JWK payload.
     LockboxPem,
+
+    /// Single JSON Web Key object.
     Jwk,
+
+    /// JSON Web Key Set containing one key.
     Jwks,
+
+    /// Raw key bytes encoded as hexadecimal text.
     RawHex,
 }
 
 impl KeyFormat {
+    /// Parses a CLI/user-facing key format name.
+    ///
+    /// Accepted names include `lockbox`, `lockbox-pem`, `pem`, `jwk`,
+    /// `jwks`, `raw`, `raw-hex`, and `hex`.
     pub fn parse(value: &str) -> Result<Self> {
         match value {
             "lockbox" | "lockbox-pem" | "pem" => Ok(Self::LockboxPem),
             "jwk" => Ok(Self::Jwk),
             "jwks" => Ok(Self::Jwks),
             "raw" | "raw-hex" | "hex" => Ok(Self::RawHex),
-            _ => Err(Error::InvalidPath(format!(
+            _ => Err(Error::InvalidInput(format!(
                 "unsupported key format: {value}"
             ))),
         }
@@ -55,6 +67,12 @@ struct Jwks {
     keys: Vec<JwkKey>,
 }
 
+/// Exports a recipient private key in the requested format.
+///
+/// Private-key output is returned as `SecretVec` so the serialized secret
+/// material is zeroized on drop. `LockboxPem`, `Jwk`, and `Jwks` include both
+/// public-key metadata and the private seed; `RawHex` contains only the private
+/// seed bytes encoded as hexadecimal text.
 pub fn export_private_key(keypair: &RecipientKeyPair, format: KeyFormat) -> Result<SecretVec> {
     let public = keypair.public_key();
     let public_bytes = public.to_bytes();
@@ -75,11 +93,19 @@ pub fn export_private_key(keypair: &RecipientKeyPair, format: KeyFormat) -> Resu
     }
 }
 
+/// Imports a recipient private key from PEM, JWK, JWKS-compatible JWK, or hex.
+///
+/// The input buffer is normalized in place and remains secret memory for the
+/// duration of parsing.
 pub fn import_private_key(mut bytes: SecretVec) -> Result<RecipientKeyPair> {
     normalize_private_key_to_seed(&mut bytes)?;
     RecipientKeyPair::from_private_seed(bytes)
 }
 
+/// Reads and imports a recipient private key from a file.
+///
+/// File contents are loaded into `SecretVec` before parsing so private material
+/// uses the same zeroizing path as `import_private_key`.
 pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<RecipientKeyPair> {
     let mut file = fs::File::open(path.as_ref()).map_err(|err| Error::Io(err.to_string()))?;
     let len = usize::try_from(
@@ -87,7 +113,9 @@ pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<RecipientKeyPai
             .map_err(|err| Error::Io(err.to_string()))?
             .len(),
     )
-    .map_err(|_| Error::Io("private key file is too large".into()))?;
+    .map_err(|_| {
+        Error::SecurityLimitExceeded("private key file length exceeds addressable memory".into())
+    })?;
     let mut bytes = SecretVec::new();
     bytes.resize_zeroed(len)?;
     bytes.with_mut_bytes(|buffer| {
@@ -97,6 +125,7 @@ pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<RecipientKeyPai
     import_private_key(bytes)
 }
 
+/// Exports a recipient public key in the requested format.
 pub fn export_public_key(key: &RecipientPublicKey, format: KeyFormat) -> Result<Vec<u8>> {
     match format {
         KeyFormat::LockboxPem => pem(PUBLIC_LABEL, &public_jwk(key)?),
@@ -111,24 +140,34 @@ pub fn export_public_key(key: &RecipientPublicKey, format: KeyFormat) -> Result<
     }
 }
 
+/// Imports a recipient public key from Lockbox PEM, JWK, JWKS, or raw hex.
 pub fn import_public_key(bytes: &[u8]) -> Result<RecipientPublicKey> {
-    let text = std::str::from_utf8(bytes).map_err(|_| Error::CorruptHeader)?;
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| Error::InvalidKeyMaterial("public key is not UTF-8 text".to_string()))?;
     if text.trim_start().starts_with("-----BEGIN ") {
         let (label, payload) = unpem(text)?;
         if label != PUBLIC_LABEL {
-            return Err(Error::CorruptHeader);
+            return Err(Error::InvalidKeyMaterial(format!(
+                "expected {PUBLIC_LABEL} PEM block, found {label}"
+            )));
         }
         return public_from_jwk(&payload);
     }
     if text.trim_start().starts_with('{') {
         if let Ok(jwks) = serde_json::from_str::<Jwks>(text) {
-            let key = jwks.keys.into_iter().next().ok_or(Error::CorruptHeader)?;
+            let key = jwks.keys.into_iter().next().ok_or_else(|| {
+                Error::InvalidKeyMaterial("JWKS does not contain any keys".to_string())
+            })?;
             return public_from_jwk(&key);
         }
-        let key = serde_json::from_str::<JwkKey>(text).map_err(|_| Error::CorruptHeader)?;
+        let key = serde_json::from_str::<JwkKey>(text).map_err(|_| {
+            Error::InvalidKeyMaterial("public key JSON is not a supported JWK/JWKS".to_string())
+        })?;
         return public_from_jwk(&key);
     }
-    RecipientPublicKey::from_bytes(&decode_hex(text.trim()).map_err(|_| Error::CorruptHeader)?)
+    RecipientPublicKey::from_bytes(&decode_hex(text.trim()).map_err(|_| {
+        Error::InvalidKeyMaterial("public key is not valid hexadecimal bytes".to_string())
+    })?)
 }
 
 fn private_jwk_secure(kid: &str, public_x: &str, seed: SecretVec) -> Result<SecretVec> {
@@ -186,12 +225,20 @@ fn normalize_private_key_to_seed(bytes: &mut SecretVec) -> Result<()> {
             if bytes[start..end].starts_with(b"-----BEGIN ") {
                 let body_len = compact_pem_body(bytes, start, end)?;
                 let decoded_len = Base64::decode_in_place(&mut bytes[..body_len])
-                    .map_err(|_| Error::InvalidKey)?
+                    .map_err(|_| {
+                        Error::InvalidKeyMaterial(
+                            "private PEM body is not valid base64".to_string(),
+                        )
+                    })?
                     .len();
                 let (d_start, d_end) = find_json_string_value(&bytes[..decoded_len], b"d")?;
                 bytes.copy_within(d_start..d_end, 0);
                 let seed_len = Base64UrlUnpadded::decode_in_place(&mut bytes[..d_end - d_start])
-                    .map_err(|_| Error::InvalidKey)?
+                    .map_err(|_| {
+                        Error::InvalidKeyMaterial(
+                            "private JWK d value is not valid base64url".to_string(),
+                        )
+                    })?
                     .len();
                 return Ok(seed_len);
             }
@@ -201,7 +248,11 @@ fn normalize_private_key_to_seed(bytes: &mut SecretVec) -> Result<()> {
                 let d_end = start + d_end;
                 bytes.copy_within(d_start..d_end, 0);
                 let seed_len = Base64UrlUnpadded::decode_in_place(&mut bytes[..d_end - d_start])
-                    .map_err(|_| Error::InvalidKey)?
+                    .map_err(|_| {
+                        Error::InvalidKeyMaterial(
+                            "private JWK d value is not valid base64url".to_string(),
+                        )
+                    })?
                     .len();
                 return Ok(seed_len);
             }
@@ -214,14 +265,18 @@ fn normalize_private_key_to_seed(bytes: &mut SecretVec) -> Result<()> {
 fn compact_pem_body(bytes: &mut [u8], start: usize, end: usize) -> Result<usize> {
     let begin = b"-----BEGIN LOCKBOX PRIVATE KEY-----";
     if !bytes[start..end].starts_with(begin) {
-        return Err(Error::InvalidKey);
+        return Err(Error::InvalidKeyMaterial(
+            "private PEM does not start with LOCKBOX PRIVATE KEY header".to_string(),
+        ));
     }
     let mut line_start = start;
     while line_start < end && bytes[line_start] != b'\n' && bytes[line_start] != b'\r' {
         line_start += 1;
     }
     if line_start == end {
-        return Err(Error::InvalidKey);
+        return Err(Error::InvalidKeyMaterial(
+            "private PEM does not contain a body".to_string(),
+        ));
     }
     let mut write = 0usize;
     let mut read = line_start;
@@ -249,7 +304,9 @@ fn find_json_string_value(bytes: &[u8], key: &[u8]) -> Result<(usize, usize)> {
         }
         let key_start = index + 1;
         let Some(key_end) = bytes[key_start..].iter().position(|byte| *byte == b'"') else {
-            return Err(Error::InvalidKey);
+            return Err(Error::InvalidKeyMaterial(
+                "JSON key name is unterminated".to_string(),
+            ));
         };
         let key_end = key_start + key_end;
         index = key_end + 1;
@@ -265,16 +322,22 @@ fn find_json_string_value(bytes: &[u8], key: &[u8]) -> Result<(usize, usize)> {
         }
         if &bytes[key_start..key_end] == key {
             if index >= bytes.len() || bytes[index] != b'"' {
-                return Err(Error::InvalidKey);
+                return Err(Error::InvalidKeyMaterial(
+                    "JSON key value is not a string".to_string(),
+                ));
             }
             let value_start = index + 1;
             let Some(value_end) = bytes[value_start..].iter().position(|byte| *byte == b'"') else {
-                return Err(Error::InvalidKey);
+                return Err(Error::InvalidKeyMaterial(
+                    "JSON string value is unterminated".to_string(),
+                ));
             };
             return Ok((value_start, value_start + value_end));
         }
     }
-    Err(Error::InvalidKey)
+    Err(Error::InvalidKeyMaterial(
+        "private key JSON does not contain required d value".to_string(),
+    ))
 }
 
 fn hex_encode_secure(mut bytes: SecretVec) -> Result<SecretVec> {
@@ -305,7 +368,9 @@ fn base64_encode_with<E: Encoding>(mut bytes: SecretVec) -> Result<SecretVec> {
     bytes.with_mut_bytes(|bytes| {
         bytes.copy_within(0..original_len, encoded_len);
         let (out, input) = bytes.split_at_mut(encoded_len);
-        E::encode(&input[..original_len], out).map_err(|_| Error::InvalidKey)?;
+        E::encode(&input[..original_len], out).map_err(|_| {
+            Error::InvalidKeyMaterial("key bytes could not be base64 encoded".to_string())
+        })?;
         input.zeroize();
         Ok::<_, Error>(())
     })??;
@@ -315,7 +380,9 @@ fn base64_encode_with<E: Encoding>(mut bytes: SecretVec) -> Result<SecretVec> {
 
 fn hex_decode_in_place(bytes: &mut [u8]) -> Result<usize> {
     if !bytes.len().is_multiple_of(2) {
-        return Err(Error::InvalidKey);
+        return Err(Error::InvalidKeyMaterial(
+            "hex key has an odd number of digits".to_string(),
+        ));
     }
     let out_len = bytes.len() / 2;
     for index in 0..out_len {
@@ -336,7 +403,9 @@ fn hex_value(byte: u8) -> Result<u8> {
         b'0'..=b'9' => Ok(byte - b'0'),
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(Error::InvalidKey),
+        _ => Err(Error::InvalidKeyMaterial(format!(
+            "hex key contains non-hex byte 0x{byte:02x}"
+        ))),
     }
 }
 
@@ -366,8 +435,10 @@ fn public_jwk(key: &RecipientPublicKey) -> Result<JwkKey> {
 }
 
 fn public_from_jwk(key: &JwkKey) -> Result<RecipientPublicKey> {
-    validate_jwk_header(key).map_err(|_| Error::CorruptHeader)?;
-    let public = Base64UrlUnpadded::decode_vec(&key.x).map_err(|_| Error::CorruptHeader)?;
+    validate_jwk_header(key)?;
+    let public = Base64UrlUnpadded::decode_vec(&key.x).map_err(|_| {
+        Error::InvalidKeyMaterial("public JWK x value is not valid base64url".to_string())
+    })?;
     RecipientPublicKey::from_bytes(&public)
 }
 
@@ -375,7 +446,10 @@ fn validate_jwk_header(key: &JwkKey) -> Result<()> {
     if key.kty == KTY && key.alg == ALG && key.crv == CRV {
         Ok(())
     } else {
-        Err(Error::InvalidKey)
+        Err(Error::InvalidKeyMaterial(format!(
+            "unsupported JWK header kty={}, alg={}, crv={}",
+            key.kty, key.alg, key.crv
+        )))
     }
 }
 
@@ -385,7 +459,9 @@ fn pem(label: &str, payload: &JwkKey) -> Result<Vec<u8>> {
     let mut out = String::new();
     out.push_str(&format!("-----BEGIN {label}-----\n"));
     for chunk in body.as_bytes().chunks(64) {
-        out.push_str(std::str::from_utf8(chunk).map_err(|_| Error::Io("invalid pem".into()))?);
+        out.push_str(std::str::from_utf8(chunk).map_err(|_| {
+            Error::InvalidKeyMaterial("generated PEM contains invalid UTF-8".into())
+        })?);
         out.push('\n');
     }
     out.push_str(&format!("-----END {label}-----\n"));
@@ -394,23 +470,31 @@ fn pem(label: &str, payload: &JwkKey) -> Result<Vec<u8>> {
 
 fn unpem(text: &str) -> Result<(String, JwkKey)> {
     let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
-    let begin = lines.next().ok_or(Error::InvalidKey)?;
+    let begin = lines.next().ok_or_else(|| {
+        Error::InvalidKeyMaterial("PEM input does not contain a BEGIN line".to_string())
+    })?;
     let label = begin
         .strip_prefix("-----BEGIN ")
         .and_then(|value| value.strip_suffix("-----"))
-        .ok_or(Error::InvalidKey)?
+        .ok_or_else(|| Error::InvalidKeyMaterial("PEM BEGIN line is malformed".to_string()))?
         .to_string();
     let end = format!("-----END {label}-----");
     let mut body = String::new();
     for line in lines {
         if line == end {
-            let json = Base64::decode_vec(&body).map_err(|_| Error::InvalidKey)?;
-            let key = serde_json::from_slice(&json).map_err(|_| Error::InvalidKey)?;
+            let json = Base64::decode_vec(&body).map_err(|_| {
+                Error::InvalidKeyMaterial("PEM body is not valid base64".to_string())
+            })?;
+            let key = serde_json::from_slice(&json).map_err(|_| {
+                Error::InvalidKeyMaterial("PEM body is not a supported JWK".to_string())
+            })?;
             return Ok((label, key));
         }
         body.push_str(line);
     }
-    Err(Error::InvalidKey)
+    Err(Error::InvalidKeyMaterial(
+        "PEM input does not contain a matching END line".to_string(),
+    ))
 }
 
 fn fingerprint(public_key: &[u8]) -> String {

@@ -1,5 +1,6 @@
 use std::io;
 
+/// Encodes bytes as lowercase hexadecimal text.
 pub fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -10,6 +11,10 @@ pub fn encode_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// Decodes hexadecimal text into bytes.
+///
+/// Both uppercase and lowercase digits are accepted. Invalid input is reported
+/// as `io::ErrorKind::InvalidData`.
 pub fn decode_hex(text: &str) -> io::Result<Vec<u8>> {
     if !text.len().is_multiple_of(2) {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid hex"));

@@ -65,7 +65,10 @@ fn vault_create_open_and_lock_with_content_key() {
     assert_eq!(opened.get_file(&p("/docs/a.txt")).unwrap(), b"alpha");
 
     vault.lock_lockbox(&path).unwrap();
-    assert!(matches!(vault.open_lockbox(&path), Err(Error::InvalidKey)));
+    assert!(matches!(
+        vault.open_lockbox(&path),
+        Err(Error::VaultUnavailable(_))
+    ));
 
     let _ = fs::remove_file(path);
 }
@@ -85,7 +88,10 @@ fn vault_unlock_populates_cache_for_password_lockbox() {
     lockbox.commit().unwrap();
     vault.lock_lockbox(&path).unwrap();
 
-    assert!(matches!(vault.open_lockbox(&path), Err(Error::InvalidKey)));
+    assert!(matches!(
+        vault.open_lockbox(&path),
+        Err(Error::VaultUnavailable(_))
+    ));
 
     vault
         .unlock_lockbox(&path, LockboxUnlock::Password(&password))
@@ -196,7 +202,10 @@ fn vault_convenience_password_store_and_lock_all_flow() {
         .unwrap();
     lockbox.commit().unwrap();
     vault.lock_lockbox(&path).unwrap();
-    assert!(matches!(vault.open_lockbox(&path), Err(Error::InvalidKey)));
+    assert!(matches!(
+        vault.open_lockbox(&path),
+        Err(Error::VaultUnavailable(_))
+    ));
 
     let opened = vault
         .unlock_lockbox_with_password(&path, &password)
@@ -212,7 +221,10 @@ fn vault_convenience_password_store_and_lock_all_flow() {
     );
 
     vault.lock_all().unwrap();
-    assert!(matches!(vault.open_lockbox(&path), Err(Error::InvalidKey)));
+    assert!(matches!(
+        vault.open_lockbox(&path),
+        Err(Error::VaultUnavailable(_))
+    ));
 
     let _ = fs::remove_file(path);
 }
