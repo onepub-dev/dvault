@@ -6,7 +6,7 @@ use crate::key_directory::read_key_directory;
 use crate::key_directory::read_key_directory_backup;
 use crate::key_directory::{best_key_directory, encode_key_directory, scan_key_directories};
 use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, LockboxKeySlot};
-use crate::key_wrap::{MlKemKeyPair, MlKemRecipientPublicKey};
+use crate::key_wrap::{RecipientKeyPair, RecipientPublicKey};
 use crate::lockbox_id::LockboxId;
 use crate::secret_vec::{SecretString, SecretVec};
 use crate::storage::{Storage, StorageBackend};
@@ -41,7 +41,7 @@ pub enum LockboxCreate<'a> {
     /// Generate a content key and protect it with a recipient public key.
     ///
     /// This is the public half of an ML-KEM recipient keypair.
-    RecipientPublicKey(MlKemRecipientPublicKey),
+    RecipientPublicKey(RecipientPublicKey),
 }
 
 /// Method used to unlock an existing lockbox file.
@@ -62,7 +62,7 @@ pub enum LockboxUnlock<'a> {
     ///
     /// The keypair contains the private decapsulation material needed to unwrap
     /// a content key stored for its public key.
-    RecipientKeyPair(MlKemKeyPair),
+    RecipientKeyPair(RecipientKeyPair),
 }
 
 impl UnlockedContentKey {
@@ -126,7 +126,7 @@ impl Lockbox {
                     LockboxId::new_random()?,
                     LockboxOptions::default(),
                 )?;
-                lockbox.add_recipient_public_key(&recipient)?;
+                lockbox.add_recipient(&recipient)?;
                 lockbox
             }
         };
@@ -243,20 +243,15 @@ impl Lockbox {
     }
 
     #[cfg(test)]
-    pub fn create_with_recipient(recipient: &MlKemKeyPair) -> Result<Self> {
-        Self::create_with_recipient_public_key(&recipient.recipient_public_key())
-    }
-
-    #[cfg(test)]
-    pub fn create_with_recipient_public_key(recipient: &MlKemRecipientPublicKey) -> Result<Self> {
+    pub fn create_with_recipient(recipient: &RecipientPublicKey) -> Result<Self> {
         let content_key = random_content_key()?;
         let mut lockbox = Self::create(content_key);
-        lockbox.add_recipient_public_key(recipient)?;
+        lockbox.add_recipient(recipient)?;
         Ok(lockbox)
     }
 
     #[cfg(test)]
-    pub fn open_with_recipient(bytes: Vec<u8>, recipient: &MlKemKeyPair) -> Result<Self> {
+    pub fn open_with_recipient(bytes: Vec<u8>, recipient: &RecipientKeyPair) -> Result<Self> {
         let unlocked = Self::unlock_with_recipient(&bytes, recipient)?;
         unlocked.open_bytes(bytes)
     }
@@ -264,7 +259,7 @@ impl Lockbox {
     #[cfg(test)]
     pub fn unlock_with_recipient(
         bytes: &[u8],
-        recipient: &MlKemKeyPair,
+        recipient: &RecipientKeyPair,
     ) -> Result<UnlockedContentKey> {
         for directory in key_directories_from_bytes(bytes)? {
             for slot in directory.slots {
@@ -283,7 +278,7 @@ impl Lockbox {
     /// Unlock a lockbox file with a recipient private key.
     pub(crate) fn unlock_path_with_recipient(
         path: &Path,
-        recipient: &MlKemKeyPair,
+        recipient: &RecipientKeyPair,
     ) -> Result<UnlockedContentKey> {
         let storage = StorageBackend::file(path)?;
         for directory in key_directories_from_storage(&storage)? {
@@ -304,7 +299,7 @@ impl Lockbox {
     #[cfg(feature = "vault-bridge")]
     pub(crate) fn unlock_key_directory_backup_with_recipient(
         bytes: &[u8],
-        recipient: &MlKemKeyPair,
+        recipient: &RecipientKeyPair,
     ) -> Result<UnlockedContentKey> {
         let directory = read_key_directory_backup(bytes)?;
         for slot in directory.slots {
@@ -345,18 +340,11 @@ impl Lockbox {
         Ok(id)
     }
 
-    /// Add this recipient's public key to the lockbox and return its key id.
-    ///
-    /// Returns the same errors as `add_recipient_public_key`.
-    pub fn add_recipient(&mut self, recipient: &MlKemKeyPair) -> Result<u64> {
-        self.add_recipient_public_key(&recipient.recipient_public_key())
-    }
-
     /// Add a recipient public key to the lockbox and return its key id.
     ///
     /// Returns `Error::SecurityLimitExceeded` if secure key access or key
     /// wrapping fails.
-    pub fn add_recipient_public_key(&mut self, recipient: &MlKemRecipientPublicKey) -> Result<u64> {
+    pub fn add_recipient(&mut self, recipient: &RecipientPublicKey) -> Result<u64> {
         let id = next_key_slot_id(&self.key_slots);
         let slot = self
             .key

@@ -1,7 +1,7 @@
 use lockbox_core::{
     EnvName, EnvValueRef, ExtractPolicy, ListOptions, Lockbox, LockboxCreate, LockboxId,
-    LockboxKeySlotAlgorithm, LockboxKeySlotKind, LockboxPath, LockboxUnlock, MlKemKeyPair,
-    MlKemRecipientPublicKey, MlKemWrappedKey, RecoveryReportOptions, RecoveryScanner, SecretString,
+    LockboxKeySlotAlgorithm, LockboxKeySlotKind, LockboxPath, LockboxUnlock, RecipientKeyPair,
+    RecipientPublicKey, RecipientWrappedKey, RecoveryReportOptions, RecoveryScanner, SecretString,
     SecretVec, WorkloadProfile,
 };
 use std::io::Cursor;
@@ -153,13 +153,13 @@ fn public_api_password_and_recipient_key_management_flow() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
 
-    let recipient = MlKemKeyPair::generate().unwrap();
+    let recipient = RecipientKeyPair::generate().unwrap();
     let old_password = password("old-password");
     let new_password = password("new-password");
     let mut lb =
         Lockbox::create_file(&lockbox_path, LockboxCreate::Password(&old_password)).unwrap();
     let password_slot = lb.list_key_slots()[0].id;
-    let recipient_slot = lb.add_recipient(&recipient).unwrap();
+    let recipient_slot = lb.add_recipient(&recipient.recipient_public_key()).unwrap();
     let slots = lb.list_key_slots();
     assert!(slots.iter().any(|slot| {
         slot.id == password_slot
@@ -277,12 +277,12 @@ fn public_api_secret_lockbox_id_and_ml_kem_wrappers_flow() {
     assert_eq!(random_id.as_bytes()[6] & 0xf0, 0x40);
     assert_eq!(random_id.as_bytes()[8] & 0xc0, 0x80);
 
-    let keypair = MlKemKeyPair::generate().unwrap();
-    let from_seed = MlKemKeyPair::from_seed_secure(keypair.to_seed_secure().unwrap()).unwrap();
+    let keypair = RecipientKeyPair::generate().unwrap();
+    let from_seed = RecipientKeyPair::from_seed_secure(keypair.to_seed_secure().unwrap()).unwrap();
     let recipient = keypair.recipient_public_key();
-    let recipient = MlKemRecipientPublicKey::from_bytes(&recipient.to_bytes()).unwrap();
+    let recipient = RecipientPublicKey::from_bytes(&recipient.to_bytes()).unwrap();
     let wrapped = recipient.wrap_key(b"content-key").unwrap();
-    let wrapped = MlKemWrappedKey::from_parts(
+    let wrapped = RecipientWrappedKey::from_parts(
         wrapped.ciphertext_bytes().to_vec(),
         wrapped.encrypted_key().to_vec(),
     )
@@ -403,7 +403,7 @@ fn public_api_password_recipient_open_file_flow() {
         b"password"
     );
 
-    let recipient = MlKemKeyPair::generate().unwrap();
+    let recipient = RecipientKeyPair::generate().unwrap();
     let mut by_recipient = Lockbox::create_file(
         &recipient_path,
         LockboxCreate::RecipientPublicKey(recipient.recipient_public_key()),

@@ -1,5 +1,5 @@
 use lockbox_core::{
-    Error, Lockbox, LockboxCreate, LockboxPath, LockboxUnlock, MlKemKeyPair, Result, SecretVec,
+    Error, Lockbox, LockboxCreate, LockboxPath, LockboxUnlock, RecipientKeyPair, Result, SecretVec,
 };
 use lockbox_vault::{
     export_private_key, import_private_key_file, ContentKeyStore, KeyFormat, SecretString, Vault,
@@ -99,7 +99,7 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
     let root = unique_dir("directory");
     let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
     let vault = VaultDirectory::open(&root, &vault_password).unwrap();
-    let keypair = MlKemKeyPair::generate().unwrap();
+    let keypair = RecipientKeyPair::generate().unwrap();
     vault.store_private_key("default", &keypair).unwrap();
     let encrypted = fs::read(root.join("local-vault.lbox")).unwrap();
     assert!(!String::from_utf8_lossy(&encrypted).contains("default.key"));
@@ -223,7 +223,7 @@ fn vault_directory_public_crud_helpers_flow() {
     assert_eq!(vault.root(), root.as_path());
     assert_eq!(vault.path(), root.join("local-vault.lbox").as_path());
 
-    let keypair = MlKemKeyPair::generate().unwrap();
+    let keypair = RecipientKeyPair::generate().unwrap();
     assert!(!vault.private_key_exists("default").unwrap());
     vault.store_private_key("default", &keypair).unwrap();
     assert!(vault.private_key_exists("default").unwrap());
@@ -276,7 +276,7 @@ fn private_key_file_import_uses_secure_import_path() {
     let root = unique_dir("private-key-file-import");
     fs::create_dir_all(&root).unwrap();
     let path = root.join("private.key");
-    let keypair = MlKemKeyPair::generate().unwrap();
+    let keypair = RecipientKeyPair::generate().unwrap();
     let private = export_private_key(&keypair, KeyFormat::RawHex).unwrap();
     private
         .with_bytes(|bytes| fs::write(&path, bytes))

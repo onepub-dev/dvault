@@ -3,7 +3,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use zeroize::Zeroize;
 
 use crate::key_derivation::{derive_key_from_password, derive_key_from_password_bytes};
-use crate::key_wrap::{MlKemKeyPair, MlKemRecipientPublicKey, MlKemWrappedKey};
+use crate::key_wrap::{RecipientKeyPair, RecipientPublicKey, RecipientWrappedKey};
 use crate::secret_vec::SecretString;
 use crate::{Error, Result};
 use std::fmt;
@@ -62,7 +62,7 @@ pub(crate) enum KeySlot {
     },
     MlKem1024 {
         id: u64,
-        wrapped: Box<MlKemWrappedKey>,
+        wrapped: Box<RecipientWrappedKey>,
     },
 }
 
@@ -106,7 +106,7 @@ impl KeySlot {
 
     pub(crate) fn ml_kem_1024(
         id: u64,
-        recipient: &MlKemRecipientPublicKey,
+        recipient: &RecipientPublicKey,
         content_key: &[u8],
     ) -> Result<Self> {
         Ok(Self::MlKem1024 {
@@ -131,7 +131,7 @@ impl KeySlot {
         }
     }
 
-    pub(crate) fn try_ml_kem(&self, recipient: &MlKemKeyPair) -> Result<Vec<u8>> {
+    pub(crate) fn try_ml_kem(&self, recipient: &RecipientKeyPair) -> Result<Vec<u8>> {
         match self {
             KeySlot::MlKem1024 { wrapped, .. } => recipient.unwrap_key(wrapped),
             _ => Err(Error::InvalidKey),

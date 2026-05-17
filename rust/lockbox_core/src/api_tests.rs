@@ -1,7 +1,7 @@
 use crate::{
     CacheLimit, EnvName, EnvSensitivity, EnvValueRef, Error, ExtractPolicy, ListOptions, Lockbox,
     LockboxCreate, LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotKind,
-    LockboxOptions, LockboxPath, LockboxUnlock, MlKemKeyPair, MlKemRecipientPublicKey,
+    LockboxOptions, LockboxPath, LockboxUnlock, RecipientKeyPair, RecipientPublicKey,
     RecoveryReportOptions, RecoveryScanner, Result, SecretString, WorkloadProfile,
 };
 use sha2::{Digest, Sha256};
@@ -354,7 +354,7 @@ fn file_content_can_be_loaded_and_extracted_with_streaming_apis() {
 
 #[test]
 fn content_keys_can_be_wrapped_with_ml_kem_1024() {
-    let key_pair = MlKemKeyPair::generate().unwrap();
+    let key_pair = RecipientKeyPair::generate().unwrap();
     let content_key = [9u8; 32];
 
     let wrapped = key_pair.wrap_key(&content_key).unwrap();
@@ -366,7 +366,7 @@ fn content_keys_can_be_wrapped_with_ml_kem_1024() {
 
 #[test]
 fn ml_kem_wraps_for_same_recipient_do_not_share_ciphertext() {
-    let key_pair = MlKemKeyPair::generate().unwrap();
+    let key_pair = RecipientKeyPair::generate().unwrap();
     let content_key = [9u8; 32];
 
     let first = key_pair.wrap_key(&content_key).unwrap();
@@ -434,14 +434,14 @@ fn password_unlock_recovers_when_primary_key_directory_is_corrupt() {
 
 #[test]
 fn multiple_key_slots_are_tried_until_one_unlocks() {
-    let alice = MlKemKeyPair::generate().unwrap();
-    let bob = MlKemKeyPair::generate().unwrap();
-    let outsider = MlKemKeyPair::generate().unwrap();
+    let alice = RecipientKeyPair::generate().unwrap();
+    let bob = RecipientKeyPair::generate().unwrap();
+    let outsider = RecipientKeyPair::generate().unwrap();
     let bob_public =
-        MlKemRecipientPublicKey::from_bytes(&bob.recipient_public_key().to_bytes()).unwrap();
+        RecipientPublicKey::from_bytes(&bob.recipient_public_key().to_bytes()).unwrap();
 
-    let mut lb = Lockbox::create_with_recipient_public_key(&alice.recipient_public_key()).unwrap();
-    lb.add_recipient_public_key(&bob_public).unwrap();
+    let mut lb = Lockbox::create_with_recipient(&alice.recipient_public_key()).unwrap();
+    lb.add_recipient(&bob_public).unwrap();
     let backup_password = password("backup-password");
     lb.add_password(&backup_password).unwrap();
     lb.add_file(&p("/shared/report.txt"), b"report", false)

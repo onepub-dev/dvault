@@ -1,6 +1,6 @@
 use lockbox_core::{
     EnvName, Error, ListOptions, Lockbox, LockboxCreate, LockboxEntryKind, LockboxId, LockboxPath,
-    LockboxUnlock, MlKemKeyPair, MlKemRecipientPublicKey, Result, SecretString, SecretVec,
+    LockboxUnlock, RecipientKeyPair, RecipientPublicKey, Result, SecretString, SecretVec,
 };
 use std::cell::RefCell;
 use std::env;
@@ -14,7 +14,7 @@ const VAULT_FILE_NAME: &str = "local-vault.lbox";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredTrustedRecipient {
     pub name: String,
-    pub key: MlKemRecipientPublicKey,
+    pub key: RecipientPublicKey,
 }
 
 #[derive(Debug)]
@@ -57,14 +57,14 @@ impl VaultDirectory {
         &self.path
     }
 
-    pub fn store_private_key(&self, name: &str, keypair: &MlKemKeyPair) -> Result<()> {
+    pub fn store_private_key(&self, name: &str, keypair: &RecipientKeyPair) -> Result<()> {
         let env_name = private_key_env_name(name)?;
         let seed = export_private_key(keypair, KeyFormat::RawHex)?;
         let value = SecretString::from_secure_vec(seed);
         self.put_secret_env_record(&env_name, &value)
     }
 
-    pub fn load_private_key(&self, name: &str) -> Result<MlKemKeyPair> {
+    pub fn load_private_key(&self, name: &str) -> Result<RecipientKeyPair> {
         let env_name = private_key_env_name(name)?;
         let secret = self
             .lockbox
@@ -102,14 +102,12 @@ impl VaultDirectory {
         self.delete_secret_env_record_if_exists(&private_key_env_name(name)?)
     }
 
-    pub fn store_trusted_recipient(&self, name: &str, key: &MlKemRecipientPublicKey) -> Result<()> {
+    pub fn store_trusted_recipient(&self, name: &str, key: &RecipientPublicKey) -> Result<()> {
         self.put_record(&trusted_recipient_record_path(name)?, &key.to_bytes())
     }
 
-    pub fn load_trusted_recipient(&self, name: &str) -> Result<MlKemRecipientPublicKey> {
-        MlKemRecipientPublicKey::from_bytes(
-            &self.get_record(&trusted_recipient_record_path(name)?)?,
-        )
+    pub fn load_trusted_recipient(&self, name: &str) -> Result<RecipientPublicKey> {
+        RecipientPublicKey::from_bytes(&self.get_record(&trusted_recipient_record_path(name)?)?)
     }
 
     pub fn trusted_recipient_exists(&self, name: &str) -> Result<bool> {

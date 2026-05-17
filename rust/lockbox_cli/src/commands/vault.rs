@@ -1,5 +1,5 @@
 use super::context::{default_vault, require_arg, CliResult};
-use lockbox_core::{Error, MlKemKeyPair};
+use lockbox_core::{Error, RecipientKeyPair};
 use lockbox_vault::{
     default_vault_dir, export_private_key, export_public_key, import_private_key_file,
     import_public_key, KeyFormat, VaultDirectory,
@@ -53,7 +53,7 @@ fn keygen(args: &[String]) -> CliResult<()> {
         return Err(format!("vault private key already exists: {name}").into());
     }
 
-    let keypair = MlKemKeyPair::generate()?;
+    let keypair = RecipientKeyPair::generate()?;
     vault.store_private_key(name, &keypair)?;
     if let Some(path) = public_path {
         fs::write(

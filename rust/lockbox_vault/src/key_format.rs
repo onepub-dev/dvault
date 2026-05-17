@@ -1,5 +1,5 @@
 use base64ct::{Base64, Base64UrlUnpadded, Encoding};
-use lockbox_core::{Error, MlKemKeyPair, MlKemRecipientPublicKey, Result, SecretVec};
+use lockbox_core::{Error, RecipientKeyPair, RecipientPublicKey, Result, SecretVec};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -55,7 +55,7 @@ struct Jwks {
     keys: Vec<JwkKey>,
 }
 
-pub fn export_private_key(keypair: &MlKemKeyPair, format: KeyFormat) -> Result<SecretVec> {
+pub fn export_private_key(keypair: &RecipientKeyPair, format: KeyFormat) -> Result<SecretVec> {
     let public = keypair.recipient_public_key();
     let public_bytes = public.to_bytes();
     let public_x = Base64UrlUnpadded::encode_string(&public_bytes);
@@ -75,12 +75,12 @@ pub fn export_private_key(keypair: &MlKemKeyPair, format: KeyFormat) -> Result<S
     }
 }
 
-pub fn import_private_key(mut bytes: SecretVec) -> Result<MlKemKeyPair> {
+pub fn import_private_key(mut bytes: SecretVec) -> Result<RecipientKeyPair> {
     normalize_private_key_to_seed(&mut bytes)?;
-    MlKemKeyPair::from_seed_secure(bytes)
+    RecipientKeyPair::from_seed_secure(bytes)
 }
 
-pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<MlKemKeyPair> {
+pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<RecipientKeyPair> {
     let mut file = fs::File::open(path.as_ref()).map_err(|err| Error::Io(err.to_string()))?;
     let len = usize::try_from(
         file.metadata()
@@ -97,7 +97,7 @@ pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<MlKemKeyPair> {
     import_private_key(bytes)
 }
 
-pub fn export_public_key(key: &MlKemRecipientPublicKey, format: KeyFormat) -> Result<Vec<u8>> {
+pub fn export_public_key(key: &RecipientPublicKey, format: KeyFormat) -> Result<Vec<u8>> {
     match format {
         KeyFormat::LockboxPem => pem(PUBLIC_LABEL, &public_jwk(key)?),
         KeyFormat::Jwk => {
@@ -111,7 +111,7 @@ pub fn export_public_key(key: &MlKemRecipientPublicKey, format: KeyFormat) -> Re
     }
 }
 
-pub fn import_public_key(bytes: &[u8]) -> Result<MlKemRecipientPublicKey> {
+pub fn import_public_key(bytes: &[u8]) -> Result<RecipientPublicKey> {
     let text = std::str::from_utf8(bytes).map_err(|_| Error::CorruptHeader)?;
     if text.trim_start().starts_with("-----BEGIN ") {
         let (label, payload) = unpem(text)?;
@@ -128,7 +128,7 @@ pub fn import_public_key(bytes: &[u8]) -> Result<MlKemRecipientPublicKey> {
         let key = serde_json::from_str::<JwkKey>(text).map_err(|_| Error::CorruptHeader)?;
         return public_from_jwk(&key);
     }
-    MlKemRecipientPublicKey::from_bytes(&decode_hex(text.trim()).map_err(|_| Error::CorruptHeader)?)
+    RecipientPublicKey::from_bytes(&decode_hex(text.trim()).map_err(|_| Error::CorruptHeader)?)
 }
 
 fn private_jwk_secure(kid: &str, public_x: &str, seed: SecretVec) -> Result<SecretVec> {
@@ -352,7 +352,7 @@ fn trim_ascii_range(bytes: &[u8]) -> (usize, usize) {
     (start, end)
 }
 
-fn public_jwk(key: &MlKemRecipientPublicKey) -> Result<JwkKey> {
+fn public_jwk(key: &RecipientPublicKey) -> Result<JwkKey> {
     let public_bytes = key.to_bytes();
     Ok(JwkKey {
         kty: KTY.to_string(),
@@ -365,10 +365,10 @@ fn public_jwk(key: &MlKemRecipientPublicKey) -> Result<JwkKey> {
     })
 }
 
-fn public_from_jwk(key: &JwkKey) -> Result<MlKemRecipientPublicKey> {
+fn public_from_jwk(key: &JwkKey) -> Result<RecipientPublicKey> {
     validate_jwk_header(key).map_err(|_| Error::CorruptHeader)?;
     let public = Base64UrlUnpadded::decode_vec(&key.x).map_err(|_| Error::CorruptHeader)?;
-    MlKemRecipientPublicKey::from_bytes(&public)
+    RecipientPublicKey::from_bytes(&public)
 }
 
 fn validate_jwk_header(key: &JwkKey) -> Result<()> {
@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn native_pem_round_trips_private_and_public_keys() {
-        let keypair = MlKemKeyPair::generate().unwrap();
+        let keypair = RecipientKeyPair::generate().unwrap();
         let private = export_private_key(&keypair, KeyFormat::LockboxPem).unwrap();
         let loaded = import_private_key(private).unwrap();
         assert_eq!(
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn jwk_and_jwks_round_trip() {
-        let keypair = MlKemKeyPair::generate().unwrap();
+        let keypair = RecipientKeyPair::generate().unwrap();
         let jwk = export_private_key(&keypair, KeyFormat::Jwk).unwrap();
         assert_eq!(
             import_private_key(jwk).unwrap().to_seed_secure().unwrap(),
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn raw_hex_remains_importable() {
-        let keypair = MlKemKeyPair::generate().unwrap();
+        let keypair = RecipientKeyPair::generate().unwrap();
         let raw = export_private_key(&keypair, KeyFormat::RawHex).unwrap();
         assert_eq!(
             import_private_key(raw).unwrap().to_seed_secure().unwrap(),

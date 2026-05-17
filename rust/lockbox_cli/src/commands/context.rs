@@ -1,6 +1,6 @@
 use crate::secret_prompt::prompt_secret;
 use lockbox_core::{
-    Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair, MlKemRecipientPublicKey, SecretVec,
+    Error, Lockbox, LockboxCreate, LockboxUnlock, RecipientKeyPair, RecipientPublicKey, SecretVec,
 };
 use lockbox_vault::{
     import_public_key, local_vault, NoopStore, SecretString, Vault, VaultDirectory,
@@ -129,13 +129,13 @@ pub(crate) fn mirror_key_directory(lockbox: &Lockbox) -> Result<(), Error> {
     )
 }
 
-pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<MlKemKeyPair> {
+pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<RecipientKeyPair> {
     let vault = default_vault()?;
     let name_or_path = arg.unwrap_or(VaultDirectory::DEFAULT_KEY_NAME);
     Ok(vault.load_private_key(name_or_path)?)
 }
 
-pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<MlKemRecipientPublicKey> {
+pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<RecipientPublicKey> {
     if std::path::Path::new(arg).exists() {
         return Ok(import_public_key(&std::fs::read(arg)?)?);
     }

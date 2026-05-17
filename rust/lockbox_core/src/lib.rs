@@ -48,7 +48,7 @@ pub use env_sensitivity::EnvSensitivity;
 pub use error::{Error, Result};
 pub use extract_policy::ExtractPolicy;
 pub use key_slot::{LockboxKeySlot, LockboxKeySlotAlgorithm, LockboxKeySlotKind};
-pub use key_wrap::{MlKemKeyPair, MlKemRecipientPublicKey, MlKemWrappedKey};
+pub use key_wrap::{RecipientKeyPair, RecipientPublicKey, RecipientWrappedKey};
 pub use list_iter::ListIter;
 pub use list_options::ListOptions;
 pub use lockbox::{

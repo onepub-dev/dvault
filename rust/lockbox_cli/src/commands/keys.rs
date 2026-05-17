@@ -2,7 +2,7 @@ use super::context::{
     load_private_key_from_arg, load_recipient_from_arg, mirror_key_directory, open_existing,
     read_new_password, read_password, require_arg, Access, CliResult,
 };
-use lockbox_core::{Error, LockboxCreate, LockboxUnlock, MlKemKeyPair};
+use lockbox_core::{Error, LockboxCreate, LockboxUnlock, RecipientKeyPair};
 use lockbox_vault::{
     encode_hex, export_private_key, local_vault, KeyFormat, NoopStore, SecretVec, Vault,
 };
@@ -58,7 +58,7 @@ pub(crate) fn lock(args: &[String]) -> CliResult<()> {
 pub(crate) fn keygen(args: &[String]) -> CliResult<()> {
     let private_path = require_arg(args, 0, "private key path")?;
     let public_path = require_arg(args, 1, "public key path")?;
-    let keypair = MlKemKeyPair::generate()?;
+    let keypair = RecipientKeyPair::generate()?;
     write_private_key(
         private_path,
         &export_private_key(&keypair, KeyFormat::RawHex)?,
@@ -84,7 +84,7 @@ pub(crate) fn add_recipient(args: &[String], access: &Access) -> CliResult<()> {
     let recipient_arg = require_arg(args, 1, "recipient")?;
     let recipient = load_recipient_from_arg(recipient_arg)?;
     let mut lb = open_existing(lockbox_path, access)?;
-    lb.add_recipient_public_key(&recipient)?;
+    lb.add_recipient(&recipient)?;
     lb.commit()?;
     mirror_key_directory(&lb)?;
     Ok(())

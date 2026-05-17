@@ -1,5 +1,5 @@
 use crate::key_slot::KeySlot;
-use crate::key_wrap::MlKemWrappedKey;
+use crate::key_wrap::RecipientWrappedKey;
 use crate::lockbox_id::LockboxId;
 use crate::page::{decode_page, page_decode_slice, DecodedPage, PageObjectKind, PAGE_HEADER_LEN};
 use crate::page_cache::{PageCache, PageReadKey, PageSecurity};
@@ -264,7 +264,7 @@ fn decode_key_slots(payload: &[u8]) -> Result<Vec<KeySlot>> {
                 let encrypted_key = read_bytes(payload, &mut offset)?;
                 slots.push(KeySlot::MlKem1024 {
                     id,
-                    wrapped: Box::new(MlKemWrappedKey::from_parts(ciphertext, encrypted_key)?),
+                    wrapped: Box::new(RecipientWrappedKey::from_parts(ciphertext, encrypted_key)?),
                 });
             }
             _ => return Err(Error::CorruptHeader),

@@ -143,7 +143,7 @@ fn unlock_path_or_backup_with_password(
 
 fn unlock_path_or_backup_with_recipient(
     path: &Path,
-    recipient: &lockbox_core::MlKemKeyPair,
+    recipient: &lockbox_core::RecipientKeyPair,
 ) -> Result<UnlockedContentKey> {
     match VaultUnlock::path_with_recipient(path, recipient) {
         Ok(unlocked) => Ok(unlocked),

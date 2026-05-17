@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use crate::{Lockbox, MlKemKeyPair, Result, SecretString};
+use crate::{Lockbox, RecipientKeyPair, Result, SecretString};
 
 pub use crate::lockbox::UnlockedContentKey;
 
@@ -30,7 +30,7 @@ impl VaultUnlock {
     /// Unlock the embedded key directory with a recipient keypair and return the content key.
     pub fn path_with_recipient(
         path: &Path,
-        recipient: &MlKemKeyPair,
+        recipient: &RecipientKeyPair,
     ) -> Result<UnlockedContentKey> {
         Lockbox::unlock_path_with_recipient(path, recipient)
     }
@@ -38,7 +38,7 @@ impl VaultUnlock {
     /// Unlock key-directory backup bytes with a recipient keypair.
     pub fn key_directory_backup_with_recipient(
         bytes: &[u8],
-        recipient: &MlKemKeyPair,
+        recipient: &RecipientKeyPair,
     ) -> Result<UnlockedContentKey> {
         Lockbox::unlock_key_directory_backup_with_recipient(bytes, recipient)
     }
