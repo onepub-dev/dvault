@@ -15,6 +15,7 @@ The intended sharing model is narrow and practical:
 - A lockbox can be unlocked with the user's private key.
 - A lockbox can also be shared with a one-time password.
 - A lockbox may contain both access methods at the same time.
+- Additional recipients of the lockbox can be added with their public key.
 - The public API and CLI should hide the content key from normal users.
 - A lockbox must not store human recipient labels, email addresses, vault
   aliases, or stable recipient fingerprints that let observers correlate
@@ -89,10 +90,8 @@ parameters needed to unwrap the content key
 encrypted content key
 ```
 
-Human-readable labels are intentionally not part of the default model. Labels can
-leak names, devices, email addresses, or organization structure. If labels are
-added later, they should be optional and treated as public metadata unless
-explicitly encrypted.
+Human-readable labels are intentionally not part of the model. Labels can
+leak names, devices, email addresses, or organization structure.
 
 Recipient slots must also avoid stable recipient identifiers. The local vault
 may use names such as `alice`, `prod-team`, or an email address to help the
@@ -261,6 +260,32 @@ stored in the platform-specific vault directory. It can store:
 - the user's long-lived ML-KEM private key seed
 - trusted recipient public keys
 - local key-directory backups keyed by lockbox UUID
+
+At rest, the vault looks like this:
+
+```text
+platform vault directory
+`-- local-vault.lbox
+    password slot
+       `-- unlocks the vault content key
+
+    encrypted vault contents
+    |-- secure env pages
+    |   `-- LOCKBOX_VAULT_PRIVATE_KEY_<HEX_NAME>
+    |       `-- hex encoded ML-KEM private seed
+    |
+    |-- /trusted_recipients/
+    |   |-- alice.pub
+    |   |   `-- ML-KEM public key bytes
+    |   `-- prod-team.pub
+    |       `-- ML-KEM public key bytes
+    |
+    `-- /key_directories/
+        |-- <lockbox-uuid>.keydir
+        |   `-- encrypted key-directory backup
+        `-- <lockbox-uuid>.keydir
+            `-- encrypted key-directory backup
+```
 
 The vault is itself an ordinary lockbox, but `lockbox_vault::VaultDirectory`
 uses a fixed internal record layout:
