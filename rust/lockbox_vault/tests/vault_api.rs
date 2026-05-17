@@ -25,8 +25,13 @@ struct MemoryStore {
 }
 
 impl ContentKeyStore for MemoryStore {
-    fn get_content_key(&self, lockbox_id: lockbox_core::LockboxId) -> Result<Option<Vec<u8>>> {
-        Ok(self.keys.borrow().get(&lockbox_id.to_string()).cloned())
+    fn get_content_key(&self, lockbox_id: lockbox_core::LockboxId) -> Result<Option<SecretVec>> {
+        self.keys
+            .borrow()
+            .get(&lockbox_id.to_string())
+            .map(|key| SecretVec::try_from_slice(key))
+            .transpose()
+            .map_err(Into::into)
     }
 
     fn put_content_key(&self, lockbox_id: lockbox_core::LockboxId, key: &[u8]) -> Result<()> {

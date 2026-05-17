@@ -1,4 +1,4 @@
-use lockbox_core::{LockboxId, Result};
+use lockbox_core::{LockboxId, Result, SecretVec};
 
 /// Storage backend for unlocked Lockbox content keys.
 ///
@@ -8,7 +8,7 @@ use lockbox_core::{LockboxId, Result};
 /// discard them.
 pub trait ContentKeyStore {
     /// Returns the cached content key for `lockbox_id`, if one is available.
-    fn get_content_key(&self, lockbox_id: LockboxId) -> Result<Option<Vec<u8>>>;
+    fn get_content_key(&self, lockbox_id: LockboxId) -> Result<Option<SecretVec>>;
 
     /// Stores the unlocked content key for `lockbox_id`.
     fn put_content_key(&self, lockbox_id: LockboxId, key: &[u8]) -> Result<()>;

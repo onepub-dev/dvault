@@ -1,6 +1,7 @@
 use super::{
-    decode_hex, encode_forget, encode_forget_all, encode_get, encode_hex, encode_put,
-    parse_request, AgentRequest, SecretVec, DEFAULT_TTL_SECONDS,
+    encode_forget, encode_forget_all, encode_get, encode_key_response, encode_put,
+    encode_response_line, max_message_bytes, parse_request, parse_response, AgentRequest,
+    AgentResponse, SecretVec, DEFAULT_TTL_SECONDS,
 };
 use lockbox_core::LockboxId;
 use std::collections::BTreeMap;
@@ -71,36 +72,27 @@ pub(crate) fn verify_agent_transport_security() -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
-    let response = request(&encode_get(lockbox_id))?;
-    if response == "MISS" {
-        return Ok(None);
+pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
+    match request(&encode_get(lockbox_id)?)? {
+        AgentResponse::Key(key) => Ok(Some(key)),
+        AgentResponse::Miss => Ok(None),
+        response => invalid_agent_response(response),
     }
-    let Some(hex) = response.strip_prefix("KEY ") else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid agent response",
-        ));
-    };
-    decode_hex(hex).map(Some)
 }
 
 pub(crate) fn put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<()> {
-    let response = request(&encode_put(lockbox_id, key))?;
-    expect_ok(&response)
+    expect_ok(request(&encode_put(lockbox_id, key)?)?)
 }
 
 pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
-    let response = request(&encode_forget(lockbox_id))?;
-    expect_ok(&response)
+    expect_ok(request(&encode_forget(lockbox_id)?)?)
 }
 
 pub(crate) fn forget_all() -> io::Result<()> {
-    let response = request(encode_forget_all())?;
-    expect_ok(&response)
+    expect_ok(request(&encode_forget_all()?)?)
 }
 
-fn request(message: &str) -> io::Result<String> {
+fn request(message: &SecretVec) -> io::Result<AgentResponse> {
     let pipe_name = wide_pipe_name();
     let handle = match open_pipe(&pipe_name) {
         Ok(handle) => handle,
@@ -109,9 +101,10 @@ fn request(message: &str) -> io::Result<String> {
             open_pipe(&pipe_name)?
         }
     };
-    write_all(handle.as_raw(), message.as_bytes())?;
-    let response = read_to_string(handle.as_raw())?;
-    Ok(response.trim_end_matches(['\r', '\n']).to_string())
+    message
+        .with_bytes(|message| write_all(handle.as_raw(), message))
+        .map_err(io::Error::other)??;
+    parse_response(read_frame(handle.as_raw(), max_message_bytes())?)
 }
 
 fn start_agent() -> io::Result<()> {
@@ -306,8 +299,8 @@ fn handle_client(
     current_user_sid: &[u8],
     cache: &mut BTreeMap<String, CacheEntry>,
 ) -> io::Result<()> {
-    let request = read_to_string(pipe)?;
-    if request.trim().is_empty() {
+    let request = read_frame(pipe, max_message_bytes())?;
+    if request.is_empty() {
         return Ok(());
     }
     if !client_matches_current_user(pipe, current_user_sid)? {
@@ -319,16 +312,12 @@ fn handle_client(
             match cache.get_mut(&lockbox_id) {
                 Some(entry) if entry.expires_at > now => {
                     entry.expires_at = now + Duration::from_secs(DEFAULT_TTL_SECONDS);
-                    entry
-                        .key
-                        .with_bytes(|key| format!("KEY {}", encode_hex(key)))
-                        .map_err(io::Error::other)?
+                    encode_key_response(&entry.key)?
                 }
-                _ => "MISS".to_string(),
+                _ => encode_response_line(b"MISS\n")?,
             }
         }
         Ok(AgentRequest::Put(lockbox_id, key)) => {
-            let key = SecretVec::try_from_vec(key).map_err(io::Error::other)?;
             cache.insert(
                 lockbox_id,
                 CacheEntry {
@@ -336,19 +325,21 @@ fn handle_client(
                     expires_at: Instant::now() + Duration::from_secs(DEFAULT_TTL_SECONDS),
                 },
             );
-            "OK".to_string()
+            encode_response_line(b"OK\n")?
         }
         Ok(AgentRequest::Forget(lockbox_id)) => {
             cache.remove(&lockbox_id);
-            "OK".to_string()
+            encode_response_line(b"OK\n")?
         }
         Ok(AgentRequest::ForgetAll) => {
             cache.clear();
-            "OK".to_string()
+            encode_response_line(b"OK\n")?
         }
-        Err(_) => "ERR invalid request".to_string(),
+        Err(_) => encode_response_line(b"ERR invalid request\n")?,
     };
-    write_all(pipe, format!("{response}\n").as_bytes())
+    response
+        .with_bytes(|response| write_all(pipe, response))
+        .map_err(io::Error::other)?
 }
 
 fn client_matches_current_user(pipe: HANDLE, current_user_sid: &[u8]) -> io::Result<bool> {
@@ -491,38 +482,99 @@ fn write_all(handle: HANDLE, mut bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn read_to_string(handle: HANDLE) -> io::Result<String> {
-    let mut out = Vec::new();
-    let mut buffer = [0u8; 4096];
+fn read_frame(handle: HANDLE, max_bytes: usize) -> io::Result<SecretVec> {
+    let mut out = SecretVec::new();
+    let mut header = Vec::new();
     loop {
-        let mut read = 0u32;
-        // SAFETY: `buffer` and `read` are valid writable storage for the
-        // duration of the call, and the pipe handle is valid for reading.
-        let ok = unsafe {
-            ReadFile(
-                handle,
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-                &mut read,
-                null_mut(),
-            )
-        };
-        if ok == 0 {
-            let err = io::Error::last_os_error();
-            if !out.is_empty() {
-                break;
-            }
-            return Err(err);
+        let byte = read_one_byte(handle)?;
+        header.push(byte);
+        if header.len() > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "message too large",
+            ));
         }
-        if read == 0 {
-            break;
-        }
-        out.extend_from_slice(&buffer[..read as usize]);
-        if out.ends_with(b"\n") {
+        out.try_push(byte).map_err(io::Error::other)?;
+        if byte == b'\n' {
             break;
         }
     }
-    String::from_utf8(out).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "utf8"))
+    let body_len = frame_body_len(&header)?;
+    let Some(frame_len) = out.len().checked_add(body_len) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "message too large",
+        ));
+    };
+    if frame_len > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "message too large",
+        ));
+    }
+    read_exact_secure(handle, body_len, &mut out)?;
+    Ok(out)
+}
+
+fn read_exact_secure(handle: HANDLE, mut remaining: usize, out: &mut SecretVec) -> io::Result<()> {
+    let mut buffer = [0u8; 4096];
+    while remaining > 0 {
+        let read = read_chunk(handle, &mut buffer[..remaining.min(4096)])?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "message ended before frame body",
+            ));
+        }
+        out.try_extend_from_slice(&buffer[..read])
+            .map_err(io::Error::other)?;
+        buffer[..read].fill(0);
+        remaining -= read;
+    }
+    Ok(())
+}
+
+fn read_one_byte(handle: HANDLE) -> io::Result<u8> {
+    let mut byte = [0u8; 1];
+    match read_chunk(handle, &mut byte)? {
+        1 => Ok(byte[0]),
+        _ => Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "message ended before frame header",
+        )),
+    }
+}
+
+fn read_chunk(handle: HANDLE, buffer: &mut [u8]) -> io::Result<usize> {
+    let mut read = 0u32;
+    // SAFETY: `buffer` and `read` are valid writable storage for the duration
+    // of the call, and the pipe handle is valid for reading.
+    let ok = unsafe {
+        ReadFile(
+            handle,
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            &mut read,
+            null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(read as usize)
+}
+
+fn frame_body_len(header: &[u8]) -> io::Result<usize> {
+    let header = std::str::from_utf8(header)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "frame header is not UTF-8"))?;
+    let header = header.trim_end_matches(['\r', '\n']);
+    let parts: Vec<&str> = header.split_whitespace().collect();
+    match parts.as_slice() {
+        ["LBX1", "PUT", _, len] | ["KEY", len] => len
+            .parse::<usize>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid frame body length")),
+        _ => Ok(0),
+    }
 }
 
 fn prune_expired(cache: &mut BTreeMap<String, CacheEntry>) {
@@ -530,15 +582,28 @@ fn prune_expired(cache: &mut BTreeMap<String, CacheEntry>) {
     cache.retain(|_, entry| entry.expires_at > now);
 }
 
-fn expect_ok(response: &str) -> io::Result<()> {
-    if response == "OK" {
-        Ok(())
-    } else {
-        Err(io::Error::new(
+fn expect_ok(response: AgentResponse) -> io::Result<()> {
+    match response {
+        AgentResponse::Ok => Ok(()),
+        AgentResponse::Err(message) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("agent rejected request: {response}"),
-        ))
+            format!("agent rejected request: {message}"),
+        )),
+        other => invalid_agent_response(other),
     }
+}
+
+fn invalid_agent_response<T>(response: AgentResponse) -> io::Result<T> {
+    let label = match response {
+        AgentResponse::Ok => "OK",
+        AgentResponse::Miss => "MISS",
+        AgentResponse::Key(_) => "KEY",
+        AgentResponse::Err(_) => "ERR",
+    };
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("unexpected agent response: {label}"),
+    ))
 }
 
 fn wide_pipe_name() -> Vec<u16> {

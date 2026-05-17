@@ -1,12 +1,13 @@
 use super::{
-    decode_hex, encode_forget, encode_forget_all, encode_get, encode_hex, encode_put,
-    max_request_bytes, parse_request, AgentRequest, SecretVec, DEFAULT_TTL_SECONDS,
+    encode_forget, encode_forget_all, encode_get, encode_key_response, encode_put,
+    encode_response_line, max_message_bytes, parse_request, parse_response, AgentRequest,
+    AgentResponse, SecretVec, DEFAULT_TTL_SECONDS,
 };
 use lockbox_core::LockboxId;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -57,43 +58,34 @@ pub(crate) fn verify_agent_transport_security() -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
-    let response = request(&encode_get(lockbox_id))?;
-    if response == "MISS" {
-        return Ok(None);
+pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
+    match request(&encode_get(lockbox_id)?)? {
+        AgentResponse::Key(key) => Ok(Some(key)),
+        AgentResponse::Miss => Ok(None),
+        response => invalid_agent_response(response),
     }
-    let Some(hex) = response.strip_prefix("KEY ") else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid agent response",
-        ));
-    };
-    decode_hex(hex).map(Some)
 }
 
 pub(crate) fn put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<()> {
-    let response = request(&encode_put(lockbox_id, key))?;
-    expect_ok(&response)
+    expect_ok(request(&encode_put(lockbox_id, key)?)?)
 }
 
 pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
-    let response = request(&encode_forget(lockbox_id))?;
-    expect_ok(&response)
+    expect_ok(request(&encode_forget(lockbox_id)?)?)
 }
 
 pub(crate) fn forget_all() -> io::Result<()> {
-    let response = request(encode_forget_all())?;
-    expect_ok(&response)
+    expect_ok(request(&encode_forget_all()?)?)
 }
 
-fn request(message: &str) -> io::Result<String> {
+fn request(message: &SecretVec) -> io::Result<AgentResponse> {
     ensure_agent()?;
     let mut stream = UnixStream::connect(socket_path())?;
-    stream.write_all(message.as_bytes())?;
+    message
+        .with_bytes(|message| stream.write_all(message))
+        .map_err(io::Error::other)??;
     stream.shutdown(std::net::Shutdown::Write)?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+    parse_response(read_secure(stream, max_message_bytes())?)
 }
 
 fn ensure_agent() -> io::Result<()> {
@@ -126,10 +118,7 @@ fn handle_client(
     mut stream: UnixStream,
     cache: &mut BTreeMap<String, CacheEntry>,
 ) -> io::Result<()> {
-    let mut request = String::new();
-    BufReader::new(stream.try_clone()?)
-        .take((max_request_bytes() + 1) as u64)
-        .read_line(&mut request)?;
+    let request = read_secure(stream.try_clone()?, max_message_bytes())?;
     if request.is_empty() {
         return Ok(());
     }
@@ -139,16 +128,12 @@ fn handle_client(
             match cache.get_mut(&lockbox_id) {
                 Some(entry) if entry.expires_at > now => {
                     entry.expires_at = now + Duration::from_secs(DEFAULT_TTL_SECONDS);
-                    entry
-                        .key
-                        .with_bytes(|key| format!("KEY {}", encode_hex(key)))
-                        .map_err(io::Error::other)?
+                    encode_key_response(&entry.key)?
                 }
-                _ => "MISS".to_string(),
+                _ => encode_response_line(b"MISS\n")?,
             }
         }
         Ok(AgentRequest::Put(lockbox_id, key)) => {
-            let key = SecretVec::try_from_vec(key).map_err(io::Error::other)?;
             cache.insert(
                 lockbox_id,
                 CacheEntry {
@@ -156,19 +141,21 @@ fn handle_client(
                     expires_at: Instant::now() + Duration::from_secs(DEFAULT_TTL_SECONDS),
                 },
             );
-            "OK".to_string()
+            encode_response_line(b"OK\n")?
         }
         Ok(AgentRequest::Forget(lockbox_id)) => {
             cache.remove(&lockbox_id);
-            "OK".to_string()
+            encode_response_line(b"OK\n")?
         }
         Ok(AgentRequest::ForgetAll) => {
             cache.clear();
-            "OK".to_string()
+            encode_response_line(b"OK\n")?
         }
-        Err(_) => "ERR invalid request".to_string(),
+        Err(_) => encode_response_line(b"ERR invalid request\n")?,
     };
-    writeln!(stream, "{response}")?;
+    response
+        .with_bytes(|response| stream.write_all(response))
+        .map_err(io::Error::other)??;
     Ok(())
 }
 
@@ -177,15 +164,53 @@ fn prune_expired(cache: &mut BTreeMap<String, CacheEntry>) {
     cache.retain(|_, entry| entry.expires_at > now);
 }
 
-fn expect_ok(response: &str) -> io::Result<()> {
-    if response == "OK" {
-        Ok(())
-    } else {
-        Err(io::Error::new(
+fn expect_ok(response: AgentResponse) -> io::Result<()> {
+    match response {
+        AgentResponse::Ok => Ok(()),
+        AgentResponse::Err(message) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("agent rejected request: {response}"),
-        ))
+            format!("agent rejected request: {message}"),
+        )),
+        other => invalid_agent_response(other),
     }
+}
+
+fn invalid_agent_response<T>(response: AgentResponse) -> io::Result<T> {
+    let label = match response {
+        AgentResponse::Ok => "OK",
+        AgentResponse::Miss => "MISS",
+        AgentResponse::Key(_) => "KEY",
+        AgentResponse::Err(_) => "ERR",
+    };
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("unexpected agent response: {label}"),
+    ))
+}
+
+fn read_secure(mut reader: impl Read, max_bytes: usize) -> io::Result<SecretVec> {
+    let mut out = SecretVec::new();
+    let mut buffer = [0u8; 4096];
+    let mut total = 0usize;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        total = total
+            .checked_add(read)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "message too large"))?;
+        if total > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "message too large",
+            ));
+        }
+        out.try_extend_from_slice(&buffer[..read])
+            .map_err(io::Error::other)?;
+        buffer[..read].fill(0);
+    }
+    Ok(out)
 }
 
 fn prepare_socket_dir() -> io::Result<()> {

@@ -1,7 +1,5 @@
 use lockbox_core::vault_bridge::{UnlockedContentKey, VaultUnlock};
-use lockbox_core::{
-    Error, Lockbox, LockboxProtection, LockboxUnlock, Result, SecretString, SecretVec,
-};
+use lockbox_core::{Error, Lockbox, LockboxProtection, LockboxUnlock, Result, SecretString};
 use std::path::Path;
 
 use crate::{AgentClient, ContentKeyStore, VaultDirectory};
@@ -105,7 +103,6 @@ impl<S: ContentKeyStore> Vault<S> {
                 "no cached content key for lockbox {lockbox_id}"
             )));
         };
-        let key = SecretVec::try_from_vec(key)?;
         Lockbox::open_file(path, LockboxUnlock::ContentKey(key))
     }
 

@@ -1,4 +1,4 @@
-use lockbox_core::{LockboxId, Result};
+use lockbox_core::{LockboxId, Result, SecretVec};
 
 use crate::ContentKeyStore;
 
@@ -10,7 +10,7 @@ use crate::ContentKeyStore;
 pub struct NoopStore;
 
 impl ContentKeyStore for NoopStore {
-    fn get_content_key(&self, _lockbox_id: LockboxId) -> Result<Option<Vec<u8>>> {
+    fn get_content_key(&self, _lockbox_id: LockboxId) -> Result<Option<SecretVec>> {
         Ok(None)
     }
 

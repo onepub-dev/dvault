@@ -66,16 +66,8 @@ fn zstd_decode(stored: &[u8]) -> Result<Vec<u8>> {
     oxiarc_zstd::decode_all(stored).map_err(|_| Error::CorruptRecord)
 }
 
-pub(crate) fn encode_file_frame(payload: &[u8], skip_compression: bool) -> (u8, Vec<u8>) {
-    if skip_compression || looks_incompressible(payload) {
-        return (COMPRESSION_NONE, payload.to_vec());
-    }
-    let compressed = zstd_encode(payload);
-    if compressed.len() < payload.len() {
-        (COMPRESSION_ZSTD, compressed)
-    } else {
-        (COMPRESSION_NONE, payload.to_vec())
-    }
+pub(crate) fn encode_file_frame(payload: &[u8]) -> (u8, Vec<u8>) {
+    (COMPRESSION_NONE, payload.to_vec())
 }
 
 pub(crate) fn decode_file_frame(
@@ -85,7 +77,6 @@ pub(crate) fn decode_file_frame(
 ) -> Result<Vec<u8>> {
     let decoded = match algorithm {
         COMPRESSION_NONE => stored.to_vec(),
-        COMPRESSION_ZSTD => zstd_decode(stored)?,
         _ => return Err(Error::CorruptRecord),
     };
     if decoded.len() as u64 != expected_len {

@@ -6,7 +6,7 @@ numeric fields are little-endian unless stated otherwise.
 Implementations must not serialize on-disk structures with native-endian
 conversions, memory transmutation, or raw struct layout. Every numeric field
 must be encoded and decoded with an explicit byte order. Language bindings
-should expose parsed APIs rather than asking callers to reinterpret raw lockbox
+should expose object level APIs rather than asking callers to reinterpret raw lockbox
 bytes.
 
 The CI workflow `.github/workflows/endian-interop.yml` verifies this contract
@@ -20,6 +20,47 @@ small set of page classes. Metadata pages are 128 KiB. File-data pages are
 variables, key directories, free-space indexes, and commit roots are encoded as
 objects inside pages. Public APIs must not expose page management.
 
+At a high level, a lockbox file is shaped like this:
+
+```text
+secrets.lbox
+|-- fixed header
+|   |-- latest commit-root page offset
+|   |-- latest key-directory page offset
+|   `-- public lockbox UUID
+|
+|-- clear-text key-directory pages
+|   |-- password slot
+|   |   |-- Argon2id salt and parameters
+|   |   `-- encrypted content key
+|   `-- recipient slot
+|       |-- ML-KEM encapsulation ciphertext
+|       `-- encrypted content key
+|
+`-- encrypted page area
+    |-- commit root
+    |   |-- TOC root reference
+    |   |-- env root reference
+    |   |-- free-space root reference
+    |   `-- key-directory mirror references
+    |
+    |-- TOC pages
+    |   `-- current file and symlink entries
+    |
+    |-- env pages
+    |   `-- current environment variable entries
+    |
+    |-- file-data pages
+    |   `-- encrypted file chunks and symlink metadata
+    |
+    `-- free-space index pages
+        `-- reusable physical ranges
+```
+
+The ordering of the encrypted pages changes over time as we use a Copy On Write (COW) stratgey
+when updating pages. Freed pages are zeroed out. 
+Not all encrypted pages types need to be present except for the commit root.
+
 ## Fixed Header
 
 The fixed header is 96 bytes and is the only mutable fixed-location structure in
@@ -28,7 +69,7 @@ the file.
 ```text
 offset  size  field
 0       8     magic: "LBX2HDR\0"
-8       2     version: 3
+8       2     version: 1
 10      2     header flags
 12      4     header length: 96
 16      8     latest commit-root page offset, or 0
@@ -63,7 +104,7 @@ decryption still authenticates a whole page body.
 ```text
 offset  size  field
 0       8     magic: "LBX2PAG\0"
-8       2     page header version: 2
+8       2     page header version: 1
 10      2     public flags
 12      4     header length
 16      8     page id
@@ -88,14 +129,15 @@ Some page classes are clear-text pages. Clear-text pages set public flag
 `0x0001`, store a zero nonce, and store `SHA-256(body) || body` as the stored
 body. Clear-text pages are not content-key encrypted, but the page cache/page
 codec still validates their checksum before returning decoded objects. The key
-directory is currently a clear-text page class because unlock metadata must be
-read before the content key is available.
+directory is currently a clear-text page class because the keys must be
+read before the content key is available for decryption.
+For clear-text pages, object headers and payloads are public and must not
+contain metadata that must remain private to avoid leakage.
 
 For encrypted pages, only the page header is public. Object kinds, object
 lengths, logical paths, symlink targets, environment variable names,
 permissions, compression selection, and file contents are inside the encrypted
-body. For clear-text pages, object headers and payloads are public and must not
-contain private file metadata.
+body. 
 
 Page public-header checksums are generated and verified at the page
 cache/page-codec boundary. Higher-level TOC, file, recovery, and extraction code
@@ -125,7 +167,7 @@ offset  size  field
 3       1     reserved
 4       8     uncompressed object-stream length
 12      4     reserved
-16      n     compressed or uncompressed object stream
+16      n     compressed or uncompressed object stream consuming the remainder of the page.
 ```
 
 Compression is chosen by the core per page body:
@@ -139,39 +181,41 @@ The public API should not expose many compression modes. Normal callers get the
 default policy. Maintenance commands such as compaction may choose the archival
 profile internally.
 
-## Compressed File Extents
+## Framed File Extents
 
-The production file-data layout is page-packed compressed extents, not one
-compressed object per physical page. A fixed 8 MiB file-data page is a container.
+The production file-data layout is page-packed framed extents, not one file
+object per physical page. A fixed 8 MiB file-data page is a container.
 Its encrypted body may contain:
 
-- many complete compressed small files
-- many compressed chunks from one or more files
-- one fragment of a large compressed chunk
+- many complete small files
+- many chunks from one or more files
+- one fragment of a large file frame
 - a mix of complete chunks and fragments, as long as the page body fits
 
-Large files are compressed as independent bounded frames rather than one
-whole-file solid stream. A frame may span multiple physical pages, but it remains
-independently decompressible once its page fragments have been fetched and
-decrypted. TOC chunk entries identify the logical file offset, logical length,
-compressed length, compression algorithm, frame id, and ordered physical page
-fragments needed to reassemble that frame. Each physical fragment reference
-contains the page offset, fixed page length, encrypted object id, compressed
-frame offset, and fragment length.
+Large files are split into independent bounded frames rather than one whole-file
+record. Frame payloads are not compressed independently. File-data compression is
+owned by the page body layer, so the page object stream is the compression unit
+for file-data pages. TOC chunk entries identify the logical file offset, logical
+length, stored frame length, compression algorithm, frame id, and ordered
+physical page fragments needed to reassemble that frame. For the current format,
+the frame compression algorithm is `0` and the stored frame length equals the
+logical frame length. Each physical fragment reference contains the page offset,
+fixed page length, encrypted object id, stored frame offset, and fragment
+length.
 
 This gives browser and web-service clients fast random access at frame
 granularity:
 
 1. fetch the TOC pages
 2. decrypt the TOC
-3. locate the compressed frame or frames for the requested file/range
+3. locate the frame or frames for the requested file/range
 4. request only the physical pages containing those frame fragments
-5. decrypt the pages, reassemble the compressed frame bytes, and decompress
+5. decrypt and page-decompress those pages, then copy the requested frame bytes
 
 Recovery does not depend solely on the TOC. File fragment metadata is inside
 encrypted page bodies and includes path, permissions, optional final file length,
-logical frame offset, frame length, compression algorithm, frame id, compressed
-frame length, compressed fragment offset, and fragment length. Streaming writes
+logical frame offset, frame length, compression algorithm, frame id, stored
+frame length, stored fragment offset, and fragment length. Streaming writes
 may store `0` for the final file length because the final length is not known
 when early frames are written; the TOC is authoritative when available, and
 recovery can still infer a best-effort length from intact frames.
@@ -421,6 +465,27 @@ salts/ciphertexts, public recipient wrapping data, and encrypted content-key
 bytes.
 It must not store paths, file names, environment variable names, or file
 contents.
+
+The unlock boundary is deliberately narrow:
+
+```text
+before unlock                         after successful unwrap
+-------------                         -----------------------
+fixed header
+    |
+    v
+clear-text key directory
+    |-- password slot ------ password ------.
+    |                                      |
+    |-- recipient slot ----- private key --+--> content key
+                                           |
+                                           v
+                                  encrypted pages become readable
+                                  |-- commit root
+                                  |-- TOC
+                                  |-- env
+                                  `-- file data
+```
 
 It also must not store recipient identities. Recipient names, email addresses,
 local vault aliases, public recipient keys, and stable public-key fingerprints

@@ -1,4 +1,4 @@
-use lockbox_core::{Error, LockboxId, Result};
+use lockbox_core::{Error, LockboxId, Result, SecretVec};
 use std::io;
 
 use crate::ContentKeyStore;
@@ -25,7 +25,7 @@ mod platform {
         Ok(())
     }
 
-    pub(crate) fn get(_lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
+    pub(crate) fn get(_lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
         Ok(None)
     }
 
@@ -54,7 +54,7 @@ mod platform {
 pub struct AgentClient;
 
 impl ContentKeyStore for AgentClient {
-    fn get_content_key(&self, lockbox_id: LockboxId) -> Result<Option<Vec<u8>>> {
+    fn get_content_key(&self, lockbox_id: LockboxId) -> Result<Option<SecretVec>> {
         get(lockbox_id).map_err(io_to_core)
     }
 
@@ -92,7 +92,7 @@ pub fn verify_agent_transport_security() -> io::Result<()> {
 }
 
 /// Reads a cached content key from the platform agent.
-pub fn get(lockbox_id: LockboxId) -> io::Result<Option<Vec<u8>>> {
+pub fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
     platform::get(lockbox_id)
 }
 

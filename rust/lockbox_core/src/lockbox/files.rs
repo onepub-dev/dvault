@@ -155,7 +155,6 @@ impl Lockbox {
         let mut chunks = Vec::new();
         let mut file_offset = 0u64;
         let mut writer = FilePageWriter::new(self);
-        let skip_compression = likely_incompressible_path(path.as_str());
         let mut buffer = vec![0; FILE_FRAME_BYTES];
         loop {
             let read = read_next_chunk(&mut reader, &mut buffer)?;
@@ -168,7 +167,6 @@ impl Lockbox {
                             total_len: 0,
                             file_offset: 0,
                             data: &[],
-                            skip_compression,
                         },
                         &mut chunks,
                     )?;
@@ -182,7 +180,6 @@ impl Lockbox {
                     total_len: 0,
                     file_offset,
                     data: &buffer[..read],
-                    skip_compression,
                 },
                 &mut chunks,
             )?;
@@ -476,8 +473,7 @@ impl Lockbox {
             file_offset: 0,
             data: Arc::from(data),
         };
-        let skip_compression = likely_incompressible_path(path.as_str());
-        let (compression, stored) = encode_file_frame(data, skip_compression);
+        let (compression, stored) = encode_file_frame(data);
         self.sequence += 1;
         let frame_id = self.sequence;
         self.sequence += 1;
@@ -581,7 +577,6 @@ impl Lockbox {
                     total_len: chunk.total_len,
                     file_offset: 0,
                     data: &chunk.data,
-                    skip_compression: likely_incompressible_path(chunk.path.as_str()),
                 },
                 &mut all_chunks,
             )?;
@@ -727,7 +722,6 @@ impl Lockbox {
                     total_len: len,
                     file_offset: 0,
                     data: &data,
-                    skip_compression: likely_incompressible_path(path.as_str()),
                 },
                 &mut all_chunks,
             )?;
@@ -775,21 +769,6 @@ fn read_next_chunk(reader: &mut impl Read, buffer: &mut [u8]) -> Result<usize> {
     Ok(read_total)
 }
 
-fn likely_incompressible_path(path: &str) -> bool {
-    let Some(extension) = path.rsplit_once('.').map(|(_, extension)| extension) else {
-        return false;
-    };
-    INCOMPRESSIBLE_EXTENSIONS
-        .iter()
-        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-}
-
-const INCOMPRESSIBLE_EXTENSIONS: &[&str] = &[
-    "7z", "apk", "avi", "br", "bz2", "cab", "cr2", "deb", "dmg", "docx", "flac", "gif", "gz",
-    "heic", "iso", "jar", "jpeg", "jpg", "m4a", "mkv", "mov", "mp3", "mp4", "ogg", "pdf", "png",
-    "pptx", "rar", "rpm", "webm", "webp", "xlsx", "xz", "zip", "zst",
-];
-
 #[derive(Debug, Clone)]
 struct PendingFragment {
     chunk_index: usize,
@@ -809,7 +788,6 @@ struct FileFrameWrite<'a> {
     total_len: u64,
     file_offset: u64,
     data: &'a [u8],
-    skip_compression: bool,
 }
 
 impl<'a> FilePageWriter<'a> {
@@ -825,7 +803,7 @@ impl<'a> FilePageWriter<'a> {
         frame: FileFrameWrite<'_>,
         chunks: &mut Vec<FileChunk>,
     ) -> Result<()> {
-        let (compression, stored) = encode_file_frame(frame.data, frame.skip_compression);
+        let (compression, stored) = encode_file_frame(frame.data);
         self.lockbox.sequence += 1;
         let frame_id = self.lockbox.sequence;
         let chunk_index = chunks.len();

@@ -23,7 +23,7 @@ pub(crate) use crate::constants::{
     DEFAULT_DATA_PAGE_BYTES, DEFAULT_METADATA_PAGE_BYTES, DEFAULT_PAGE_BYTES,
 };
 
-const PAGE_VERSION: u16 = 2;
+const PAGE_VERSION: u16 = 1;
 const PAGE_BODY_VERSION: u8 = 1;
 const COMPRESSION_NORMAL: u8 = 1;
 const PAGE_FLAG_CLEAR_TEXT: u16 = 0x0001;

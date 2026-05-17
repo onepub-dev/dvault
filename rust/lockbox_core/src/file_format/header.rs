@@ -3,7 +3,7 @@ use crate::crypto::strong_checksum;
 use crate::lockbox_id::LockboxId;
 use crate::{Error, Result};
 
-const HEADER_VERSION: u16 = 3;
+const HEADER_VERSION: u16 = 1;
 const HEADER_CHECKSUM_START: usize = 64;
 
 pub(crate) fn write_header(
@@ -91,7 +91,7 @@ mod tests {
         );
 
         assert_eq!(&bytes[0..8], HEADER_MAGIC);
-        assert_eq!(&bytes[8..10], &[0x03, 0x00]);
+        assert_eq!(&bytes[8..10], &[0x01, 0x00]);
         assert_eq!(&bytes[12..16], &[0x60, 0x00, 0x00, 0x00]);
         assert_eq!(
             &bytes[16..24],

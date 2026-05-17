@@ -30,9 +30,12 @@ pub use agent_client::{
     forget, forget_all, get, put, serve_agent, verify_agent_transport_security, AgentClient,
 };
 #[cfg(unix)]
-pub(crate) use agent_protocol::max_request_bytes;
+pub(crate) use agent_protocol::max_message_bytes;
+#[cfg(windows)]
+pub(crate) use agent_protocol::max_message_bytes;
 pub(crate) use agent_protocol::{
-    encode_forget, encode_forget_all, encode_get, encode_put, parse_request, AgentRequest,
+    encode_forget, encode_forget_all, encode_get, encode_key_response, encode_put,
+    encode_response_line, parse_request, parse_response, AgentRequest, AgentResponse,
     DEFAULT_TTL_SECONDS,
 };
 pub use content_key_store::ContentKeyStore;
