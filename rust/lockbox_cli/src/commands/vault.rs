@@ -56,10 +56,7 @@ fn keygen(args: &[String]) -> CliResult<()> {
     let keypair = RecipientKeyPair::generate()?;
     vault.store_private_key(name, &keypair)?;
     if let Some(path) = public_path {
-        fs::write(
-            path,
-            export_public_key(&keypair.recipient_public_key(), format)?,
-        )?;
+        fs::write(path, export_public_key(&keypair.public_key(), format)?)?;
     }
     println!("{name}");
     Ok(())
@@ -96,7 +93,7 @@ fn import_key(args: &[String]) -> CliResult<()> {
     if let Some(path) = public_path {
         fs::write(
             path,
-            export_public_key(&keypair.recipient_public_key(), KeyFormat::LockboxPem)?,
+            export_public_key(&keypair.public_key(), KeyFormat::LockboxPem)?,
         )?;
     }
     Ok(())
@@ -138,7 +135,7 @@ fn export_public(args: &[String]) -> CliResult<()> {
     let keypair = default_vault()?.load_private_key(name)?;
     fs::write(
         destination,
-        export_public_key(&keypair.recipient_public_key(), format)?,
+        export_public_key(&keypair.public_key(), format)?,
     )?;
     Ok(())
 }

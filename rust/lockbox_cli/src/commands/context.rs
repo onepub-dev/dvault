@@ -143,5 +143,5 @@ pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<RecipientPublicKey
     if let Ok(recipient) = vault.load_trusted_recipient(arg) {
         return Ok(recipient);
     }
-    Ok(vault.load_private_key(arg)?.recipient_public_key())
+    Ok(vault.load_private_key(arg)?.public_key())
 }

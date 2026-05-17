@@ -63,10 +63,7 @@ pub(crate) fn keygen(args: &[String]) -> CliResult<()> {
         private_path,
         &export_private_key(&keypair, KeyFormat::RawHex)?,
     )?;
-    fs::write(
-        public_path,
-        encode_hex(&keypair.recipient_public_key().to_bytes()),
-    )?;
+    fs::write(public_path, encode_hex(&keypair.public_key().to_bytes()))?;
     Ok(())
 }
 

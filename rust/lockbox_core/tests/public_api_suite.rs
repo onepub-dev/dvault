@@ -159,7 +159,7 @@ fn public_api_password_and_recipient_key_management_flow() {
     let mut lb =
         Lockbox::create_file(&lockbox_path, LockboxCreate::Password(&old_password)).unwrap();
     let password_slot = lb.list_key_slots()[0].id;
-    let recipient_slot = lb.add_recipient(&recipient.recipient_public_key()).unwrap();
+    let recipient_slot = lb.add_recipient(&recipient.public_key()).unwrap();
     let slots = lb.list_key_slots();
     assert!(slots.iter().any(|slot| {
         slot.id == password_slot
@@ -278,19 +278,19 @@ fn public_api_secret_lockbox_id_and_ml_kem_wrappers_flow() {
     assert_eq!(random_id.as_bytes()[8] & 0xc0, 0x80);
 
     let keypair = RecipientKeyPair::generate().unwrap();
-    let from_seed = RecipientKeyPair::from_seed_secure(keypair.to_seed_secure().unwrap()).unwrap();
-    let recipient = keypair.recipient_public_key();
+    let from_seed = RecipientKeyPair::from_private_seed(keypair.private_seed().unwrap()).unwrap();
+    let recipient = keypair.public_key();
     let recipient = RecipientPublicKey::from_bytes(&recipient.to_bytes()).unwrap();
-    let wrapped = recipient.wrap_key(b"content-key").unwrap();
+    let wrapped = recipient.encrypt(b"content-key").unwrap();
     let wrapped = RecipientWrappedKey::from_parts(
         wrapped.ciphertext_bytes().to_vec(),
         wrapped.encrypted_key().to_vec(),
     )
     .unwrap();
-    assert_eq!(from_seed.unwrap_key(&wrapped).unwrap(), b"content-key");
+    assert_eq!(from_seed.decrypt(&wrapped).unwrap(), b"content-key");
     assert_eq!(
         from_seed
-            .wrap_key(b"another-key")
+            .encrypt(b"another-key")
             .unwrap()
             .encrypted_key()
             .len(),
@@ -406,7 +406,7 @@ fn public_api_password_recipient_open_file_flow() {
     let recipient = RecipientKeyPair::generate().unwrap();
     let mut by_recipient = Lockbox::create_file(
         &recipient_path,
-        LockboxCreate::RecipientPublicKey(recipient.recipient_public_key()),
+        LockboxCreate::RecipientPublicKey(recipient.public_key()),
     )
     .unwrap();
     by_recipient

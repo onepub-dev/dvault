@@ -56,11 +56,11 @@ struct Jwks {
 }
 
 pub fn export_private_key(keypair: &RecipientKeyPair, format: KeyFormat) -> Result<SecretVec> {
-    let public = keypair.recipient_public_key();
+    let public = keypair.public_key();
     let public_bytes = public.to_bytes();
     let public_x = Base64UrlUnpadded::encode_string(&public_bytes);
     let kid = fingerprint(&public_bytes);
-    let seed = keypair.to_seed_secure()?;
+    let seed = keypair.private_seed()?;
     match format {
         KeyFormat::RawHex => hex_encode_secure(seed),
         KeyFormat::Jwk => private_jwk_secure(&kid, &public_x, seed),
@@ -77,7 +77,7 @@ pub fn export_private_key(keypair: &RecipientKeyPair, format: KeyFormat) -> Resu
 
 pub fn import_private_key(mut bytes: SecretVec) -> Result<RecipientKeyPair> {
     normalize_private_key_to_seed(&mut bytes)?;
-    RecipientKeyPair::from_seed_secure(bytes)
+    RecipientKeyPair::from_private_seed(bytes)
 }
 
 pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<RecipientKeyPair> {
@@ -430,17 +430,13 @@ mod tests {
         let private = export_private_key(&keypair, KeyFormat::LockboxPem).unwrap();
         let loaded = import_private_key(private).unwrap();
         assert_eq!(
-            loaded.to_seed_secure().unwrap(),
-            keypair.to_seed_secure().unwrap()
+            loaded.private_seed().unwrap(),
+            keypair.private_seed().unwrap()
         );
 
-        let public =
-            export_public_key(&keypair.recipient_public_key(), KeyFormat::LockboxPem).unwrap();
+        let public = export_public_key(&keypair.public_key(), KeyFormat::LockboxPem).unwrap();
         let loaded_public = import_public_key(&public).unwrap();
-        assert_eq!(
-            loaded_public.to_bytes(),
-            keypair.recipient_public_key().to_bytes()
-        );
+        assert_eq!(loaded_public.to_bytes(), keypair.public_key().to_bytes());
     }
 
     #[test]
@@ -448,13 +444,13 @@ mod tests {
         let keypair = RecipientKeyPair::generate().unwrap();
         let jwk = export_private_key(&keypair, KeyFormat::Jwk).unwrap();
         assert_eq!(
-            import_private_key(jwk).unwrap().to_seed_secure().unwrap(),
-            keypair.to_seed_secure().unwrap()
+            import_private_key(jwk).unwrap().private_seed().unwrap(),
+            keypair.private_seed().unwrap()
         );
-        let jwks = export_public_key(&keypair.recipient_public_key(), KeyFormat::Jwks).unwrap();
+        let jwks = export_public_key(&keypair.public_key(), KeyFormat::Jwks).unwrap();
         assert_eq!(
             import_public_key(&jwks).unwrap().to_bytes(),
-            keypair.recipient_public_key().to_bytes()
+            keypair.public_key().to_bytes()
         );
     }
 
@@ -463,8 +459,8 @@ mod tests {
         let keypair = RecipientKeyPair::generate().unwrap();
         let raw = export_private_key(&keypair, KeyFormat::RawHex).unwrap();
         assert_eq!(
-            import_private_key(raw).unwrap().to_seed_secure().unwrap(),
-            keypair.to_seed_secure().unwrap()
+            import_private_key(raw).unwrap().private_seed().unwrap(),
+            keypair.private_seed().unwrap()
         );
     }
 }

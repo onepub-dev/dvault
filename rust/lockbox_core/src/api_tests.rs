@@ -357,8 +357,8 @@ fn content_keys_can_be_wrapped_with_ml_kem_1024() {
     let key_pair = RecipientKeyPair::generate().unwrap();
     let content_key = [9u8; 32];
 
-    let wrapped = key_pair.wrap_key(&content_key).unwrap();
-    let unwrapped = key_pair.unwrap_key(&wrapped).unwrap();
+    let wrapped = key_pair.encrypt(&content_key).unwrap();
+    let unwrapped = key_pair.decrypt(&wrapped).unwrap();
 
     assert_eq!(unwrapped, content_key);
     assert!(!wrapped.encrypted_key().is_empty());
@@ -369,12 +369,12 @@ fn ml_kem_wraps_for_same_recipient_do_not_share_ciphertext() {
     let key_pair = RecipientKeyPair::generate().unwrap();
     let content_key = [9u8; 32];
 
-    let first = key_pair.wrap_key(&content_key).unwrap();
-    let second = key_pair.wrap_key(&content_key).unwrap();
+    let first = key_pair.encrypt(&content_key).unwrap();
+    let second = key_pair.encrypt(&content_key).unwrap();
 
     assert_ne!(first.ciphertext_bytes(), second.ciphertext_bytes());
-    assert_eq!(key_pair.unwrap_key(&first).unwrap(), content_key);
-    assert_eq!(key_pair.unwrap_key(&second).unwrap(), content_key);
+    assert_eq!(key_pair.decrypt(&first).unwrap(), content_key);
+    assert_eq!(key_pair.decrypt(&second).unwrap(), content_key);
 }
 
 #[test]
@@ -437,10 +437,9 @@ fn multiple_key_slots_are_tried_until_one_unlocks() {
     let alice = RecipientKeyPair::generate().unwrap();
     let bob = RecipientKeyPair::generate().unwrap();
     let outsider = RecipientKeyPair::generate().unwrap();
-    let bob_public =
-        RecipientPublicKey::from_bytes(&bob.recipient_public_key().to_bytes()).unwrap();
+    let bob_public = RecipientPublicKey::from_bytes(&bob.public_key().to_bytes()).unwrap();
 
-    let mut lb = Lockbox::create_with_recipient(&alice.recipient_public_key()).unwrap();
+    let mut lb = Lockbox::create_with_recipient(&alice.public_key()).unwrap();
     lb.add_recipient(&bob_public).unwrap();
     let backup_password = password("backup-password");
     lb.add_password(&backup_password).unwrap();

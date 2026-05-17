@@ -111,7 +111,7 @@ impl KeySlot {
     ) -> Result<Self> {
         Ok(Self::MlKem1024 {
             id,
-            wrapped: Box::new(recipient.wrap_key(content_key)?),
+            wrapped: Box::new(recipient.encrypt(content_key)?),
         })
     }
 
@@ -133,7 +133,7 @@ impl KeySlot {
 
     pub(crate) fn try_ml_kem(&self, recipient: &RecipientKeyPair) -> Result<Vec<u8>> {
         match self {
-            KeySlot::MlKem1024 { wrapped, .. } => recipient.unwrap_key(wrapped),
+            KeySlot::MlKem1024 { wrapped, .. } => recipient.decrypt(wrapped),
             _ => Err(Error::InvalidKey),
         }
     }

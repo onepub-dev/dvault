@@ -106,12 +106,12 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
     assert!(!String::from_utf8_lossy(&encrypted).contains("private-key-password"));
     let loaded = vault.load_private_key("default").unwrap();
     assert_eq!(
-        loaded.to_seed_secure().unwrap(),
-        keypair.to_seed_secure().unwrap()
+        loaded.private_seed().unwrap(),
+        keypair.private_seed().unwrap()
     );
 
     vault
-        .store_trusted_recipient("alice", &keypair.recipient_public_key())
+        .store_trusted_recipient("alice", &keypair.public_key())
         .unwrap();
     let trusted = vault.list_trusted_recipients().unwrap();
     assert_eq!(trusted.len(), 1);
@@ -235,14 +235,14 @@ fn vault_directory_public_crud_helpers_flow() {
         vault
             .load_private_key("default")
             .unwrap()
-            .to_seed_secure()
+            .private_seed()
             .unwrap(),
-        keypair.to_seed_secure().unwrap()
+        keypair.private_seed().unwrap()
     );
     vault.delete_private_key("default").unwrap();
     assert!(!vault.private_key_exists("default").unwrap());
 
-    let recipient = keypair.recipient_public_key();
+    let recipient = keypair.public_key();
     assert!(!vault.trusted_recipient_exists("alice").unwrap());
     vault.store_trusted_recipient("alice", &recipient).unwrap();
     assert!(vault.trusted_recipient_exists("alice").unwrap());
@@ -285,8 +285,8 @@ fn private_key_file_import_uses_secure_import_path() {
 
     let loaded = import_private_key_file(&path).unwrap();
     assert_eq!(
-        loaded.to_seed_secure().unwrap(),
-        keypair.to_seed_secure().unwrap()
+        loaded.private_seed().unwrap(),
+        keypair.private_seed().unwrap()
     );
 
     let _ = fs::remove_dir_all(root);
