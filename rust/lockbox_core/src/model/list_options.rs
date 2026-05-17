@@ -29,4 +29,11 @@ impl ListOptions {
             limit: None,
         }
     }
+
+    /// Set the glob pattern used to filter returned logical paths.
+    ///
+    /// The pattern is validated when the options are passed to the listing API.
+    pub fn set_glob(&mut self, glob: impl Into<String>) {
+        self.glob = Some(glob.into());
+    }
 }
