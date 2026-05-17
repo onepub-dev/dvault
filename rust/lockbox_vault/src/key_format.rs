@@ -2,6 +2,9 @@ use base64ct::{Base64, Base64UrlUnpadded, Encoding};
 use lockbox_core::{Error, MlKemKeyPair, MlKemRecipientKey, Result, SecretVec};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fs;
+use std::io::Read;
+use std::path::Path;
 use zeroize::Zeroize;
 
 use crate::{decode_hex, encode_hex};
@@ -77,8 +80,21 @@ pub fn import_private_key(mut bytes: SecretVec) -> Result<MlKemKeyPair> {
     MlKemKeyPair::from_seed_secure(bytes)
 }
 
-pub fn import_private_key_from_vec(bytes: Vec<u8>) -> Result<MlKemKeyPair> {
-    import_private_key(SecretVec::try_from_vec(bytes)?)
+pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<MlKemKeyPair> {
+    let mut file = fs::File::open(path.as_ref()).map_err(|err| Error::Io(err.to_string()))?;
+    let len = usize::try_from(
+        file.metadata()
+            .map_err(|err| Error::Io(err.to_string()))?
+            .len(),
+    )
+    .map_err(|_| Error::Io("private key file is too large".into()))?;
+    let mut bytes = SecretVec::new();
+    bytes.resize_zeroed(len)?;
+    bytes.with_mut_bytes(|buffer| {
+        file.read_exact(buffer)
+            .map_err(|err| Error::Io(err.to_string()))
+    })??;
+    import_private_key(bytes)
 }
 
 pub fn export_public_key(key: &MlKemRecipientKey, format: KeyFormat) -> Result<Vec<u8>> {
@@ -414,8 +430,8 @@ mod tests {
         let private = export_private_key(&keypair, KeyFormat::LockboxPem).unwrap();
         let loaded = import_private_key(private).unwrap();
         assert_eq!(
-            loaded.to_seed_bytes().unwrap(),
-            keypair.to_seed_bytes().unwrap()
+            loaded.to_seed_secure().unwrap(),
+            keypair.to_seed_secure().unwrap()
         );
 
         let public = export_public_key(&keypair.recipient_key(), KeyFormat::LockboxPem).unwrap();
@@ -428,8 +444,8 @@ mod tests {
         let keypair = MlKemKeyPair::generate().unwrap();
         let jwk = export_private_key(&keypair, KeyFormat::Jwk).unwrap();
         assert_eq!(
-            import_private_key(jwk).unwrap().to_seed_bytes().unwrap(),
-            keypair.to_seed_bytes().unwrap()
+            import_private_key(jwk).unwrap().to_seed_secure().unwrap(),
+            keypair.to_seed_secure().unwrap()
         );
         let jwks = export_public_key(&keypair.recipient_key(), KeyFormat::Jwks).unwrap();
         assert_eq!(
@@ -443,8 +459,8 @@ mod tests {
         let keypair = MlKemKeyPair::generate().unwrap();
         let raw = export_private_key(&keypair, KeyFormat::RawHex).unwrap();
         assert_eq!(
-            import_private_key(raw).unwrap().to_seed_bytes().unwrap(),
-            keypair.to_seed_bytes().unwrap()
+            import_private_key(raw).unwrap().to_seed_secure().unwrap(),
+            keypair.to_seed_secure().unwrap()
         );
     }
 }

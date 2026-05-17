@@ -257,7 +257,7 @@ fn public_api_secret_lockbox_id_and_ml_kem_wrappers_flow() {
     assert_eq!(random_id.as_bytes()[8] & 0xc0, 0x80);
 
     let keypair = MlKemKeyPair::generate().unwrap();
-    let from_seed = MlKemKeyPair::from_seed_bytes(&keypair.to_seed_bytes().unwrap()).unwrap();
+    let from_seed = MlKemKeyPair::from_seed_secure(keypair.to_seed_secure().unwrap()).unwrap();
     let recipient = keypair.recipient_key();
     let recipient = MlKemRecipientKey::from_bytes(&recipient.to_bytes()).unwrap();
     let wrapped = recipient.wrap_key(b"content-key").unwrap();

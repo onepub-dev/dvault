@@ -3,7 +3,9 @@ use super::context::{
     read_new_password, read_password, require_arg, Access, CliResult,
 };
 use lockbox_core::{LockboxCreate, LockboxUnlock, MlKemKeyPair};
-use lockbox_vault::{encode_hex, local_vault, NoopStore, Vault};
+use lockbox_vault::{
+    encode_hex, export_private_key, local_vault, KeyFormat, NoopStore, SecretVec, Vault,
+};
 use std::fs;
 
 pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
@@ -55,7 +57,10 @@ pub(crate) fn keygen(args: &[String]) -> CliResult<()> {
     let private_path = require_arg(args, 0, "private key path")?;
     let public_path = require_arg(args, 1, "public key path")?;
     let keypair = MlKemKeyPair::generate()?;
-    keypair.with_seed_bytes(|seed| write_private_key(private_path, seed))??;
+    write_private_key(
+        private_path,
+        &export_private_key(&keypair, KeyFormat::RawHex)?,
+    )?;
     fs::write(public_path, encode_hex(&keypair.recipient_key().to_bytes()))?;
     Ok(())
 }
@@ -98,10 +103,31 @@ pub(crate) fn remove_key(args: &[String], access: &Access) -> CliResult<()> {
     Ok(())
 }
 
-fn write_private_key(path: &str, bytes: &[u8]) -> CliResult<()> {
-    fs::write(path, encode_hex(bytes))?;
-    set_private_key_permissions(path)?;
+fn write_private_key(path: &str, bytes: &SecretVec) -> CliResult<()> {
+    use std::io::Write;
+
+    let mut file = create_private_key_file(path)?;
+    bytes.with_bytes(|bytes| file.write_all(bytes))??;
     Ok(())
+}
+
+#[cfg(unix)]
+fn create_private_key_file(path: &str) -> CliResult<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    set_private_key_permissions(path)?;
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn create_private_key_file(path: &str) -> CliResult<fs::File> {
+    fs::File::create(path).map_err(Into::into)
 }
 
 #[cfg(unix)]

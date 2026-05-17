@@ -1,7 +1,7 @@
 use super::context::{default_vault, require_arg, CliResult};
 use lockbox_core::MlKemKeyPair;
 use lockbox_vault::{
-    default_vault_dir, export_private_key, export_public_key, import_private_key_from_vec,
+    default_vault_dir, export_private_key, export_public_key, import_private_key_file,
     import_public_key, KeyFormat, VaultDirectory,
 };
 use std::fs;
@@ -88,7 +88,7 @@ fn import_key(args: &[String]) -> CliResult<()> {
     if vault.private_key_exists(name)? {
         return Err(format!("vault private key already exists: {name}").into());
     }
-    let keypair = import_private_key_from_vec(fs::read(private_path)?)?;
+    let keypair = import_private_key_file(private_path)?;
     vault.store_private_key(name, &keypair)?;
     if let Some(path) = public_path {
         fs::write(
@@ -173,10 +173,28 @@ fn parse_format(args: &[String]) -> CliResult<(Vec<String>, KeyFormat)> {
 }
 
 fn write_private_key(path: &str, bytes: &lockbox_vault::SecretVec) -> CliResult<()> {
-    let mut file = fs::File::create(path)?;
+    let mut file = create_private_key_file(path)?;
     bytes.with_bytes(|bytes| file.write_all(bytes))??;
-    set_private_key_permissions(path)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn create_private_key_file(path: &str) -> CliResult<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    set_private_key_permissions(path)?;
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn create_private_key_file(path: &str) -> CliResult<fs::File> {
+    fs::File::create(path).map_err(Into::into)
 }
 
 #[cfg(unix)]

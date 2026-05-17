@@ -33,7 +33,9 @@ impl MlKemKeyPair {
     /// Generate a fresh ML-KEM-1024 keypair.
     pub fn generate() -> Result<Self> {
         let (decapsulation_key, encapsulation_key) = MlKem1024::generate_keypair();
-        let decapsulation_seed = SecretVec::try_from_vec(decapsulation_key.to_bytes().to_vec())?;
+        let mut seed = decapsulation_key.to_bytes();
+        let decapsulation_seed = SecretVec::try_from_slice(seed.as_ref())?;
+        seed.zeroize();
         Ok(Self {
             decapsulation_seed,
             encapsulation_key,
@@ -71,18 +73,6 @@ impl MlKemKeyPair {
         }
     }
 
-    /// Construct a keypair from raw seed bytes.
-    pub fn from_seed_bytes(bytes: &[u8]) -> Result<Self> {
-        let seed = ml_kem::Seed::try_from(bytes).map_err(|_| Error::InvalidKey)?;
-        let decapsulation_key = ml_kem::DecapsulationKey1024::from_seed(seed);
-        let encapsulation_key = decapsulation_key.encapsulation_key().clone();
-        let decapsulation_seed = SecretVec::try_from_slice(bytes)?;
-        Ok(Self {
-            decapsulation_seed,
-            encapsulation_key,
-        })
-    }
-
     /// Construct a keypair by taking ownership of a secure seed buffer.
     pub fn from_seed_secure(decapsulation_seed: SecretVec) -> Result<Self> {
         let encapsulation_key = decapsulation_seed.with_bytes(|bytes| {
@@ -96,22 +86,9 @@ impl MlKemKeyPair {
         })
     }
 
-    /// Temporarily expose the private seed inside a secure read scope.
-    pub fn with_seed_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Result<R> {
-        Ok(self.decapsulation_seed.with_bytes(f)?)
-    }
-
     /// Clone the private seed into a new secure buffer.
     pub fn to_seed_secure(&self) -> Result<SecretVec> {
         self.decapsulation_seed.try_clone().map_err(Into::into)
-    }
-
-    /// Clone the private seed into ordinary memory.
-    ///
-    /// Prefer `to_seed_secure()` unless the caller is explicitly exporting or
-    /// testing private-key material.
-    pub fn to_seed_bytes(&self) -> Result<Vec<u8>> {
-        self.with_seed_bytes(|bytes| bytes.to_vec())
     }
 }
 

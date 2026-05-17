@@ -6,7 +6,6 @@ use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use zeroize::Zeroize;
 
 use crate::key_format::{export_private_key, import_private_key, KeyFormat};
 
@@ -76,22 +75,18 @@ impl VaultDirectory {
             return import_private_key(bytes);
         }
 
-        let mut seed = self.get_record(&private_key_record_path(name)?)?;
-        let keypair = MlKemKeyPair::from_seed_bytes(&seed);
-        seed.zeroize();
-        keypair
+        Err(Error::InvalidPath(format!("private key not found: {name}")))
     }
 
     pub fn private_key_exists(&self, name: &str) -> Result<bool> {
         let lockbox = self.lockbox.borrow();
         Ok(lockbox
             .env_sensitivity(&private_key_env_name(name)?)?
-            .is_some()
-            || lockbox.stat(&private_key_record_path(name)?).is_some())
+            .is_some())
     }
 
     pub fn list_private_keys(&self) -> Result<Vec<String>> {
-        let mut names = self.list_record_names("/private_keys", ".key")?;
+        let mut names = Vec::new();
         let lockbox = self.lockbox.borrow();
         for env_name in lockbox.list_env()? {
             let Some(name) = private_key_name_from_env(&env_name) else {
@@ -105,8 +100,7 @@ impl VaultDirectory {
     }
 
     pub fn delete_private_key(&self, name: &str) -> Result<()> {
-        self.delete_secret_env_record_if_exists(&private_key_env_name(name)?)?;
-        self.delete_record_if_exists(&private_key_record_path(name)?)
+        self.delete_secret_env_record_if_exists(&private_key_env_name(name)?)
     }
 
     pub fn store_trusted_recipient(&self, name: &str, key: &MlKemRecipientKey) -> Result<()> {
@@ -226,10 +220,6 @@ fn recursive_list(path: &str) -> ListOptions {
     let mut options = ListOptions::new(path);
     options.recursive = true;
     options
-}
-
-fn private_key_record_path(name: &str) -> Result<String> {
-    Ok(format!("/private_keys/{}.key", validate_record_name(name)?))
 }
 
 fn private_key_env_name(name: &str) -> Result<String> {

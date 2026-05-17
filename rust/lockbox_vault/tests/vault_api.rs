@@ -1,5 +1,8 @@
 use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair, Result};
-use lockbox_vault::{ContentKeyStore, SecretString, Vault, VaultDirectory};
+use lockbox_vault::{
+    export_private_key, import_private_key_file, ContentKeyStore, KeyFormat, SecretString, Vault,
+    VaultDirectory,
+};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
@@ -93,8 +96,8 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
     assert!(!String::from_utf8_lossy(&encrypted).contains("private-key-password"));
     let loaded = vault.load_private_key("default").unwrap();
     assert_eq!(
-        loaded.to_seed_bytes().unwrap(),
-        keypair.to_seed_bytes().unwrap()
+        loaded.to_seed_secure().unwrap(),
+        keypair.to_seed_secure().unwrap()
     );
 
     vault
@@ -216,9 +219,9 @@ fn vault_directory_public_crud_helpers_flow() {
         vault
             .load_private_key("default")
             .unwrap()
-            .to_seed_bytes()
+            .to_seed_secure()
             .unwrap(),
-        keypair.to_seed_bytes().unwrap()
+        keypair.to_seed_secure().unwrap()
     );
     vault.delete_private_key("default").unwrap();
     assert!(!vault.private_key_exists("default").unwrap());
@@ -246,6 +249,27 @@ fn vault_directory_public_crud_helpers_flow() {
         )
         .unwrap();
     assert_eq!(vault.key_directory_backup_count().unwrap(), 1);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn private_key_file_import_uses_secure_import_path() {
+    let root = unique_dir("private-key-file-import");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("private.key");
+    let keypair = MlKemKeyPair::generate().unwrap();
+    let private = export_private_key(&keypair, KeyFormat::RawHex).unwrap();
+    private
+        .with_bytes(|bytes| fs::write(&path, bytes))
+        .unwrap()
+        .unwrap();
+
+    let loaded = import_private_key_file(&path).unwrap();
+    assert_eq!(
+        loaded.to_seed_secure().unwrap(),
+        keypair.to_seed_secure().unwrap()
+    );
 
     let _ = fs::remove_dir_all(root);
 }

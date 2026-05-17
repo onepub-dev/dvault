@@ -10,7 +10,7 @@ mod key_format;
 mod vault_directory;
 
 pub use key_format::{
-    export_private_key, export_public_key, import_private_key, import_private_key_from_vec,
+    export_private_key, export_public_key, import_private_key, import_private_key_file,
     import_public_key, KeyFormat,
 };
 pub use vault_directory::{
