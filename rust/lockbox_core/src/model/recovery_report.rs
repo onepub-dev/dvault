@@ -12,8 +12,8 @@ pub struct RecoveryReport {
     pub partial_files: usize,
     /// Number of corrupt records encountered.
     pub corrupt_records: usize,
-    /// Whether the latest manifest could be read.
-    pub manifest_recovered: bool,
+    /// Whether the latest TOC could be read.
+    pub toc_recovered: bool,
 }
 
 impl RecoveryReport {
@@ -26,8 +26,8 @@ impl RecoveryReport {
         out.push_str(&format!("  Partial files: {}\n", self.partial_files));
         out.push_str(&format!("  Corrupt records: {}\n", self.corrupt_records));
         out.push_str(&format!(
-            "  Latest manifest: {}\n",
-            if self.manifest_recovered {
+            "  Latest TOC: {}\n",
+            if self.toc_recovered {
                 "intact"
             } else {
                 "not used or damaged"

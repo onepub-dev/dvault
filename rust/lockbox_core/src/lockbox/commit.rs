@@ -13,24 +13,29 @@ use crate::key_directory::encode_key_directory;
 use crate::page::{page_size_for_objects, PageObject, PageObjectKind};
 use crate::storage::{Storage, StorageBackend};
 use crate::{Error, LockboxOptions, Result};
+#[cfg(test)]
 use std::fs;
 use std::path::Path;
 
 impl Lockbox {
+    #[cfg(test)]
     pub fn try_to_bytes(&self) -> Result<Vec<u8>> {
         self.bytes()
     }
 
+    #[cfg(test)]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.try_to_bytes()
             .expect("failed to materialize lockbox bytes")
     }
 
-    pub fn open_path(path: impl AsRef<Path>, key: impl AsRef<[u8]>) -> Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn open_path(path: impl AsRef<Path>, key: impl AsRef<[u8]>) -> Result<Self> {
         Self::open_path_with_options(path, key, LockboxOptions::default())
     }
 
-    pub fn open_path_with_options(
+    #[cfg(test)]
+    pub(crate) fn open_path_with_options(
         path: impl AsRef<Path>,
         key: impl AsRef<[u8]>,
         options: LockboxOptions,
@@ -48,11 +53,13 @@ impl Lockbox {
         Self::open_storage_with_secret_key(StorageBackend::file(path.as_path())?, key, options)
     }
 
-    pub fn create_path(path: impl AsRef<Path>, key: impl AsRef<[u8]>) -> Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn create_path(path: impl AsRef<Path>, key: impl AsRef<[u8]>) -> Result<Self> {
         Self::create_path_with_options(path, key, LockboxOptions::default())
     }
 
-    pub fn create_path_with_options(
+    #[cfg(test)]
+    pub(crate) fn create_path_with_options(
         path: impl AsRef<Path>,
         key: impl AsRef<[u8]>,
         options: LockboxOptions,
@@ -65,6 +72,7 @@ impl Lockbox {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn create_path_with_lockbox_id_and_options(
         path: impl AsRef<Path>,
         key: impl AsRef<[u8]>,
@@ -93,11 +101,21 @@ impl Lockbox {
         Ok(lockbox)
     }
 
+    /// Write the current lockbox bytes to a host filesystem path.
+    ///
+    /// Returns `Error::Io` if the host write fails. Returns storage or
+    /// serialization errors if pending lockbox state cannot be materialized.
+    #[cfg(test)]
     pub fn write_to_path(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = HostPath::new(path);
         fs::write(path.as_path(), self.bytes()?).map_err(|err| Error::Io(err.to_string()))
     }
 
+    /// Persist pending lockbox changes atomically to the backing storage.
+    ///
+    /// Returns storage, encoding, or security-limit errors if pending changes
+    /// cannot be written. On error, in-memory metadata is rolled back to the
+    /// state before the commit attempt.
     pub fn commit(&mut self) -> Result<()> {
         let rollback = CommitRollback::capture(self);
         match self.commit_inner() {
@@ -129,15 +147,15 @@ impl Lockbox {
             return Ok(());
         }
         self.env_root_offset = self.commit_env_tree()?;
-        self.manifest_offset = self.commit_toc_btree()?;
-        let manifest_offset = self.manifest_offset;
+        self.toc_root_offset = self.commit_toc_btree()?;
+        let toc_root_offset = self.toc_root_offset;
         self.free_index_offset = self.write_free_index()?;
         self.sequence += 1;
         self.flush_dirty_pages()?;
         self.write_key_directory_mirrors_if_dirty()?;
         let commit_root_payload = encode_commit_root(&CommitRoot {
             sequence: self.sequence,
-            toc_root_offset: manifest_offset,
+            toc_root_offset: toc_root_offset,
             env_root_offset: self.env_root_offset,
             free_index_root_offset: self.free_index_offset,
             key_directory_offset: self.key_directory_offset,
@@ -219,7 +237,7 @@ impl Lockbox {
 
     fn commit_toc_btree(&mut self) -> Result<u64> {
         if self.toc_root.is_some() && self.dirty_toc_paths.is_empty() {
-            return Ok(self.manifest_offset);
+            return Ok(self.toc_root_offset);
         }
         let root = if self.toc_leaves.is_empty() {
             self.rebuild_toc_btree()?
@@ -231,7 +249,7 @@ impl Lockbox {
     }
 
     fn rebuild_toc_btree(&mut self) -> Result<u64> {
-        let entries = self.manifest.values().cloned().collect::<Vec<_>>();
+        let entries = self.toc_entries.values().cloned().collect::<Vec<_>>();
         if entries.is_empty() {
             let offset = self.write_toc_leaf(&[])?;
             let leaf = TocLeaf {
@@ -260,7 +278,7 @@ impl Lockbox {
 
     fn write_incremental_toc_btree(&mut self) -> Result<u64> {
         let dirty = std::mem::take(&mut self.dirty_toc_paths);
-        let all_entries = self.manifest.values().cloned().collect::<Vec<_>>();
+        let all_entries = self.toc_entries.values().cloned().collect::<Vec<_>>();
 
         let mut rebuilt_leaves = Vec::new();
         let mut cursor = 0usize;
@@ -300,13 +318,12 @@ impl Lockbox {
                 cursor += 1;
             }
             let replacement_entries = &all_entries[start..cursor];
-            let overlaps_dirty = replacement_entries.iter().any(|entry| {
-                dirty.contains(&crate::logical_path::LogicalPath::from_canonical(
-                    entry.path.clone(),
-                ))
-            }) || dirty
+            let overlaps_dirty = replacement_entries
                 .iter()
-                .any(|path| path.as_str() >= first && next.is_none_or(|next| path.as_str() < next));
+                .any(|entry| dirty.contains(&entry.path))
+                || dirty.iter().any(|path| {
+                    path.as_str() >= first && next.is_none_or(|next| path.as_str() < next)
+                });
             let _should_consider_merge = overlaps_dirty
                 && crate::toc_btree::toc_leaf_fill_percent(replacement_entries)
                     < crate::file_format::TOC_MIN_FILL_PERCENT;
@@ -367,11 +384,13 @@ impl Lockbox {
             let mut child_cursor = 0usize;
             let children = level
                 .iter()
-                .map(|node| TocChild {
-                    first_path: node.first_path().to_string(),
-                    offset: node.offset(),
+                .map(|node| {
+                    Ok(TocChild {
+                        first_path: crate::LockboxPath::from_stored(node.first_path(), false)?,
+                        offset: node.offset(),
+                    })
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>>>()?;
             for chunk in toc_child_groups(&children)? {
                 let offset = self.write_toc_internal(chunk)?;
                 let start = child_cursor;
@@ -428,18 +447,20 @@ impl Lockbox {
                 }
                 let toc_children = children
                     .iter()
-                    .map(|child| TocChild {
-                        first_path: child.first_path().to_string(),
-                        offset: child.offset(),
+                    .map(|child| {
+                        Ok(TocChild {
+                            first_path: crate::LockboxPath::from_stored(child.first_path(), false)?,
+                            offset: child.offset(),
+                        })
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>>>()?;
                 let offset = self.write_toc_internal(&toc_children)?;
                 Ok(TocTreeNode::Internal(TocInternal { offset, children }))
             }
         }
     }
 
-    fn write_toc_leaf(&mut self, entries: &[crate::manifest_entry::ManifestEntry]) -> Result<u64> {
+    fn write_toc_leaf(&mut self, entries: &[crate::toc_entry::TocEntry]) -> Result<u64> {
         let payload = encode_toc_leaf(entries)?;
         self.sequence += 1;
         self.append_toc_page(PageObjectKind::TocLeaf, payload)
@@ -513,7 +534,7 @@ impl Lockbox {
 struct CommitRollback {
     sequence: u64,
     commit_root_offset: u64,
-    manifest_offset: u64,
+    toc_root_offset: u64,
     env_root_offset: u64,
     free_index_offset: u64,
     key_directory_offset: u64,
@@ -521,24 +542,23 @@ struct CommitRollback {
     key_directory_generation: u64,
     dirty_key_directory: bool,
     key_slots: Vec<crate::key_slot::KeySlot>,
-    manifest: std::collections::BTreeMap<
-        crate::logical_path::LogicalPath,
-        crate::manifest_entry::ManifestEntry,
-    >,
+    toc_entries:
+        std::collections::BTreeMap<crate::lockbox_path::LockboxPath, crate::toc_entry::TocEntry>,
     toc_root: Option<TocTreeNode>,
     toc_leaves: Vec<TocLeaf>,
-    dirty_toc_paths: std::collections::BTreeSet<crate::logical_path::LogicalPath>,
-    env_vars: Option<std::collections::BTreeMap<String, crate::env_btree::EnvValue>>,
+    dirty_toc_paths: std::collections::BTreeSet<crate::lockbox_path::LockboxPath>,
+    env_vars: Option<std::collections::BTreeMap<crate::EnvName, crate::env_btree::EnvValue>>,
     env_root: Option<crate::env_btree::EnvTreeNode>,
     env_leaves: Vec<crate::env_btree::EnvLeaf>,
     dirty_env: bool,
     free_space: crate::free_slot::FreeSpace,
     record_ref_counts: std::collections::HashMap<u64, usize, crate::fast_hash::FastBuildHasher>,
-    pending_small_files: std::collections::BTreeMap<String, crate::file_chunk::PendingFileChunk>,
+    pending_small_files:
+        std::collections::BTreeMap<crate::LockboxPath, crate::file_chunk::PendingFileChunk>,
     pending_small_file_bytes: usize,
     bulk_small_file_packer:
         crate::page_object_packer::PageObjectPacker<crate::file_chunk::PackedSmallFile>,
-    pending_symlinks: std::collections::BTreeMap<String, String>,
+    pending_symlinks: std::collections::BTreeMap<crate::LockboxPath, crate::LockboxPath>,
     pending_redactions: std::collections::BTreeMap<u64, super::PendingRedaction>,
     redacted_free_slots: Vec<crate::free_slot::FreeSlot>,
     needs_packing: bool,
@@ -549,7 +569,7 @@ impl CommitRollback {
         Self {
             sequence: lockbox.sequence,
             commit_root_offset: lockbox.commit_root_offset,
-            manifest_offset: lockbox.manifest_offset,
+            toc_root_offset: lockbox.toc_root_offset,
             env_root_offset: lockbox.env_root_offset,
             free_index_offset: lockbox.free_index_offset,
             key_directory_offset: lockbox.key_directory_offset,
@@ -557,7 +577,7 @@ impl CommitRollback {
             key_directory_generation: lockbox.key_directory_generation,
             dirty_key_directory: lockbox.dirty_key_directory,
             key_slots: lockbox.key_slots.clone(),
-            manifest: lockbox.manifest.clone(),
+            toc_entries: lockbox.toc_entries.clone(),
             toc_root: lockbox.toc_root.clone(),
             toc_leaves: lockbox.toc_leaves.clone(),
             dirty_toc_paths: lockbox.dirty_toc_paths.clone(),
@@ -580,7 +600,7 @@ impl CommitRollback {
     fn restore(self, lockbox: &mut Lockbox) {
         lockbox.sequence = self.sequence;
         lockbox.commit_root_offset = self.commit_root_offset;
-        lockbox.manifest_offset = self.manifest_offset;
+        lockbox.toc_root_offset = self.toc_root_offset;
         lockbox.env_root_offset = self.env_root_offset;
         lockbox.free_index_offset = self.free_index_offset;
         lockbox.key_directory_offset = self.key_directory_offset;
@@ -588,7 +608,7 @@ impl CommitRollback {
         lockbox.key_directory_generation = self.key_directory_generation;
         lockbox.dirty_key_directory = self.dirty_key_directory;
         lockbox.key_slots = self.key_slots;
-        lockbox.manifest = self.manifest;
+        lockbox.toc_entries = self.toc_entries;
         lockbox.toc_root = self.toc_root;
         lockbox.toc_leaves = self.toc_leaves;
         lockbox.dirty_toc_paths = self.dirty_toc_paths;
@@ -610,8 +630,8 @@ impl CommitRollback {
 }
 
 fn same_leaf_entries(
-    old: &[crate::manifest_entry::ManifestEntry],
-    new: &[crate::manifest_entry::ManifestEntry],
+    old: &[crate::toc_entry::TocEntry],
+    new: &[crate::toc_entry::TocEntry],
 ) -> bool {
     old.len() == new.len()
         && old.iter().zip(new).all(|(old, new)| {
@@ -646,20 +666,23 @@ fn leaf_directory_is_compatible(old: &[TocLeaf], new: &[TocLeaf]) -> bool {
 mod tests {
     use super::*;
     use crate::constants::DEFAULT_FILE_PERMISSIONS;
-    use crate::logical_path::LogicalPath;
-    use crate::manifest_entry::ManifestEntry;
+    use crate::lockbox_path::LockboxPath;
     use crate::node_kind::NodeKind;
+    use crate::toc_entry::TocEntry;
+
+    fn p(path: impl AsRef<str>) -> LockboxPath {
+        LockboxPath::new(path).unwrap()
+    }
 
     #[test]
     fn compatible_toc_update_rewrites_only_changed_leaf_and_ancestors() {
         let mut lb = Lockbox::create("secret");
-        for entry in synthetic_manifest_entries(150_000) {
-            lb.manifest
-                .insert(LogicalPath::from_canonical(entry.path.clone()), entry);
+        for entry in synthetic_toc_entries(150_000) {
+            lb.toc_entries.insert(entry.path.clone(), entry);
         }
         lb.commit().unwrap();
         let len_after_create = lb.to_bytes().len();
-        let root_after_create = lb.manifest_offset;
+        let root_after_create = lb.toc_root_offset;
         let old_leaf_offsets = lb
             .toc_leaves
             .iter()
@@ -668,9 +691,9 @@ mod tests {
         assert!(old_leaf_offsets.len() > 1);
 
         let path = "/toc-cow/file-00001.txt";
-        let entry = lb.manifest.get_mut(path).unwrap();
+        let entry = lb.toc_entries.get_mut(path).unwrap();
         entry.record_offset += 1;
-        lb.mark_toc_dirty(path);
+        lb.mark_toc_dirty(&p(path));
         lb.commit().unwrap();
         let new_leaf_offsets = lb
             .toc_leaves
@@ -678,7 +701,7 @@ mod tests {
             .map(|leaf| leaf.offset)
             .collect::<Vec<_>>();
 
-        assert_ne!(lb.manifest_offset, root_after_create);
+        assert_ne!(lb.toc_root_offset, root_after_create);
         assert_eq!(old_leaf_offsets.len(), new_leaf_offsets.len());
         assert!(
             old_leaf_offsets
@@ -694,30 +717,29 @@ mod tests {
     #[test]
     fn noop_commit_reuses_existing_toc_root() {
         let mut lb = Lockbox::create("secret");
-        for entry in synthetic_manifest_entries(100) {
-            lb.manifest
-                .insert(LogicalPath::from_canonical(entry.path.clone()), entry);
+        for entry in synthetic_toc_entries(100) {
+            lb.toc_entries.insert(entry.path.clone(), entry);
         }
         lb.commit().unwrap();
-        let root = lb.manifest_offset;
+        let root = lb.toc_root_offset;
         let len = lb.to_bytes().len();
 
         lb.commit().unwrap();
 
-        assert_eq!(lb.manifest_offset, root);
+        assert_eq!(lb.toc_root_offset, root);
         assert_eq!(lb.to_bytes().len(), len);
     }
 
     #[test]
     fn header_points_to_commit_root_that_points_to_toc_root() {
         let mut lb = Lockbox::create("secret");
-        lb.put_file("/docs/a.txt", b"alpha").unwrap();
+        lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
         lb.commit().unwrap();
 
         let bytes = lb.to_bytes();
         let (header_root_offset, _, _, _) = crate::file_format::read_header(&bytes).unwrap();
         assert_eq!(header_root_offset, lb.commit_root_offset);
-        assert_ne!(header_root_offset, lb.manifest_offset);
+        assert_ne!(header_root_offset, lb.toc_root_offset);
 
         let page = crate::page::page_decode_slice(&bytes, header_root_offset as usize).unwrap();
         let decoded = lb
@@ -734,22 +756,22 @@ mod tests {
             .with_payload(crate::commit_root::decode_commit_root)
             .unwrap()
             .unwrap();
-        assert_eq!(commit_root.toc_root_offset, lb.manifest_offset);
+        assert_eq!(commit_root.toc_root_offset, lb.toc_root_offset);
     }
 
     #[test]
     fn committed_toc_is_live_only_after_delete() {
         let mut lb = Lockbox::create("secret");
-        lb.put_file("/docs/a.txt", b"alpha").unwrap();
-        lb.put_file("/docs/b.txt", b"bravo").unwrap();
+        lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
+        lb.add_file(&p("/docs/b.txt"), b"bravo", false).unwrap();
         lb.commit().unwrap();
 
-        lb.delete("/docs/a.txt").unwrap();
+        lb.delete(&p("/docs/a.txt")).unwrap();
         lb.commit().unwrap();
 
         let reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
-        assert!(!reopened.manifest.contains_key("/docs/a.txt"));
-        assert!(reopened.manifest.contains_key("/docs/b.txt"));
+        assert!(!reopened.toc_entries.contains_key("/docs/a.txt"));
+        assert!(reopened.toc_entries.contains_key("/docs/b.txt"));
         assert!(reopened
             .toc_leaves
             .iter()
@@ -768,12 +790,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         for index in 0..6 {
-            lb.put_file(&format!("/docs/remove-{index}.bin"), &data)
+            lb.add_file(&p(format!("/docs/remove-{index}.bin")), &data, false)
                 .unwrap();
         }
         lb.commit().unwrap();
         for index in 0..6 {
-            lb.delete(&format!("/docs/remove-{index}.bin")).unwrap();
+            lb.delete(&p(format!("/docs/remove-{index}.bin"))).unwrap();
         }
         lb.commit().unwrap();
 
@@ -799,12 +821,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         for index in 0..((crate::free_index::FREE_INDEX_LEAF_SLOT_CAPACITY + 3) * 2) {
-            lb.put_file(&format!("/docs/free-index-{index}.bin"), &data)
+            lb.add_file(&p(format!("/docs/free-index-{index}.bin")), &data, false)
                 .unwrap();
         }
         lb.commit().unwrap();
         for index in (0..((crate::free_index::FREE_INDEX_LEAF_SLOT_CAPACITY + 3) * 2)).step_by(2) {
-            lb.delete(&format!("/docs/free-index-{index}.bin")).unwrap();
+            lb.delete(&p(format!("/docs/free-index-{index}.bin")))
+                .unwrap();
         }
         lb.commit().unwrap();
         assert!(lb.free_index_offset > 0);
@@ -831,53 +854,53 @@ mod tests {
     #[test]
     fn failed_commit_after_partial_appends_reopens_previous_commit() {
         let mut lb = Lockbox::create("secret");
-        lb.put_file("/docs/old.txt", b"old").unwrap();
+        lb.add_file(&p("/docs/old.txt"), b"old", false).unwrap();
         lb.commit().unwrap();
 
-        lb.put_file("/docs/new.txt", b"new").unwrap();
+        lb.add_file(&p("/docs/new.txt"), b"new", false).unwrap();
         lb.storage.fail_memory_append_after_successes(1);
         assert!(matches!(lb.commit(), Err(Error::Io(_))));
 
-        assert_eq!(lb.get_file("/docs/new.txt").unwrap(), b"new");
+        assert_eq!(lb.get_file(&p("/docs/new.txt")).unwrap(), b"new");
         let reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
-        assert_eq!(reopened.get_file("/docs/old.txt").unwrap(), b"old");
+        assert_eq!(reopened.get_file(&p("/docs/old.txt")).unwrap(), b"old");
         assert!(matches!(
-            reopened.get_file("/docs/new.txt"),
+            reopened.get_file(&p("/docs/new.txt")),
             Err(Error::NotFound(_))
         ));
 
         lb.commit().unwrap();
         let reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
-        assert_eq!(reopened.get_file("/docs/new.txt").unwrap(), b"new");
+        assert_eq!(reopened.get_file(&p("/docs/new.txt")).unwrap(), b"new");
     }
 
     #[test]
     fn failed_commit_header_publish_reopens_previous_commit() {
         let mut lb = Lockbox::create("secret");
-        lb.put_file("/docs/old.txt", b"old").unwrap();
+        lb.add_file(&p("/docs/old.txt"), b"old", false).unwrap();
         lb.commit().unwrap();
 
-        lb.put_file("/docs/new.txt", b"new").unwrap();
+        lb.add_file(&p("/docs/new.txt"), b"new", false).unwrap();
         lb.storage.fail_memory_next_write_at(0);
         assert!(matches!(lb.commit(), Err(Error::Io(_))));
 
-        assert_eq!(lb.get_file("/docs/new.txt").unwrap(), b"new");
+        assert_eq!(lb.get_file(&p("/docs/new.txt")).unwrap(), b"new");
         let reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
-        assert_eq!(reopened.get_file("/docs/old.txt").unwrap(), b"old");
+        assert_eq!(reopened.get_file(&p("/docs/old.txt")).unwrap(), b"old");
         assert!(matches!(
-            reopened.get_file("/docs/new.txt"),
+            reopened.get_file(&p("/docs/new.txt")),
             Err(Error::NotFound(_))
         ));
 
         lb.commit().unwrap();
         let reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
-        assert_eq!(reopened.get_file("/docs/new.txt").unwrap(), b"new");
+        assert_eq!(reopened.get_file(&p("/docs/new.txt")).unwrap(), b"new");
     }
 
-    fn synthetic_manifest_entries(count: usize) -> Vec<ManifestEntry> {
+    fn synthetic_toc_entries(count: usize) -> Vec<TocEntry> {
         (0..count)
-            .map(|i| ManifestEntry {
-                path: format!("/toc-cow/file-{i:05}.txt"),
+            .map(|i| TocEntry {
+                path: LockboxPath::new(format!("/toc-cow/file-{i:05}.txt")).unwrap(),
                 len: 1,
                 record_offset: 1_000_000 + i as u64,
                 record_len: 64,

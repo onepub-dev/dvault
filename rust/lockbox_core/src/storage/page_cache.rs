@@ -461,12 +461,7 @@ impl PageCache {
         }
     }
 
-    pub(crate) fn set_limit(&mut self, limit: CacheLimit) {
-        self.limit = limit;
-        self.limit_bytes = cache_limit_bytes(limit);
-        self.trim_to_limit();
-    }
-
+    #[cfg(test)]
     pub(crate) fn trim_to(&mut self, bytes: u64) {
         self.limit = CacheLimit::Bytes(bytes);
         self.limit_bytes = bytes;

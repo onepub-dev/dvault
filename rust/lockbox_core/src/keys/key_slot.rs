@@ -3,7 +3,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use zeroize::Zeroize;
 
 use crate::key_derivation::{derive_key_from_password, derive_key_from_password_bytes};
-use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey, MlKemWrappedKey};
+use crate::key_wrap::{MlKemKeyPair, MlKemRecipientPublicKey, MlKemWrappedKey};
 use crate::secret_vec::SecretString;
 use crate::{Error, Result};
 use std::fmt;
@@ -106,7 +106,7 @@ impl KeySlot {
 
     pub(crate) fn ml_kem_1024(
         id: u64,
-        recipient: &MlKemRecipientKey,
+        recipient: &MlKemRecipientPublicKey,
         content_key: &[u8],
     ) -> Result<Self> {
         Ok(Self::MlKem1024 {

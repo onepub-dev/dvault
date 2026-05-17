@@ -1,11 +1,11 @@
 use crate::constants::DEFAULT_METADATA_MAX_PAGE_BODY_BYTES;
-use crate::manifest_codec::{decode_manifest_entries, encode_manifest_entries};
-use crate::manifest_entry::ManifestEntry;
 use crate::page_tree::{
     decode_page_tree_children, encode_page_tree_children, group_by_encoded_size,
     page_tree_child_encoded_len, PageTreeChild,
 };
-use crate::{Error, Result};
+use crate::toc_codec::{decode_toc_entries, encode_toc_entries};
+use crate::toc_entry::TocEntry;
+use crate::{Error, LockboxPath, Result};
 
 const TOC_NODE_VERSION: u8 = 1;
 const TOC_LEAF: u8 = 1;
@@ -16,20 +16,20 @@ const ENTRY_COUNT_BYTES: usize = 4;
 
 #[derive(Debug)]
 pub(crate) enum TocNode {
-    Leaf(Vec<ManifestEntry>),
+    Leaf(Vec<TocEntry>),
     Internal(Vec<TocChild>),
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct TocChild {
-    pub(crate) first_path: String,
+    pub(crate) first_path: LockboxPath,
     pub(crate) offset: u64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct TocLeaf {
     pub(crate) offset: u64,
-    pub(crate) entries: Vec<ManifestEntry>,
+    pub(crate) entries: Vec<TocEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,11 +79,11 @@ impl TocTreeNode {
     }
 }
 
-pub(crate) fn encode_toc_leaf(entries: &[ManifestEntry]) -> Result<Vec<u8>> {
+pub(crate) fn encode_toc_leaf(entries: &[TocEntry]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     out.push(TOC_NODE_VERSION);
     out.push(TOC_LEAF);
-    out.extend_from_slice(&encode_manifest_entries(entries));
+    out.extend_from_slice(&encode_toc_entries(entries));
     if out.len() > DEFAULT_METADATA_MAX_PAGE_BODY_BYTES {
         return Err(Error::SecurityLimitExceeded(
             "TOC leaf exceeds maximum page size".to_string(),
@@ -99,7 +99,7 @@ pub(crate) fn encode_toc_internal(children: &[TocChild]) -> Result<Vec<u8>> {
     let routing_children = children
         .iter()
         .map(|child| PageTreeChild {
-            first_key: child.first_path.clone(),
+            first_key: child.first_path.as_str().to_string(),
             offset: child.offset,
         })
         .collect::<Vec<_>>();
@@ -112,13 +112,8 @@ pub(crate) fn encode_toc_internal(children: &[TocChild]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-pub(crate) fn toc_leaf_groups(entries: &[ManifestEntry]) -> Result<Vec<&[ManifestEntry]>> {
-    group_by_encoded_size(
-        entries,
-        leaf_base_len(),
-        manifest_entry_encoded_len,
-        "TOC entry",
-    )
+pub(crate) fn toc_leaf_groups(entries: &[TocEntry]) -> Result<Vec<&[TocEntry]>> {
+    group_by_encoded_size(entries, leaf_base_len(), toc_entry_encoded_len, "TOC entry")
 }
 
 pub(crate) fn toc_child_groups(children: &[TocChild]) -> Result<Vec<&[TocChild]>> {
@@ -130,16 +125,12 @@ pub(crate) fn toc_child_groups(children: &[TocChild]) -> Result<Vec<&[TocChild]>
     )
 }
 
-pub(crate) fn toc_leaf_fill_percent(entries: &[ManifestEntry]) -> usize {
+pub(crate) fn toc_leaf_fill_percent(entries: &[TocEntry]) -> usize {
     encoded_leaf_len(entries).saturating_mul(100) / DEFAULT_METADATA_MAX_PAGE_BODY_BYTES
 }
 
-pub(crate) fn encoded_leaf_len(entries: &[ManifestEntry]) -> usize {
-    leaf_base_len()
-        + entries
-            .iter()
-            .map(manifest_entry_encoded_len)
-            .sum::<usize>()
+pub(crate) fn encoded_leaf_len(entries: &[TocEntry]) -> usize {
+    leaf_base_len() + entries.iter().map(toc_entry_encoded_len).sum::<usize>()
 }
 
 fn leaf_base_len() -> usize {
@@ -150,7 +141,7 @@ fn internal_base_len() -> usize {
     TOC_NODE_PREFIX_BYTES + 4
 }
 
-fn manifest_entry_encoded_len(entry: &ManifestEntry) -> usize {
+fn toc_entry_encoded_len(entry: &TocEntry) -> usize {
     2 + entry.path.len()
         + 8
         + 8
@@ -164,7 +155,7 @@ fn manifest_entry_encoded_len(entry: &ManifestEntry) -> usize {
             .chunks
             .iter()
             .map(|chunk| {
-                let stored_path_len = if chunk.stored_path == entry.path {
+                let stored_path_len = if chunk.stored_path == entry.path.as_str() {
                     0
                 } else {
                     chunk.stored_path.len()
@@ -176,7 +167,7 @@ fn manifest_entry_encoded_len(entry: &ManifestEntry) -> usize {
 
 fn toc_child_encoded_len(child: &TocChild) -> usize {
     page_tree_child_encoded_len(&PageTreeChild {
-        first_key: child.first_path.clone(),
+        first_key: child.first_path.as_str().to_string(),
         offset: child.offset,
     })
 }
@@ -187,7 +178,7 @@ pub(crate) fn decode_toc_node(payload: &[u8]) -> Result<TocNode> {
     }
     match payload[1] {
         TOC_LEAF => {
-            let entries = decode_manifest_entries(&payload[2..])?;
+            let entries = decode_toc_entries(&payload[2..])?;
             validate_leaf_entries(&entries)?;
             Ok(TocNode::Leaf(entries))
         }
@@ -196,7 +187,7 @@ pub(crate) fn decode_toc_node(payload: &[u8]) -> Result<TocNode> {
     }
 }
 
-fn validate_leaf_entries(entries: &[ManifestEntry]) -> Result<()> {
+fn validate_leaf_entries(entries: &[TocEntry]) -> Result<()> {
     for pair in entries.windows(2) {
         if pair[0].path >= pair[1].path {
             return Err(Error::CorruptRecord);
@@ -206,30 +197,31 @@ fn validate_leaf_entries(entries: &[ManifestEntry]) -> Result<()> {
 }
 
 fn decode_toc_internal(payload: &[u8]) -> Result<TocNode> {
-    Ok(TocNode::Internal(
-        decode_page_tree_children(payload, |key| {
-            crate::logical_path::validate_stored_path(key).map(|_| ())
-        })?
-        .into_iter()
-        .map(|child| TocChild {
-            first_path: child.first_key,
+    let children = decode_page_tree_children(payload, |key| {
+        LockboxPath::from_stored(key, false).map(|_| ())
+    })?
+    .into_iter()
+    .map(|child| {
+        Ok(TocChild {
+            first_path: LockboxPath::from_stored(&child.first_key, false)?,
             offset: child.offset,
         })
-        .collect(),
-    ))
+    })
+    .collect::<Result<Vec<_>>>()?;
+    Ok(TocNode::Internal(children))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::constants::DEFAULT_FILE_PERMISSIONS;
-    use crate::manifest_entry::ManifestEntry;
     use crate::node_kind::NodeKind;
+    use crate::toc_entry::TocEntry;
 
     #[test]
     fn toc_leaf_decode_rejects_tampered_paths() {
-        let entry = ManifestEntry {
-            path: "/safe/../evil.txt".to_string(),
+        let entry = TocEntry {
+            path: LockboxPath::from_unchecked_for_test("/safe/../evil.txt"),
             len: 1,
             record_offset: 64,
             record_len: 64,
@@ -249,7 +241,7 @@ mod tests {
     #[test]
     fn toc_internal_decode_rejects_tampered_separator_paths() {
         let payload = encode_toc_internal(&[TocChild {
-            first_path: "/C:/Users/evil.txt".to_string(),
+            first_path: LockboxPath::from_unchecked_for_test("/C:/Users/evil.txt"),
             offset: 64,
         }])
         .unwrap();
@@ -280,11 +272,11 @@ mod tests {
     fn toc_internal_decode_rejects_unsorted_duplicate_or_zero_offsets() {
         let payload = encode_toc_internal(&[
             TocChild {
-                first_path: "/b.txt".to_string(),
+                first_path: LockboxPath::new("/b.txt").unwrap(),
                 offset: 128,
             },
             TocChild {
-                first_path: "/a.txt".to_string(),
+                first_path: LockboxPath::new("/a.txt").unwrap(),
                 offset: 256,
             },
         ])
@@ -296,11 +288,11 @@ mod tests {
 
         let payload = encode_toc_internal(&[
             TocChild {
-                first_path: "/a.txt".to_string(),
+                first_path: LockboxPath::new("/a.txt").unwrap(),
                 offset: 128,
             },
             TocChild {
-                first_path: "/a.txt".to_string(),
+                first_path: LockboxPath::new("/a.txt").unwrap(),
                 offset: 256,
             },
         ])
@@ -311,7 +303,7 @@ mod tests {
         ));
 
         let payload = encode_toc_internal(&[TocChild {
-            first_path: "/a.txt".to_string(),
+            first_path: LockboxPath::new("/a.txt").unwrap(),
             offset: 0,
         }])
         .unwrap();
@@ -324,7 +316,7 @@ mod tests {
     #[test]
     fn toc_internal_numeric_fields_are_little_endian() {
         let children = vec![TocChild {
-            first_path: "/a".to_string(),
+            first_path: LockboxPath::new("/a").unwrap(),
             offset: 0x0102_0304_0506_0708,
         }];
         let encoded = encode_toc_internal(&children).unwrap();
@@ -348,8 +340,8 @@ mod tests {
     #[test]
     fn toc_leaf_groups_are_sized_by_encoded_bytes() {
         let entries = (0..6000)
-            .map(|i| ManifestEntry {
-                path: format!("/many/file-{i:04}.txt"),
+            .map(|i| TocEntry {
+                path: LockboxPath::new(format!("/many/file-{i:04}.txt")).unwrap(),
                 len: 1,
                 record_offset: 64,
                 record_len: 64,
@@ -368,9 +360,9 @@ mod tests {
         }
     }
 
-    fn entry(path: &str) -> ManifestEntry {
-        ManifestEntry {
-            path: path.to_string(),
+    fn entry(path: &str) -> TocEntry {
+        TocEntry {
+            path: LockboxPath::new(path).unwrap(),
             len: 1,
             record_offset: 64,
             record_len: 64,

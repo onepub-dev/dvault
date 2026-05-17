@@ -3,7 +3,7 @@ name = "lockbox_core"
 version = "0.1.0"
 edition = "2021"
 license-file = "../../LICENSE"
-description = "Lockbox v2 format core with manifest, reuse, and recovery APIs"
+description = "Lockbox v2 format core with TOC, reuse, and recovery APIs"
 
 [lib]
 name = "lockbox_core"

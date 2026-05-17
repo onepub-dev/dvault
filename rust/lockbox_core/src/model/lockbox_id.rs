@@ -8,6 +8,8 @@ pub struct LockboxId([u8; 16]);
 
 impl LockboxId {
     /// Generate a new random version-4 UUID style lockbox id.
+    ///
+    /// Returns `Error::Io` if the system random source fails.
     pub fn new_random() -> Result<Self> {
         let mut bytes = [0u8; 16];
         getrandom::getrandom(&mut bytes).map_err(|err| Error::Io(err.to_string()))?;

@@ -1,14 +1,37 @@
 use std::borrow::Borrow;
+use std::fmt;
+use std::ops::Deref;
 
 use unicode_normalization::UnicodeNormalization;
 
 use crate::constants::{MAX_COMPONENT_BYTES, MAX_PATH_BYTES, MAX_PATH_DEPTH};
 use crate::{Error, Result};
 
+/// Canonical path for an entry inside a lockbox.
+///
+/// `LockboxPath` is distinct from `std::path::Path`, which represents a host
+/// filesystem path. Lockbox paths always use `/` separators, are stored in
+/// canonical Unicode form, and are validated against the lockbox path rules.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct LogicalPath(String);
+pub struct LockboxPath(String);
 
-impl LogicalPath {
+impl LockboxPath {
+    /// Validate and canonicalize a lockbox path.
+    ///
+    /// The root path `/` and trailing slash directory paths are allowed for
+    /// APIs such as listing. File-specific APIs reject directory-only paths.
+    ///
+    /// Returns `Error::InvalidPath` if the path is relative, contains unsafe
+    /// components, exceeds path limits, or contains unsupported characters.
+    pub fn new(path: impl AsRef<str>) -> Result<Self> {
+        Self::from_api(path.as_ref(), true)
+    }
+
+    /// Return the canonical string form of this lockbox path.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     pub(crate) fn from_api(path: &str, allow_dir: bool) -> Result<Self> {
         Ok(Self(canonicalize_api_path(path, allow_dir)?))
     }
@@ -17,57 +40,106 @@ impl LogicalPath {
         Ok(Self(canonicalize_stored_path(path, allow_dir)?))
     }
 
-    pub(crate) fn from_canonical(path: String) -> Self {
-        Self(path)
+    pub(crate) fn as_file_path(&self) -> Result<&str> {
+        validate_lockbox_path(&self.0, false)?;
+        Ok(&self.0)
     }
 
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
+    pub(crate) fn file_path(&self) -> Result<Self> {
+        self.as_file_path()?;
+        Ok(self.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_unchecked_for_test(path: impl Into<String>) -> Self {
+        Self(path.into())
     }
 }
 
-impl Borrow<str> for LogicalPath {
+impl Borrow<str> for LockboxPath {
     fn borrow(&self) -> &str {
         &self.0
     }
 }
 
-impl AsRef<str> for LogicalPath {
+impl AsRef<str> for LockboxPath {
     fn as_ref(&self) -> &str {
         &self.0
     }
 }
 
+impl fmt::Display for LockboxPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Deref for LockboxPath {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PartialEq<&str> for LockboxPath {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<LockboxPath> for &str {
+    fn eq(&self, other: &LockboxPath) -> bool {
+        *self == other.0
+    }
+}
+
+impl TryFrom<&str> for LockboxPath {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<String> for LockboxPath {
+    type Error = Error;
+
+    fn try_from(value: String) -> Result<Self> {
+        Self::new(value)
+    }
+}
+
 pub(crate) fn canonicalize_api_path(path: &str, allow_dir: bool) -> Result<String> {
     if path.is_ascii() {
-        validate_logical_path(path, allow_dir)?;
+        validate_lockbox_path(path, allow_dir)?;
         return Ok(path.to_string());
     }
     let normalized = path.nfc().collect::<String>();
-    validate_logical_path(&normalized, allow_dir)?;
+    validate_lockbox_path(&normalized, allow_dir)?;
     Ok(normalized)
 }
 
 pub(crate) fn canonicalize_stored_path(path: &str, allow_dir: bool) -> Result<String> {
     if path.is_ascii() {
-        validate_logical_path(path, allow_dir)?;
+        validate_lockbox_path(path, allow_dir)?;
         return Ok(path.to_string());
     }
     let normalized = path.nfc().collect::<String>();
     if normalized != path {
         return Err(Error::InvalidPath(path.to_string()));
     }
-    validate_logical_path(path, allow_dir)?;
+    validate_lockbox_path(path, allow_dir)?;
     Ok(normalized)
 }
 
 pub(crate) fn validate_stored_path(path: &str) -> Result<()> {
-    LogicalPath::from_stored(path, false).map(|_| ())
+    LockboxPath::from_stored(path, false).map(|_| ())
 }
 
 pub(crate) fn validate_symlink_paths(link_path: &str, target_path: &str) -> Result<()> {
-    LogicalPath::from_api(link_path, false)?;
-    LogicalPath::from_api(target_path, false)?;
+    LockboxPath::from_api(link_path, false)?;
+    LockboxPath::from_api(target_path, false)?;
     Ok(())
 }
 
@@ -101,9 +173,9 @@ pub(crate) fn glob_matches(pattern: &str, text: &str) -> bool {
     glob_match_parts(&pattern_parts, &text_parts)
 }
 
-fn validate_logical_path(path: &str, allow_dir: bool) -> Result<()> {
+fn validate_lockbox_path(path: &str, allow_dir: bool) -> Result<()> {
     if path.is_ascii() {
-        return validate_ascii_logical_path(path, allow_dir);
+        return validate_ascii_lockbox_path(path, allow_dir);
     }
 
     let invalid = || Error::InvalidPath(path.to_string());
@@ -150,7 +222,7 @@ fn validate_logical_path(path: &str, allow_dir: bool) -> Result<()> {
     Ok(())
 }
 
-fn validate_ascii_logical_path(path: &str, allow_dir: bool) -> Result<()> {
+fn validate_ascii_lockbox_path(path: &str, allow_dir: bool) -> Result<()> {
     let invalid = || Error::InvalidPath(path.to_string());
     let path = if allow_dir && path.len() > 1 {
         path.trim_end_matches('/')
@@ -262,7 +334,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn symlink_validation_requires_logical_paths() {
+    fn symlink_validation_requires_lockbox_paths() {
         assert!(validate_symlink_paths("/links/current", "/docs/current").is_ok());
 
         for target in [

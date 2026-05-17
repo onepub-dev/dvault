@@ -1,6 +1,6 @@
 use std::{fs, io::Read};
 
-use lockbox_core::{EnvSensitivity, SecretString};
+use lockbox_core::{EnvName, EnvSensitivity, EnvValueRef, Error, SecretString};
 
 use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
 use super::help::usage;
@@ -14,7 +14,7 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
         "get" => get_env(lockbox_path, &args[2..], access)?,
         "list" => {
             let lb = open_existing(lockbox_path, access)?;
-            for (name, sensitivity) in lb.list_env_with_sensitivity()? {
+            for (name, sensitivity) in lb.list_env()? {
                 if sensitivity == EnvSensitivity::Secret {
                     println!("{name}\tsecret");
                 } else {
@@ -24,14 +24,18 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
         }
         "export" => {
             let lb = open_existing(lockbox_path, access)?;
-            for (name, value) in lb.get_all_env()? {
-                println!("{name}={}", shell_quote(&value));
-            }
+            lb.visit_env(|name, value| match value {
+                EnvValueRef::Normal(value) => {
+                    println!("{name}={}", shell_quote(value));
+                    Ok(())
+                }
+                EnvValueRef::Secret(_) => Ok(()),
+            })?;
         }
         "rm" => {
-            let name = require_arg(args, 2, "name")?;
+            let name = EnvName::new(require_arg(args, 2, "name")?)?;
             let mut lb = open_existing(lockbox_path, access)?;
-            lb.delete_env_var(name)?;
+            lb.delete_env(&name)?;
             lb.commit()?;
         }
         _ => usage(false),
@@ -51,10 +55,16 @@ fn set_env(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()
 
     if let Some(existing) = existing {
         if request.secret && existing == EnvSensitivity::Normal {
-            return Err("environment variable is not secret; delete and recreate it".into());
+            return Err(Error::InvalidOperation(
+                "environment variable is not secret; delete and recreate it".to_string(),
+            )
+            .into());
         }
         if !request.secret && existing == EnvSensitivity::Secret && request.positional.is_some() {
-            return Err("secret environment variables require an explicit value source".into());
+            return Err(Error::InvalidInput(
+                "secret environment variables require an explicit value source".to_string(),
+            )
+            .into());
         }
     }
 
@@ -65,7 +75,10 @@ fn set_env(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()
         }
         EnvSensitivity::Secret => {
             if request.positional.is_some() {
-                return Err("secret environment variables cannot use positional values".into());
+                return Err(Error::InvalidInput(
+                    "secret environment variables cannot use positional values".to_string(),
+                )
+                .into());
             }
             let value = request.read_secret_value()?;
             lb.set_secret_env(&request.name, &value)?;
@@ -83,16 +96,22 @@ fn get_env(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()
         match args[index].as_str() {
             "-s" | "--secret" => secret = true,
             value if name.is_none() => name = Some(value.to_string()),
-            _ => return Err("unexpected env get argument".into()),
+            _ => {
+                return Err(Error::InvalidInput("unexpected env get argument".to_string()).into());
+            }
         }
         index += 1;
     }
     let Some(name) = name else {
-        return Err("missing env name".into());
+        return Err(Error::InvalidInput("missing env name".to_string()).into());
     };
+    let name = EnvName::new(name)?;
     let lb = open_existing(lockbox_path, access)?;
     if secret {
-        if let Some(()) = lb.with_secret_env(&name, |value| println!("{value}"))? {
+        if let Some(()) = lb
+            .with_secret_env(&name, |value| value.with_str(|value| println!("{value}")))?
+            .transpose()?
+        {
             return Ok(());
         }
     } else if let Some(value) = lb.get_env(&name)? {
@@ -102,7 +121,7 @@ fn get_env(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()
 }
 
 struct EnvSetRequest {
-    name: String,
+    name: EnvName,
     secret: bool,
     positional: Option<String>,
     source: Option<ValueSource>,
@@ -126,7 +145,9 @@ impl EnvSetRequest {
                         &mut source,
                         ValueSource::Value(
                             args.get(index)
-                                .ok_or("missing --value argument")?
+                                .ok_or_else(|| {
+                                    Error::InvalidInput("missing --value argument".to_string())
+                                })?
                                 .to_string(),
                         ),
                     )?;
@@ -137,7 +158,9 @@ impl EnvSetRequest {
                         &mut source,
                         ValueSource::File(
                             args.get(index)
-                                .ok_or("missing --file argument")?
+                                .ok_or_else(|| {
+                                    Error::InvalidInput("missing --file argument".to_string())
+                                })?
                                 .to_string(),
                         ),
                     )?;
@@ -148,22 +171,31 @@ impl EnvSetRequest {
                         &mut source,
                         ValueSource::FromEnv(
                             args.get(index)
-                                .ok_or("missing --from-env argument")?
+                                .ok_or_else(|| {
+                                    Error::InvalidInput("missing --from-env argument".to_string())
+                                })?
                                 .to_string(),
                         ),
                     )?;
                 }
-                value if name.is_none() => name = Some(value.to_string()),
+                value if name.is_none() => name = Some(EnvName::new(value)?),
                 value if positional.is_none() => positional = Some(value.to_string()),
-                _ => return Err("unexpected env set argument".into()),
+                _ => {
+                    return Err(
+                        Error::InvalidInput("unexpected env set argument".to_string()).into(),
+                    );
+                }
             }
             index += 1;
         }
         let Some(name) = name else {
-            return Err("missing env name".into());
+            return Err(Error::InvalidInput("missing env name".to_string()).into());
         };
         if source.is_some() == positional.is_some() {
-            return Err("env set requires exactly one value source".into());
+            return Err(Error::InvalidInput(
+                "env set requires exactly one value source".to_string(),
+            )
+            .into());
         }
         Ok(Self {
             name,
@@ -177,7 +209,11 @@ impl EnvSetRequest {
         if let Some(value) = &self.positional {
             return Ok(value.clone());
         }
-        match self.source.as_ref().ok_or("missing value source")? {
+        match self
+            .source
+            .as_ref()
+            .ok_or_else(|| Error::InvalidInput("missing value source".to_string()))?
+        {
             ValueSource::Interactive => prompt_secret("Value: ")?
                 .with_str(str::to_string)
                 .map_err(Box::<dyn std::error::Error>::from),
@@ -193,17 +229,24 @@ impl EnvSetRequest {
     }
 
     fn read_secret_value(&self) -> CliResult<SecretString> {
-        match self.source.as_ref().ok_or("missing value source")? {
+        match self
+            .source
+            .as_ref()
+            .ok_or_else(|| Error::InvalidInput("missing value source".to_string()))?
+        {
             ValueSource::Interactive => Ok(prompt_secret("Secret value: ")?),
             ValueSource::Value(value) => {
                 let _ = value;
-                Err("--value is not accepted for secret env values; use --stdin, --file, --interactive, or --from-env".into())
+                Err(Error::InvalidInput(
+                    "--value is not accepted for secret env values; use --stdin, --file, --interactive, or --from-env"
+                        .to_string(),
+                )
+                .into())
             }
             ValueSource::File(path) => read_secret_file(path),
             ValueSource::Stdin => read_secret_stdin(),
-            ValueSource::FromEnv(name) => {
-                SecretString::try_from_env(name)?.ok_or_else(|| format!("{name} is not set").into())
-            }
+            ValueSource::FromEnv(name) => SecretString::try_from_env(name)?
+                .ok_or_else(|| Error::InvalidInput(format!("{name} is not set")).into()),
         }
     }
 }
@@ -243,7 +286,9 @@ enum ValueSource {
 
 fn set_source(target: &mut Option<ValueSource>, source: ValueSource) -> CliResult<()> {
     if target.is_some() {
-        return Err("env set accepts exactly one value source".into());
+        return Err(
+            Error::InvalidInput("env set accepts exactly one value source".to_string()).into(),
+        );
     }
     *target = Some(source);
     Ok(())

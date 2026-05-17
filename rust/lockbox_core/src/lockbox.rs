@@ -17,8 +17,7 @@ use crate::key_directory::{
 };
 use crate::key_slot::KeySlot;
 use crate::lockbox_id::LockboxId;
-use crate::logical_path::LogicalPath;
-use crate::manifest_entry::ManifestEntry;
+use crate::lockbox_path::LockboxPath;
 use crate::page::{
     page_size_for_objects, DecodedPage, PageObject, PageObjectKind, DEFAULT_METADATA_PAGE_BYTES,
     DEFAULT_PAGE_BYTES, PAGE_MAGIC,
@@ -28,7 +27,8 @@ use crate::page_object_packer::PageObjectPacker;
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::secret_vec::SecretVec;
 use crate::storage::{Storage, StorageBackend};
-use crate::{CacheLimit, CacheStats, Error, LockboxOptions, Result, WorkloadProfile};
+use crate::toc_entry::TocEntry;
+use crate::{CacheStats, EnvName, Error, LockboxOptions, RecoveryReport, Result, WorkloadProfile};
 use zeroize::Zeroize;
 
 mod commit;
@@ -41,7 +41,18 @@ mod mutation;
 mod recovery;
 mod symlinks;
 
+pub use env::EnvValueRef;
 pub use key_management::{LockboxCreate, LockboxUnlock, UnlockedContentKey};
+pub use recovery::RecoveryScanner;
+
+/// Read-only diagnostics for an opened lockbox.
+///
+/// The inspector intentionally exposes no mutation methods. It is a separate
+/// handle so page/cache details do not sit on the main high-level `Lockbox`
+/// API.
+pub struct LockboxInspector<'a> {
+    lockbox: &'a Lockbox,
+}
 
 /// Open encrypted lockbox container.
 ///
@@ -55,7 +66,7 @@ pub struct Lockbox {
     key: SecretVec,
     sequence: u64,
     commit_root_offset: u64,
-    manifest_offset: u64,
+    toc_root_offset: u64,
     env_root_offset: u64,
     free_index_offset: u64,
     key_directory_offset: u64,
@@ -64,11 +75,11 @@ pub struct Lockbox {
     dirty_key_directory: bool,
     lockbox_id: LockboxId,
     key_slots: Vec<KeySlot>,
-    manifest: BTreeMap<LogicalPath, ManifestEntry>,
+    toc_entries: BTreeMap<LockboxPath, TocEntry>,
     toc_root: Option<TocTreeNode>,
     toc_leaves: Vec<TocLeaf>,
-    dirty_toc_paths: BTreeSet<LogicalPath>,
-    env_vars: RefCell<Option<BTreeMap<String, EnvValue>>>,
+    dirty_toc_paths: BTreeSet<LockboxPath>,
+    env_vars: RefCell<Option<BTreeMap<EnvName, EnvValue>>>,
     env_root: Option<EnvTreeNode>,
     env_leaves: Vec<EnvLeaf>,
     dirty_env: bool,
@@ -78,10 +89,10 @@ pub struct Lockbox {
     record_ref_counts: std::collections::HashMap<u64, usize, FastBuildHasher>,
     pending_redactions: BTreeMap<u64, PendingRedaction>,
     redacted_free_slots: Vec<FreeSlot>,
-    pending_small_files: BTreeMap<String, PendingFileChunk>,
+    pending_small_files: BTreeMap<LockboxPath, PendingFileChunk>,
     pending_small_file_bytes: usize,
     bulk_small_file_packer: PageObjectPacker<PackedSmallFile>,
-    pending_symlinks: BTreeMap<String, String>,
+    pending_symlinks: BTreeMap<LockboxPath, LockboxPath>,
     needs_packing: bool,
 }
 
@@ -92,7 +103,7 @@ impl Lockbox {
             key: self.key.try_clone()?,
             sequence: self.sequence,
             commit_root_offset: self.commit_root_offset,
-            manifest_offset: self.manifest_offset,
+            toc_root_offset: self.toc_root_offset,
             env_root_offset: self.env_root_offset,
             free_index_offset: self.free_index_offset,
             key_directory_offset: self.key_directory_offset,
@@ -101,7 +112,7 @@ impl Lockbox {
             dirty_key_directory: self.dirty_key_directory,
             lockbox_id: self.lockbox_id,
             key_slots: self.key_slots.clone(),
-            manifest: self.manifest.clone(),
+            toc_entries: self.toc_entries.clone(),
             toc_root: self.toc_root.clone(),
             toc_leaves: self.toc_leaves.clone(),
             dirty_toc_paths: self.dirty_toc_paths.clone(),
@@ -123,12 +134,12 @@ impl Lockbox {
         })
     }
 
-    /// Create a new in-memory lockbox protected by a raw content key.
+    #[cfg(test)]
     pub fn create(key: impl AsRef<[u8]>) -> Self {
         Self::create_with_options(key, LockboxOptions::default())
     }
 
-    /// Create a new in-memory lockbox with explicit cache/workload options.
+    #[cfg(test)]
     pub fn create_with_options(key: impl AsRef<[u8]>, options: LockboxOptions) -> Self {
         Self::create_with_lockbox_id_and_options(
             key,
@@ -137,11 +148,12 @@ impl Lockbox {
         )
     }
 
-    /// Create a new in-memory lockbox with a caller-supplied stable id.
+    #[cfg(test)]
     pub fn create_with_lockbox_id(key: impl AsRef<[u8]>, lockbox_id: LockboxId) -> Self {
         Self::create_with_lockbox_id_and_options(key, lockbox_id, LockboxOptions::default())
     }
 
+    #[cfg(test)]
     pub fn create_with_lockbox_id_and_options(
         key: impl AsRef<[u8]>,
         lockbox_id: LockboxId,
@@ -164,7 +176,7 @@ impl Lockbox {
             key,
             sequence: 0,
             commit_root_offset: 0,
-            manifest_offset: 0,
+            toc_root_offset: 0,
             env_root_offset: 0,
             free_index_offset: 0,
             key_directory_offset: 0,
@@ -173,7 +185,7 @@ impl Lockbox {
             dirty_key_directory: false,
             lockbox_id,
             key_slots: Vec::new(),
-            manifest: BTreeMap::new(),
+            toc_entries: BTreeMap::new(),
             toc_root: None,
             toc_leaves: Vec::new(),
             dirty_toc_paths: BTreeSet::new(),
@@ -195,11 +207,12 @@ impl Lockbox {
         }
     }
 
-    /// Open an existing in-memory lockbox with a raw content key.
+    #[cfg(test)]
     pub fn open(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Self> {
         Self::open_with_options(bytes, key, LockboxOptions::default())
     }
 
+    #[cfg(test)]
     pub fn open_with_options(
         bytes: Vec<u8>,
         key: impl AsRef<[u8]>,
@@ -208,6 +221,7 @@ impl Lockbox {
         Self::open_storage(StorageBackend::memory(bytes), key, options)
     }
 
+    #[cfg(test)]
     pub(crate) fn open_storage(
         storage: StorageBackend,
         key: impl AsRef<[u8]>,
@@ -245,7 +259,7 @@ impl Lockbox {
             key,
             sequence,
             commit_root_offset: 0,
-            manifest_offset: 0,
+            toc_root_offset: 0,
             env_root_offset: 0,
             free_index_offset: 0,
             key_directory_offset: header_key_directory_offset,
@@ -254,7 +268,7 @@ impl Lockbox {
             dirty_key_directory: false,
             lockbox_id,
             key_slots: Vec::new(),
-            manifest: BTreeMap::new(),
+            toc_entries: BTreeMap::new(),
             toc_root: None,
             toc_leaves: Vec::new(),
             dirty_toc_paths: BTreeSet::new(),
@@ -317,9 +331,9 @@ impl Lockbox {
         }
 
         if toc_root_offset > 0 {
-            let (manifest, root, leaves) = lockbox.decode_toc_btree(toc_root_offset)?;
-            lockbox.manifest_offset = toc_root_offset;
-            lockbox.manifest = manifest;
+            let (toc_entries, root, leaves) = lockbox.decode_toc_btree(toc_root_offset)?;
+            lockbox.toc_root_offset = toc_root_offset;
+            lockbox.toc_entries = toc_entries;
             lockbox.toc_root = Some(root);
             lockbox.toc_leaves = leaves;
             lockbox.rebuild_record_ref_counts();
@@ -327,7 +341,7 @@ impl Lockbox {
                 let slots = lockbox.read_free_index_slots(lockbox.free_index_offset, 0)?;
                 lockbox.free_space.replace_slots(slots);
             } else {
-                lockbox.rebuild_free_slots_from_manifest();
+                lockbox.rebuild_free_slots_from_toc();
             }
             Ok(lockbox)
         } else {
@@ -338,11 +352,6 @@ impl Lockbox {
     /// Return the stable id embedded in this lockbox.
     pub fn lockbox_id(&self) -> LockboxId {
         self.lockbox_id
-    }
-
-    /// Return the current persisted storage length in bytes.
-    pub fn storage_len(&self) -> Result<u64> {
-        self.storage.len()
     }
 
     /// Set cache behavior tuned for the caller's expected access pattern.
@@ -357,11 +366,6 @@ impl Lockbox {
 
     pub(crate) fn should_discard_file_pages_after_flush(&self) -> bool {
         matches!(self.workload_profile, WorkloadProfile::BulkImport)
-    }
-
-    /// Read only the lockbox id from serialized lockbox bytes.
-    pub fn read_lockbox_id(bytes: &[u8]) -> Result<LockboxId> {
-        crate::header::read_lockbox_id(bytes)
     }
 
     pub(crate) fn bytes(&self) -> Result<Vec<u8>> {
@@ -558,45 +562,25 @@ impl Lockbox {
         self.page_manager.borrow().has_dirty_pages()
     }
 
-    /// Replace the decoded-page cache size policy.
-    pub fn set_cache_limit(&self, limit: CacheLimit) {
-        self.page_manager.borrow_mut().set_limit(limit);
+    /// Return a read-only diagnostics view for this lockbox.
+    pub fn inspector(&self) -> LockboxInspector<'_> {
+        LockboxInspector { lockbox: self }
     }
 
-    /// Evict decoded pages until the cache fits its configured limit.
-    pub fn trim_cache(&self) {
-        self.page_manager.borrow_mut().clear();
+    pub(crate) fn mark_toc_dirty(&mut self, path: &LockboxPath) {
+        self.dirty_toc_paths.insert(path.clone());
     }
 
-    /// Evict decoded pages until at most `bytes` remain cached.
-    pub fn trim_cache_to(&self, bytes: u64) {
-        self.page_manager.borrow_mut().trim_to(bytes);
-    }
-
-    /// Return decoded-page cache usage and hit/miss counters.
-    pub fn cache_stats(&self) -> CacheStats {
-        self.page_manager.borrow().stats()
-    }
-
-    /// Return page-level metadata useful for diagnostics and visualization.
-    pub fn inspect_pages(&self) -> Result<Vec<crate::PageInspection>> {
-        let bytes = self.bytes()?;
-        self.key
-            .with_bytes(|key| Ok(crate::page::inspect_pages(&bytes, self.lockbox_id, key)))?
-    }
-
-    pub(crate) fn mark_toc_dirty(&mut self, path: &str) {
-        self.dirty_toc_paths
-            .insert(LogicalPath::from_canonical(path.to_string()));
-    }
-
-    pub(crate) fn mark_toc_dirty_paths<'a>(&mut self, paths: impl IntoIterator<Item = &'a str>) {
+    pub(crate) fn mark_toc_dirty_paths<'a>(
+        &mut self,
+        paths: impl IntoIterator<Item = &'a LockboxPath>,
+    ) {
         for path in paths {
             self.mark_toc_dirty(path);
         }
     }
 
-    pub(crate) fn free_entry_slots(&mut self, entry: ManifestEntry) -> Result<()> {
+    pub(crate) fn free_entry_slots(&mut self, entry: TocEntry) -> Result<()> {
         for record in self.entry_record_refs(&entry)? {
             self.schedule_page_object_redaction(record.offset, record.len, record.object_id);
         }
@@ -646,7 +630,7 @@ impl Lockbox {
         Ok(())
     }
 
-    pub(crate) fn add_entry_record_refs(&mut self, entry: &ManifestEntry) {
+    pub(crate) fn add_entry_record_refs(&mut self, entry: &TocEntry) {
         if entry.deleted {
             return;
         }
@@ -658,7 +642,7 @@ impl Lockbox {
     fn rebuild_record_ref_counts(&mut self) {
         self.record_ref_counts.clear();
         let entries = self
-            .manifest
+            .toc_entries
             .values()
             .filter(|entry| !entry.deleted)
             .cloned()
@@ -668,10 +652,10 @@ impl Lockbox {
         }
     }
 
-    fn rebuild_free_slots_from_manifest(&mut self) {
+    fn rebuild_free_slots_from_toc(&mut self) {
         self.free_space.clear();
         let deleted_slots: Vec<_> = self
-            .manifest
+            .toc_entries
             .values()
             .filter(|entry| entry.deleted)
             .map(|entry| FreeSlot {
@@ -756,7 +740,7 @@ impl Lockbox {
         kept_object_ids: &BTreeSet<u64>,
     ) {
         let mut dirty = Vec::new();
-        for entry in self.manifest.values_mut() {
+        for entry in self.toc_entries.values_mut() {
             if entry.deleted {
                 continue;
             }
@@ -782,10 +766,10 @@ impl Lockbox {
                 dirty.push(entry.path.clone());
             }
         }
-        self.mark_toc_dirty_paths(dirty.iter().map(String::as_str));
+        self.mark_toc_dirty_paths(dirty.iter());
     }
 
-    fn entry_record_refs(&self, entry: &ManifestEntry) -> Result<Vec<RecordRef>> {
+    fn entry_record_refs(&self, entry: &TocEntry) -> Result<Vec<RecordRef>> {
         if entry.record_len == 0 && entry.chunks.is_empty() {
             return Ok(Vec::new());
         }
@@ -820,13 +804,9 @@ impl Lockbox {
     fn decode_toc_btree(
         &self,
         root_offset: u64,
-    ) -> Result<(
-        BTreeMap<LogicalPath, ManifestEntry>,
-        TocTreeNode,
-        Vec<TocLeaf>,
-    )> {
-        let mut manifest = BTreeMap::new();
-        let root = self.decode_toc_node_into(root_offset, &mut manifest, 0)?;
+    ) -> Result<(BTreeMap<LockboxPath, TocEntry>, TocTreeNode, Vec<TocLeaf>)> {
+        let mut toc_entries = BTreeMap::new();
+        let root = self.decode_toc_node_into(root_offset, &mut toc_entries, 0)?;
         let mut leaves = Vec::new();
         root.collect_leaves(&mut leaves);
         leaves.sort_by(|left, right| {
@@ -842,13 +822,13 @@ impl Lockbox {
                 .unwrap_or("");
             left_path.cmp(right_path)
         });
-        Ok((manifest, root, leaves))
+        Ok((toc_entries, root, leaves))
     }
 
     fn decode_toc_node_into(
         &self,
         offset: u64,
-        manifest: &mut BTreeMap<LogicalPath, ManifestEntry>,
+        toc_entries: &mut BTreeMap<LockboxPath, TocEntry>,
         depth: usize,
     ) -> Result<TocTreeNode> {
         if depth > 8 {
@@ -858,7 +838,7 @@ impl Lockbox {
             TocNode::Leaf(entries) => {
                 let leaf_entries = entries.clone();
                 for entry in entries {
-                    manifest.insert(LogicalPath::from_canonical(entry.path.clone()), entry);
+                    toc_entries.insert(entry.path.clone(), entry);
                 }
                 Ok(TocTreeNode::Leaf(TocLeaf {
                     offset,
@@ -868,7 +848,7 @@ impl Lockbox {
             TocNode::Internal(children) => {
                 let mut nodes = Vec::with_capacity(children.len());
                 for child in children {
-                    nodes.push(self.decode_toc_node_into(child.offset, manifest, depth + 1)?);
+                    nodes.push(self.decode_toc_node_into(child.offset, toc_entries, depth + 1)?);
                 }
                 Ok(TocTreeNode::Internal(TocInternal {
                     offset,
@@ -960,6 +940,57 @@ impl Lockbox {
     }
 }
 
+impl LockboxInspector<'_> {
+    /// Return the current persisted storage length in bytes.
+    ///
+    /// Returns `Error::Io` if the backing storage cannot report its length.
+    pub fn storage_len(&self) -> Result<u64> {
+        self.lockbox.storage.len()
+    }
+
+    /// Return decoded-page cache usage and hit/miss counters.
+    pub fn cache_stats(&self) -> CacheStats {
+        self.lockbox.page_manager.borrow().stats()
+    }
+
+    /// Return page-level metadata useful for diagnostics and visualization.
+    ///
+    /// Returns storage or authentication errors if lockbox bytes cannot be
+    /// materialized for inspection.
+    pub fn inspect_pages(&self) -> Result<Vec<crate::PageInspection>> {
+        let bytes = self.lockbox.bytes()?;
+        self.lockbox.key.with_bytes(|key| {
+            Ok(crate::page::inspect_pages(
+                &bytes,
+                self.lockbox.lockbox_id,
+                key,
+            ))
+        })?
+    }
+
+    /// Scan the current persisted storage and return a recovery report.
+    pub fn recovery_report(&self) -> RecoveryReport {
+        match self.lockbox.bytes() {
+            Ok(bytes) => self
+                .lockbox
+                .key
+                .with_bytes(|key| RecoveryScanner::scan_bytes(bytes, key))
+                .unwrap_or_else(|_| corrupt_recovery_report()),
+            Err(_err) => corrupt_recovery_report(),
+        }
+    }
+}
+
+fn corrupt_recovery_report() -> RecoveryReport {
+    RecoveryReport {
+        intact_files: Vec::new(),
+        intact_file_count: 0,
+        partial_files: 0,
+        corrupt_records: 1,
+        toc_recovered: false,
+    }
+}
+
 fn record_kind_from_object_kind(kind: PageObjectKind) -> Result<RecordKind> {
     match kind {
         PageObjectKind::PackedFileData | PageObjectKind::FileData => Ok(RecordKind::FilePage),
@@ -978,7 +1009,7 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Result<RecordKind> {
     }
 }
 
-fn entry_record_slots(entry: &ManifestEntry) -> Vec<(u64, u64)> {
+fn entry_record_slots(entry: &TocEntry) -> Vec<(u64, u64)> {
     if entry.record_len == 0 && entry.chunks.is_empty() {
         return Vec::new();
     }
@@ -1014,10 +1045,14 @@ struct PendingRedaction {
 mod tests {
     use super::*;
 
+    fn p(path: impl AsRef<str>) -> crate::LockboxPath {
+        crate::LockboxPath::new(path).unwrap()
+    }
+
     #[test]
     fn path_is_not_visible_in_cleartext() {
         let mut lb = Lockbox::create("secret");
-        lb.put_file("/private/tax.pdf", b"1234").unwrap();
+        lb.add_file(&p("/private/tax.pdf"), b"1234", false).unwrap();
         lb.commit().unwrap();
 
         let bytes = lb.to_bytes();

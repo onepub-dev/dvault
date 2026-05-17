@@ -1,8 +1,18 @@
-use lockbox_core::{ListOptions, Lockbox};
+use lockbox_core::{
+    EnvName, ListOptions, Lockbox, LockboxCreate, LockboxPath, LockboxUnlock, SecretVec,
+};
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
 
 const KEY: &[u8] = b"lockbox endian interoperability key";
+
+fn p(path: impl AsRef<str>) -> LockboxPath {
+    LockboxPath::new(path).unwrap()
+}
+
+fn env(name: impl AsRef<str>) -> EnvName {
+    EnvName::new(name).unwrap()
+}
 
 #[test]
 #[ignore = "CI-only architecture/endian artifact transfer test"]
@@ -35,56 +45,75 @@ fn create_fixture(path: &Path) {
     }
     let _ = std::fs::remove_file(path);
 
-    let mut lockbox = Lockbox::create_path(path, KEY).unwrap();
+    let mut lockbox = Lockbox::create_file(
+        path,
+        LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+    )
+    .unwrap();
     lockbox
-        .put_file(
-            "/docs/readme.txt",
+        .add_file(
+            &p("/docs/readme.txt"),
             b"lockbox endian interoperability fixture\n",
+            false,
         )
         .unwrap();
     lockbox
-        .put_file("/unicode/cafe\u{301}.txt", "cafe\u{301}\n".as_bytes())
+        .add_file(
+            &p("/unicode/cafe\u{301}.txt"),
+            "cafe\u{301}\n".as_bytes(),
+            false,
+        )
         .unwrap();
     lockbox
-        .put_file_from_reader("/data/randomish.bin", PatternReader::new(2 * 1024 * 1024))
+        .add_file_from_reader(
+            &p("/data/randomish.bin"),
+            PatternReader::new(2 * 1024 * 1024),
+            false,
+        )
         .unwrap();
     lockbox
-        .put_file("/small/repeated.bin", &vec![b'x'; 128 * 1024])
+        .add_file(&p("/small/repeated.bin"), &vec![b'x'; 128 * 1024], false)
         .unwrap();
-    lockbox.set_env("INTEROP_MODE", "cross-endian").unwrap();
+    lockbox
+        .set_env(&env("INTEROP_MODE"), "cross-endian")
+        .unwrap();
     lockbox.commit().unwrap();
 }
 
 fn verify_fixture(path: &Path) {
-    let lockbox = Lockbox::open_path(path, KEY).unwrap();
+    let lockbox = Lockbox::open_file(
+        path,
+        LockboxUnlock::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+    )
+    .unwrap();
 
     assert_eq!(
-        lockbox.get_file("/docs/readme.txt").unwrap(),
+        lockbox.get_file(&p("/docs/readme.txt")).unwrap(),
         b"lockbox endian interoperability fixture\n"
     );
     assert_eq!(
-        std::str::from_utf8(&lockbox.get_file("/unicode/caf\u{e9}.txt").unwrap()).unwrap(),
+        std::str::from_utf8(&lockbox.get_file(&p("/unicode/caf\u{e9}.txt")).unwrap()).unwrap(),
         "cafe\u{301}\n"
     );
     assert_eq!(
-        lockbox.get_file("/small/repeated.bin").unwrap(),
+        lockbox.get_file(&p("/small/repeated.bin")).unwrap(),
         vec![b'x'; 128 * 1024]
     );
     assert_eq!(
         lockbox
-            .read_file_range("/data/randomish.bin", 1024 * 1024 - 17, 4096)
+            .read_file_range(&p("/data/randomish.bin"), 1024 * 1024 - 17, 4096)
             .unwrap(),
         randomish_bytes(1024 * 1024 - 17, 4096)
     );
     assert_eq!(
-        lockbox.get_env("INTEROP_MODE").unwrap().as_deref(),
+        lockbox.get_env(&env("INTEROP_MODE")).unwrap().as_deref(),
         Some("cross-endian")
     );
 
     let entries = lockbox
         .list_iter(ListOptions {
             recursive: true,
-            ..ListOptions::new("/")
+            ..ListOptions::new(&p("/"))
         })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()

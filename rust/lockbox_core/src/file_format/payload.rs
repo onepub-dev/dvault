@@ -1,9 +1,9 @@
 use crate::file_chunk::{DecodedFileChunk, PendingFileChunk};
-use crate::logical_path::{
+use crate::lockbox_path::{
     validate_stored_path as validate_path, validate_symlink_paths as validate_symlink,
 };
 use crate::security::validate_permissions;
-use crate::{Error, Result};
+use crate::{Error, LockboxPath, Result};
 
 #[cfg(test)]
 fn encode_file_payload(path: &str, permissions: u32, data: &[u8]) -> Vec<u8> {
@@ -62,7 +62,7 @@ pub(crate) fn encode_file_fragment_payload(
     compressed_len: u64,
     fragment_offset: u64,
 ) -> Vec<u8> {
-    let path_bytes = chunk.path.as_bytes();
+    let path_bytes = chunk.path.as_str().as_bytes();
     let mut out = Vec::with_capacity(2 + path_bytes.len() + 4 + 8 * 5 + 2 + chunk.data.len());
     out.extend_from_slice(&(path_bytes.len() as u16).to_le_bytes());
     out.extend_from_slice(path_bytes);
@@ -83,7 +83,7 @@ pub(crate) fn encode_file_fragment_payload(
 pub(crate) fn decode_file_fragment_payload(payload: &[u8]) -> Result<DecodedFileChunk> {
     let view = decode_file_fragment_payload_view(payload)?;
     Ok(DecodedFileChunk {
-        path: view.path.to_string(),
+        path: LockboxPath::from_stored(view.path, false)?,
         permissions: view.permissions,
         total_len: view.total_len,
         file_offset: view.file_offset,
@@ -161,9 +161,9 @@ pub(crate) struct DecodedFileChunkView<'a> {
     pub(crate) data: &'a [u8],
 }
 
-pub(crate) fn encode_symlink_payload(path: &str, target: &str) -> Vec<u8> {
-    let path_bytes = path.as_bytes();
-    let target_bytes = target.as_bytes();
+pub(crate) fn encode_symlink_payload(path: &LockboxPath, target: &LockboxPath) -> Vec<u8> {
+    let path_bytes = path.as_str().as_bytes();
+    let target_bytes = target.as_str().as_bytes();
     let mut out = Vec::with_capacity(2 + path_bytes.len() + 2 + target_bytes.len());
     out.extend_from_slice(&(path_bytes.len() as u16).to_le_bytes());
     out.extend_from_slice(path_bytes);
@@ -172,7 +172,7 @@ pub(crate) fn encode_symlink_payload(path: &str, target: &str) -> Vec<u8> {
     out
 }
 
-pub(crate) fn decode_symlink_payload(payload: &[u8]) -> Result<(String, String)> {
+pub(crate) fn decode_symlink_payload(payload: &[u8]) -> Result<(LockboxPath, LockboxPath)> {
     if payload.len() < 4 {
         return Err(Error::CorruptRecord);
     }
@@ -182,7 +182,7 @@ pub(crate) fn decode_symlink_payload(payload: &[u8]) -> Result<(String, String)>
     }
     let path =
         String::from_utf8(payload[2..2 + path_len].to_vec()).map_err(|_| Error::CorruptRecord)?;
-    validate_path(&path)?;
+    let path = LockboxPath::from_stored(&path, false)?;
     let target_len_start = 2 + path_len;
     let target_len = u16::from_le_bytes(
         payload[target_len_start..target_len_start + 2]
@@ -195,7 +195,8 @@ pub(crate) fn decode_symlink_payload(payload: &[u8]) -> Result<(String, String)>
     }
     let target = String::from_utf8(payload[target_start..target_start + target_len].to_vec())
         .map_err(|_| Error::CorruptRecord)?;
-    validate_symlink(&path, &target)?;
+    let target = LockboxPath::from_stored(&target, false)?;
+    validate_symlink(path.as_str(), target.as_str())?;
     Ok((path, target))
 }
 

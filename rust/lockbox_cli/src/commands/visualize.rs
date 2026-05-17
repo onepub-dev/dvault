@@ -1,5 +1,5 @@
 use super::context::{open_existing, require_arg, Access, CliResult};
-use lockbox_core::{ListOptions, Lockbox};
+use lockbox_core::{ListOptions, Lockbox, LockboxPath};
 
 pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
@@ -10,7 +10,8 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
 fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
     println!("Lockbox");
     println!("  id: {}", lb.lockbox_id());
-    println!("  size: {} bytes", lb.storage_len()?);
+    let inspector = lb.inspector();
+    println!("  size: {} bytes", inspector.storage_len()?);
 
     let key_slot_count = lb.list_key_slots().len();
     let env_count = lb.list_env()?.len();
@@ -18,7 +19,7 @@ fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
     let mut symlink_count = 0usize;
     let mut total_file_bytes = 0u64;
     for entry in lb.list_iter(ListOptions {
-        path: "/".to_string(),
+        path: LockboxPath::new("/")?,
         glob: None,
         recursive: true,
         include_files: true,
@@ -43,7 +44,7 @@ fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
     println!("    logical file bytes: {total_file_bytes}");
 
     println!("  pages:");
-    let pages = lb.inspect_pages()?;
+    let pages = inspector.inspect_pages()?;
     if pages.is_empty() {
         println!("    <none>");
     } else {
@@ -63,12 +64,12 @@ fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
         }
     }
 
-    let report = lb.recover_current();
+    let report = inspector.recovery_report();
     println!("  recovery scan:");
     println!("    intact files: {}", report.intact_file_count);
     println!("    partial files: {}", report.partial_files);
     println!("    corrupt records/pages: {}", report.corrupt_records);
-    println!("    manifest recovered: {}", report.manifest_recovered);
+    println!("    TOC recovered: {}", report.toc_recovered);
 
     Ok(())
 }

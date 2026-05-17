@@ -1,5 +1,5 @@
 use super::context::{default_vault, require_arg, CliResult};
-use lockbox_core::MlKemKeyPair;
+use lockbox_core::{Error, MlKemKeyPair};
 use lockbox_vault::{
     default_vault_dir, export_private_key, export_public_key, import_private_key_file,
     import_public_key, KeyFormat, VaultDirectory,
@@ -56,7 +56,10 @@ fn keygen(args: &[String]) -> CliResult<()> {
     let keypair = MlKemKeyPair::generate()?;
     vault.store_private_key(name, &keypair)?;
     if let Some(path) = public_path {
-        fs::write(path, export_public_key(&keypair.recipient_key(), format)?)?;
+        fs::write(
+            path,
+            export_public_key(&keypair.recipient_public_key(), format)?,
+        )?;
     }
     println!("{name}");
     Ok(())
@@ -93,7 +96,7 @@ fn import_key(args: &[String]) -> CliResult<()> {
     if let Some(path) = public_path {
         fs::write(
             path,
-            export_public_key(&keypair.recipient_key(), KeyFormat::LockboxPem)?,
+            export_public_key(&keypair.recipient_public_key(), KeyFormat::LockboxPem)?,
         )?;
     }
     Ok(())
@@ -130,12 +133,12 @@ fn export_public(args: &[String]) -> CliResult<()> {
     let (name, destination) = match args.as_slice() {
         [destination] => (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str()),
         [name, destination, ..] => (name.as_str(), destination.as_str()),
-        [] => return Err("missing public key path".into()),
+        [] => return Err(Error::InvalidInput("missing public key path".to_string()).into()),
     };
     let keypair = default_vault()?.load_private_key(name)?;
     fs::write(
         destination,
-        export_public_key(&keypair.recipient_key(), format)?,
+        export_public_key(&keypair.recipient_public_key(), format)?,
     )?;
     Ok(())
 }
@@ -145,7 +148,7 @@ fn export_key(args: &[String]) -> CliResult<()> {
     let (name, destination) = match args.as_slice() {
         [destination] => (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str()),
         [name, destination, ..] => (name.as_str(), destination.as_str()),
-        [] => return Err("missing private key path".into()),
+        [] => return Err(Error::InvalidInput("missing private key path".to_string()).into()),
     };
     let keypair = default_vault()?.load_private_key(name)?;
     write_private_key(destination, &export_private_key(&keypair, format)?)?;
@@ -160,7 +163,7 @@ fn parse_format(args: &[String]) -> CliResult<(Vec<String>, KeyFormat)> {
         if args[index] == "--format" {
             let value = args
                 .get(index + 1)
-                .ok_or("missing --format value")?
+                .ok_or_else(|| Error::InvalidInput("missing --format value".to_string()))?
                 .as_str();
             format = KeyFormat::parse(value)?;
             index += 2;

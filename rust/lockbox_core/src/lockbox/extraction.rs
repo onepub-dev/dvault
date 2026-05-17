@@ -1,123 +1,21 @@
 use super::Lockbox;
 use crate::host_path::HostPath;
-use crate::logical_path::{canonicalize_stored_path, validate_symlink_paths as validate_symlink};
-use crate::manifest_entry::ManifestEntry;
+use crate::lockbox_path::{canonicalize_stored_path, validate_symlink_paths as validate_symlink};
 use crate::node_kind::NodeKind;
-use crate::{Error, ExtractPolicy, ExtractedFile, ExtractedNode, ExtractedSymlink, Result};
+use crate::toc_entry::TocEntry;
+use crate::{Error, ExtractPolicy, Result};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 impl Lockbox {
-    pub fn extract_all(&self, policy: &ExtractPolicy) -> Result<Vec<ExtractedFile>> {
-        let live_entries: Vec<_> = self
-            .manifest
-            .values()
-            .filter(|entry| !entry.deleted && entry.node_kind == NodeKind::File)
-            .collect();
-
-        if live_entries.len() > policy.max_files {
-            return Err(Error::SecurityLimitExceeded(format!(
-                "file count {} exceeds limit {}",
-                live_entries.len(),
-                policy.max_files
-            )));
-        }
-
-        let mut total = 0u64;
-        let mut extracted = Vec::with_capacity(live_entries.len());
-        for entry in live_entries {
-            if entry.len > policy.max_file_bytes {
-                return Err(Error::SecurityLimitExceeded(format!(
-                    "{} is {} bytes, limit is {}",
-                    entry.path, entry.len, policy.max_file_bytes
-                )));
-            }
-            total = total.checked_add(entry.len).ok_or_else(|| {
-                Error::SecurityLimitExceeded("total extracted size overflow".to_string())
-            })?;
-            if total > policy.max_total_bytes {
-                return Err(Error::SecurityLimitExceeded(format!(
-                    "total extracted bytes {total} exceeds limit {}",
-                    policy.max_total_bytes
-                )));
-            }
-            let bytes = self.read_file_entry_cached(entry)?;
-            if bytes.len() as u64 != entry.len {
-                return Err(Error::CorruptRecord);
-            }
-            extracted.push(ExtractedFile {
-                path: entry.path.clone(),
-                bytes,
-                permissions: entry.permissions,
-            });
-        }
-        Ok(extracted)
-    }
-
-    pub fn extract_all_nodes(&self, policy: &ExtractPolicy) -> Result<Vec<ExtractedNode>> {
-        let live_entries: Vec<_> = self
-            .manifest
-            .values()
-            .filter(|entry| !entry.deleted)
-            .collect();
-
-        if live_entries.len() > policy.max_files {
-            return Err(Error::SecurityLimitExceeded(format!(
-                "node count {} exceeds limit {}",
-                live_entries.len(),
-                policy.max_files
-            )));
-        }
-
-        let mut total = 0u64;
-        let mut extracted = Vec::with_capacity(live_entries.len());
-        for entry in live_entries {
-            match entry.node_kind {
-                NodeKind::File => {
-                    if entry.len > policy.max_file_bytes {
-                        return Err(Error::SecurityLimitExceeded(format!(
-                            "{} is {} bytes, limit is {}",
-                            entry.path, entry.len, policy.max_file_bytes
-                        )));
-                    }
-                    total = total.checked_add(entry.len).ok_or_else(|| {
-                        Error::SecurityLimitExceeded("total extracted size overflow".to_string())
-                    })?;
-                    if total > policy.max_total_bytes {
-                        return Err(Error::SecurityLimitExceeded(format!(
-                            "total extracted bytes {total} exceeds limit {}",
-                            policy.max_total_bytes
-                        )));
-                    }
-                    let bytes = self.read_file_entry_cached(entry)?;
-                    extracted.push(ExtractedNode::File(ExtractedFile {
-                        path: entry.path.clone(),
-                        bytes,
-                        permissions: entry.permissions,
-                    }));
-                }
-                NodeKind::Symlink => {
-                    if !policy.restore_symlinks {
-                        continue;
-                    }
-                    let target = self.get_symlink_target(&entry.path)?;
-                    validate_symlink(&entry.path, &target)?;
-                    extracted.push(ExtractedNode::Symlink(ExtractedSymlink {
-                        path: entry.path.clone(),
-                        target,
-                    }));
-                }
-            }
-        }
-        Ok(extracted)
-    }
-
-    pub fn extract_to_directory(
-        &self,
-        destination: impl AsRef<Path>,
-        policy: &ExtractPolicy,
-    ) -> Result<()> {
+    /// Extract all permitted entries into a destination directory.
+    ///
+    /// Returns `Error::Io` for host filesystem failures,
+    /// `Error::SecurityLimitExceeded` when the extraction policy rejects the
+    /// destination or size/count limits, and lockbox read errors for corrupt or
+    /// missing stored entries.
+    pub fn extract_to_directory(&self, destination: &Path, policy: &ExtractPolicy) -> Result<()> {
         let destination = HostPath::new(destination);
         let destination = destination.as_path();
         if !destination.exists() {
@@ -161,25 +59,17 @@ impl Lockbox {
         Ok(())
     }
 
-    pub fn extract_all_to(
-        &self,
-        destination: impl AsRef<Path>,
-        policy: &ExtractPolicy,
-    ) -> Result<()> {
-        self.extract_to_directory(destination, policy)
-    }
-
     fn extract_entries_to_directory(
         &self,
         destination: &Path,
         policy: &ExtractPolicy,
     ) -> Result<()> {
-        let live_entries = self.validate_extract_plan(policy)?;
-        if self.should_extract_files_in_parallel(&live_entries) {
-            self.extract_entries_to_directory_parallel(destination, policy, &live_entries)?;
+        let current_entries = self.validate_extract_plan(policy)?;
+        if self.should_extract_files_in_parallel(&current_entries) {
+            self.extract_entries_to_directory_parallel(destination, policy, &current_entries)?;
             return Ok(());
         }
-        for (index, entry) in live_entries.into_iter().enumerate() {
+        for (index, entry) in current_entries.into_iter().enumerate() {
             match entry.node_kind {
                 NodeKind::File => {
                     let out_path = checked_destination(destination, &entry.path)?;
@@ -190,7 +80,7 @@ impl Lockbox {
                         continue;
                     }
                     let target = self.get_symlink_target(&entry.path)?;
-                    validate_symlink(&entry.path, &target)?;
+                    validate_symlink(entry.path.as_str(), target.as_str())?;
                     let out_path = checked_destination(destination, &entry.path)?;
                     if out_path.exists() && !policy.overwrite {
                         return Err(Error::SecurityLimitExceeded(format!(
@@ -201,17 +91,17 @@ impl Lockbox {
                     if let Some(parent) = out_path.parent() {
                         fs::create_dir_all(parent).map_err(|err| Error::Io(err.to_string()))?;
                     }
-                    create_symlink(&target, &out_path, policy.overwrite)?;
+                    create_symlink(target.as_str(), &out_path, policy.overwrite)?;
                 }
             }
         }
         Ok(())
     }
 
-    fn should_extract_files_in_parallel(&self, live_entries: &[&ManifestEntry]) -> bool {
+    fn should_extract_files_in_parallel(&self, current_entries: &[&TocEntry]) -> bool {
         matches!(self.storage, crate::storage::StorageBackend::File(_))
             && self.pending_small_files.is_empty()
-            && live_entries
+            && current_entries
                 .iter()
                 .filter(|entry| entry.node_kind == NodeKind::File)
                 .count()
@@ -225,9 +115,9 @@ impl Lockbox {
         &self,
         destination: &Path,
         policy: &ExtractPolicy,
-        live_entries: &[&ManifestEntry],
+        current_entries: &[&TocEntry],
     ) -> Result<()> {
-        let file_entries: Vec<_> = live_entries
+        let file_entries: Vec<_> = current_entries
             .iter()
             .copied()
             .filter(|entry| entry.node_kind == NodeKind::File)
@@ -271,7 +161,7 @@ impl Lockbox {
         });
         parallel_result?;
 
-        for entry in live_entries
+        for entry in current_entries
             .iter()
             .copied()
             .filter(|entry| entry.node_kind == NodeKind::Symlink)
@@ -280,7 +170,7 @@ impl Lockbox {
                 continue;
             }
             let target = self.get_symlink_target(&entry.path)?;
-            validate_symlink(&entry.path, &target)?;
+            validate_symlink(entry.path.as_str(), target.as_str())?;
             let out_path = checked_destination(destination, &entry.path)?;
             if out_path.exists() && !policy.overwrite {
                 return Err(Error::SecurityLimitExceeded(format!(
@@ -291,29 +181,29 @@ impl Lockbox {
             if let Some(parent) = out_path.parent() {
                 fs::create_dir_all(parent).map_err(|err| Error::Io(err.to_string()))?;
             }
-            create_symlink(&target, &out_path, policy.overwrite)?;
+            create_symlink(target.as_str(), &out_path, policy.overwrite)?;
         }
 
         Ok(())
     }
 
-    fn validate_extract_plan(&self, policy: &ExtractPolicy) -> Result<Vec<&ManifestEntry>> {
-        let live_entries: Vec<_> = self
-            .manifest
+    fn validate_extract_plan(&self, policy: &ExtractPolicy) -> Result<Vec<&TocEntry>> {
+        let current_entries: Vec<_> = self
+            .toc_entries
             .values()
             .filter(|entry| !entry.deleted)
             .collect();
 
-        if live_entries.len() > policy.max_files {
+        if current_entries.len() > policy.max_files {
             return Err(Error::SecurityLimitExceeded(format!(
                 "node count {} exceeds limit {}",
-                live_entries.len(),
+                current_entries.len(),
                 policy.max_files
             )));
         }
 
         let mut total = 0u64;
-        for entry in &live_entries {
+        for entry in &current_entries {
             match entry.node_kind {
                 NodeKind::File => {
                     if entry.len > policy.max_file_bytes {
@@ -335,25 +225,25 @@ impl Lockbox {
                 NodeKind::Symlink => {
                     if policy.restore_symlinks {
                         let target = self.get_symlink_target(&entry.path)?;
-                        validate_symlink(&entry.path, &target)?;
+                        validate_symlink(entry.path.as_str(), target.as_str())?;
                     }
                 }
             }
         }
 
-        Ok(live_entries)
+        Ok(current_entries)
     }
 
     fn extract_file_entry_to_path(
         &self,
-        entry: &ManifestEntry,
+        entry: &TocEntry,
         out_path: &Path,
         policy: &ExtractPolicy,
         path_id: u64,
     ) -> Result<()> {
         let parent = out_path
             .parent()
-            .ok_or_else(|| Error::InvalidPath(entry.path.clone()))?;
+            .ok_or_else(|| Error::InvalidPath(entry.path.to_string()))?;
         fs::create_dir_all(parent).map_err(|err| Error::Io(err.to_string()))?;
 
         if !policy.overwrite {
@@ -417,11 +307,7 @@ impl Lockbox {
         Ok(())
     }
 
-    fn write_file_entry_cached(
-        &self,
-        entry: &ManifestEntry,
-        writer: &mut impl Write,
-    ) -> Result<()> {
+    fn write_file_entry_cached(&self, entry: &TocEntry, writer: &mut impl Write) -> Result<()> {
         if let Some(pending) = self.pending_small_files.get(&entry.path) {
             if pending.data.len() as u64 != entry.len {
                 return Err(Error::CorruptRecord);
@@ -455,47 +341,16 @@ impl Lockbox {
         }
         Ok(())
     }
-
-    fn read_file_entry_cached(&self, entry: &ManifestEntry) -> Result<Vec<u8>> {
-        if let Some(pending) = self.pending_small_files.get(&entry.path) {
-            return Ok(pending.data.to_vec());
-        }
-
-        if entry.chunks.is_empty() {
-            return Err(Error::CorruptRecord);
-        }
-
-        let capacity = usize::try_from(entry.len).map_err(|_| {
-            Error::SecurityLimitExceeded("file exceeds addressable memory".to_string())
-        })?;
-        let mut out = Vec::with_capacity(capacity);
-        let mut chunks = entry.chunks.clone();
-        chunks.sort_by_key(|chunk| chunk.file_offset);
-        for chunk in chunks {
-            if chunk.file_offset != out.len() as u64 {
-                return Err(Error::CorruptRecord);
-            }
-            let decoded = self.read_file_chunk_frame(entry.len, &chunk)?;
-            out.extend_from_slice(&decoded);
-            if out.len() as u64 > entry.len {
-                return Err(Error::CorruptRecord);
-            }
-        }
-        if out.len() as u64 != entry.len {
-            return Err(Error::CorruptRecord);
-        }
-        Ok(out)
-    }
 }
 
-fn checked_destination(root: &Path, logical_path: &str) -> Result<PathBuf> {
-    canonicalize_stored_path(logical_path, false)?;
-    let relative = logical_path.trim_start_matches('/');
+fn checked_destination(root: &Path, lockbox_path: &str) -> Result<PathBuf> {
+    canonicalize_stored_path(lockbox_path, false)?;
+    let relative = lockbox_path.trim_start_matches('/');
     let mut out = root.to_path_buf();
     for component in Path::new(relative).components() {
         match component {
             Component::Normal(part) => out.push(part),
-            _ => return Err(Error::InvalidPath(logical_path.to_string())),
+            _ => return Err(Error::InvalidPath(lockbox_path.to_string())),
         }
     }
     if !out.starts_with(root) {

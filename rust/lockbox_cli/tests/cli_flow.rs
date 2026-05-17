@@ -132,7 +132,7 @@ fn cli_env_rename_and_visualize_flow() {
 }
 
 #[test]
-fn raw_key_create_does_not_mirror_empty_key_directory() {
+fn content_key_create_does_not_mirror_empty_key_directory() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("raw-create");
     let _ = fs::remove_dir_all(&dir);

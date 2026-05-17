@@ -1,22 +1,22 @@
 use crate::constants::DEFAULT_SYMLINK_PERMISSIONS;
 use crate::file_chunk::{FileChunk, FileFragment};
 use crate::file_format::decode_file_fragment_payload;
-use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::payload::decode_symlink_payload;
 use crate::record::{DecodedRecord, RecordKind};
+use crate::toc_entry::TocEntry;
 use crate::Result;
 
-pub(crate) fn decode_index_record(record: &DecodedRecord) -> Result<Option<ManifestEntry>> {
+pub(crate) fn decode_index_record(record: &DecodedRecord) -> Result<Option<TocEntry>> {
     Ok(decode_index_records(record)?.into_iter().next())
 }
 
-pub(crate) fn decode_index_records(record: &DecodedRecord) -> Result<Vec<ManifestEntry>> {
+pub(crate) fn decode_index_records(record: &DecodedRecord) -> Result<Vec<TocEntry>> {
     match record.header.kind {
         RecordKind::FilePage => {
             let chunk = decode_file_fragment_payload(&record.payload)?;
             let path = chunk.path;
-            Ok(vec![ManifestEntry {
+            Ok(vec![TocEntry {
                 path: path.clone(),
                 len: chunk.total_len,
                 record_offset: record.offset,
@@ -44,7 +44,7 @@ pub(crate) fn decode_index_records(record: &DecodedRecord) -> Result<Vec<Manifes
         }
         RecordKind::Symlink => {
             let (path, _) = decode_symlink_payload(&record.payload)?;
-            Ok(vec![ManifestEntry {
+            Ok(vec![TocEntry {
                 path,
                 len: 0,
                 record_offset: record.offset,

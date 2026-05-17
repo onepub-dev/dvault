@@ -1,9 +1,19 @@
-use lockbox_core::{ExtractPolicy, ListOptions, Lockbox};
+use lockbox_core::{
+    EnvName, ExtractPolicy, ListOptions, Lockbox, LockboxCreate, LockboxPath, SecretVec,
+};
 use std::io::{Read, Result as IoResult};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const KEY: &[u8] = b"performance key";
+
+fn p(path: impl AsRef<str>) -> LockboxPath {
+    LockboxPath::new(path).unwrap()
+}
+
+fn env(name: impl AsRef<str>) -> EnvName {
+    EnvName::new(name).unwrap()
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scenario = std::env::var("LOCKBOX_PERF_SCENARIO").unwrap_or_else(|_| "small".to_string());
@@ -43,7 +53,7 @@ fn small_files() -> Result<(), Box<dyn std::error::Error>> {
 
     let start = Instant::now();
     for i in 0..file_count {
-        lockbox.put_file(&format!("/tree/file-{i:06}.bin"), &payload)?;
+        lockbox.add_file(&p(format!("/tree/file-{i:06}.bin")), &payload, false)?;
     }
     let add = start.elapsed();
 
@@ -55,7 +65,7 @@ fn small_files() -> Result<(), Box<dyn std::error::Error>> {
     let listed = lockbox
         .list_iter(ListOptions {
             recursive: true,
-            ..ListOptions::new("/")
+            ..ListOptions::new(&p("/"))
         })?
         .count();
     let list = start.elapsed();
@@ -93,7 +103,11 @@ fn large_file() -> Result<(), Box<dyn std::error::Error>> {
     let mut bench = BenchLockbox::create("large")?;
     let lockbox = &mut bench.lockbox;
     let start = Instant::now();
-    lockbox.put_file_from_reader("/large/blob.bin", PatternReader::new(bytes, &pattern))?;
+    lockbox.add_file_from_reader(
+        &p("/large/blob.bin"),
+        PatternReader::new(bytes, &pattern),
+        false,
+    )?;
     let add = start.elapsed();
 
     let start = Instant::now();
@@ -102,7 +116,7 @@ fn large_file() -> Result<(), Box<dyn std::error::Error>> {
 
     let range_offset = (bytes / 2) as u64;
     let start = Instant::now();
-    let range = lockbox.read_file_range("/large/blob.bin", range_offset, 1024 * 1024)?;
+    let range = lockbox.read_file_range(&p("/large/blob.bin"), range_offset, 1024 * 1024)?;
     let read_range = start.elapsed();
     assert_eq!(
         range.len(),
@@ -151,22 +165,26 @@ fn append_delete() -> Result<(), Box<dyn std::error::Error>> {
     let mut bench = BenchLockbox::create("append-delete")?;
     let lockbox = &mut bench.lockbox;
     for i in 0..initial_files {
-        lockbox.put_file(&format!("/set/file-{i:06}.bin"), &payload)?;
+        lockbox.add_file(&p(format!("/set/file-{i:06}.bin")), &payload, false)?;
     }
     lockbox.commit()?;
 
     let start = Instant::now();
     for i in initial_files..initial_files + appended_files {
-        lockbox.put_file(&format!("/set/file-{i:06}.bin"), &payload)?;
+        lockbox.add_file(&p(format!("/set/file-{i:06}.bin")), &payload, false)?;
     }
     let add = start.elapsed();
 
     let start = Instant::now();
     for i in 0..appended_files {
-        lockbox.delete(&format!("/set/file-{i:06}.bin"))?;
+        lockbox.delete(&p(format!("/set/file-{i:06}.bin")))?;
     }
     for i in 0..appended_files {
-        lockbox.put_file(&format!("/set/replacement-{i:06}.bin"), &replacement)?;
+        lockbox.add_file(
+            &p(format!("/set/replacement-{i:06}.bin")),
+            &replacement,
+            false,
+        )?;
     }
     let delete_replace = start.elapsed();
 
@@ -178,7 +196,7 @@ fn append_delete() -> Result<(), Box<dyn std::error::Error>> {
     let listed = lockbox
         .list_iter(ListOptions {
             recursive: true,
-            ..ListOptions::new("/")
+            ..ListOptions::new(&p("/"))
         })?
         .count();
     let list = start.elapsed();
@@ -212,27 +230,28 @@ fn metadata_operations() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut bench = BenchLockbox::create("metadata")?;
     let lockbox = &mut bench.lockbox;
-    lockbox.put_file_from_reader(
-        "/large/source.bin",
+    lockbox.add_file_from_reader(
+        &p("/large/source.bin"),
         PatternReader::new(large_bytes, &pattern),
+        false,
     )?;
     for i in 0..env_count {
-        lockbox.set_env(&format!("LOCKBOX_ENV_{i:06}"), "value")?;
+        lockbox.set_env(&env(format!("LOCKBOX_ENV_{i:06}")), "value")?;
     }
-    lockbox.put_file("/delete-me.txt", b"delete")?;
+    lockbox.add_file(&p("/delete-me.txt"), b"delete", false)?;
     lockbox.commit()?;
 
     let start = Instant::now();
-    lockbox.rename("/large/source.bin", "/archive/renamed.bin")?;
+    lockbox.rename(&p("/large/source.bin"), &p("/archive/renamed.bin"))?;
     let rename = start.elapsed();
 
     let start = Instant::now();
     let listed = lockbox.list_env()?.len();
     let list_env = start.elapsed();
 
-    lockbox.delete("/delete-me.txt")?;
+    lockbox.delete(&p("/delete-me.txt"))?;
     let start = Instant::now();
-    lockbox.compact()?;
+    lockbox.commit()?;
     let compact = start.elapsed();
 
     let start = Instant::now();
@@ -268,8 +287,21 @@ fn run_extract(
     let start = Instant::now();
     for i in 0..repeat {
         match mode.as_str() {
-            "memory" => {
-                let _ = lockbox.extract_all(policy)?;
+            "stream" => {
+                let mut count = 0usize;
+                for entry in lockbox.list_iter(ListOptions {
+                    recursive: true,
+                    ..ListOptions::new(&p("/"))
+                })? {
+                    let entry = entry?;
+                    if entry.kind == lockbox_core::LockboxEntryKind::File
+                        && entry.len <= policy.max_file_bytes
+                    {
+                        lockbox.extract_file_to_writer(&entry.path, std::io::sink())?;
+                        count += 1;
+                    }
+                }
+                let _ = count;
             }
             "directory" => {
                 let out_dir = perf_scratch_dir()?
@@ -301,25 +333,30 @@ impl BenchLockbox {
                 perf_scratch_dir()?.join(format!("lockbox-perf-{name}-{}.lbx", std::process::id()));
             let _ = std::fs::remove_file(&path);
             Ok(Self {
-                lockbox: Lockbox::create_path(&path, KEY)?,
+                lockbox: Lockbox::create_file(
+                    &path,
+                    LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+                )?,
                 path: Some(path),
                 backend,
             })
         } else {
+            let path =
+                perf_scratch_dir()?.join(format!("lockbox-perf-{name}-{}.lbx", std::process::id()));
+            let _ = std::fs::remove_file(&path);
             Ok(Self {
-                lockbox: Lockbox::create(KEY),
-                path: None,
+                lockbox: Lockbox::create_file(
+                    &path,
+                    LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+                )?,
+                path: Some(path),
                 backend,
             })
         }
     }
 
     fn lockbox_bytes(&self) -> Result<u64, Box<dyn std::error::Error>> {
-        if let Some(path) = &self.path {
-            Ok(std::fs::metadata(path)?.len())
-        } else {
-            Ok(self.lockbox.to_bytes().len() as u64)
-        }
+        Ok(self.lockbox.inspector().storage_len()?)
     }
 }
 

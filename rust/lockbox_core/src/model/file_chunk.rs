@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use crate::LockboxPath;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileFragment {
     pub(crate) page_offset: u64,
@@ -11,7 +13,7 @@ pub(crate) struct FileFragment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileChunk {
-    pub(crate) stored_path: String,
+    pub(crate) stored_path: LockboxPath,
     pub(crate) file_offset: u64,
     pub(crate) len: u64,
     pub(crate) compressed_len: u64,
@@ -22,7 +24,7 @@ pub(crate) struct FileChunk {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PendingFileChunk {
-    pub(crate) path: String,
+    pub(crate) path: LockboxPath,
     pub(crate) permissions: u32,
     pub(crate) total_len: u64,
     pub(crate) file_offset: u64,
@@ -31,7 +33,7 @@ pub(crate) struct PendingFileChunk {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PackedSmallFile {
-    pub(crate) path: String,
+    pub(crate) path: LockboxPath,
     pub(crate) permissions: u32,
     pub(crate) total_len: u64,
     pub(crate) len: u64,
@@ -44,7 +46,7 @@ pub(crate) struct PackedSmallFile {
 
 #[derive(Debug, Clone)]
 pub(crate) struct DecodedFileChunk {
-    pub(crate) path: String,
+    pub(crate) path: LockboxPath,
     pub(crate) permissions: u32,
     pub(crate) total_len: u64,
     pub(crate) file_offset: u64,

@@ -1,10 +1,14 @@
-use lockbox_core::Lockbox;
+use crate::{Lockbox, LockboxPath};
 use std::fs::File;
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
 
 const KEY: &[u8] = b"compression regression key";
 const MIB: usize = 1024 * 1024;
+
+fn p(path: impl AsRef<str>) -> LockboxPath {
+    LockboxPath::new(path).unwrap()
+}
 
 #[test]
 #[ignore = "compression corpus regression; GitHub Actions runs this explicitly"]
@@ -16,7 +20,7 @@ fn repeated_small_files_keep_meaningful_compression() {
 
     for index in 0..file_count {
         lockbox
-            .put_file(&format!("/small/file-{index:05}.bin"), &payload)
+            .add_file(&p(format!("/small/file-{index:05}.bin")), &payload, false)
             .unwrap();
     }
     lockbox.commit().unwrap();
@@ -37,9 +41,10 @@ fn moderately_large_zero_file_uses_few_fixed_pages() {
     let mut lockbox = Lockbox::create(KEY);
 
     lockbox
-        .put_file_from_reader(
-            "/large/zero.bin",
+        .add_file_from_reader(
+            &p("/large/zero.bin"),
             corpus_reader("zero-1g.bin", logical, Pattern::Zero),
+            false,
         )
         .unwrap();
     lockbox.commit().unwrap();
@@ -58,9 +63,10 @@ fn one_gib_zero_file_compression_does_not_regress() {
     let mut lockbox = Lockbox::create(KEY);
 
     lockbox
-        .put_file_from_reader(
-            "/large/zero.bin",
+        .add_file_from_reader(
+            &p("/large/zero.bin"),
             corpus_reader("zero-1g.bin", logical, Pattern::Zero),
+            false,
         )
         .unwrap();
     lockbox.commit().unwrap();
@@ -79,9 +85,10 @@ fn one_gib_high_entropy_file_avoids_excessive_expansion() {
     let mut lockbox = Lockbox::create(KEY);
 
     lockbox
-        .put_file_from_reader(
-            "/large/randomish.bin",
+        .add_file_from_reader(
+            &p("/large/randomish.bin"),
             corpus_reader("randomish-1g.bin", logical, Pattern::Randomish),
+            false,
         )
         .unwrap();
     lockbox.commit().unwrap();

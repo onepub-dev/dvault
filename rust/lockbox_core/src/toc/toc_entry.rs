@@ -1,11 +1,11 @@
 use crate::file_chunk::FileChunk;
-use crate::{LockboxEntry, LockboxEntryKind};
+use crate::{LockboxEntry, LockboxEntryKind, LockboxPath};
 
 use crate::node_kind::NodeKind;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ManifestEntry {
-    pub(crate) path: String,
+pub(crate) struct TocEntry {
+    pub(crate) path: LockboxPath,
     pub(crate) len: u64,
     pub(crate) record_offset: u64,
     pub(crate) record_len: u64,
@@ -16,7 +16,7 @@ pub(crate) struct ManifestEntry {
     pub(crate) chunks: Vec<FileChunk>,
 }
 
-impl ManifestEntry {
+impl TocEntry {
     pub(crate) fn entry_kind(&self) -> LockboxEntryKind {
         match self.node_kind {
             NodeKind::File => LockboxEntryKind::File,

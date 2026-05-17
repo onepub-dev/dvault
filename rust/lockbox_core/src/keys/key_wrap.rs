@@ -7,7 +7,7 @@ use zeroize::Zeroize;
 
 use crate::{secret_vec::SecretVec, Error, Result};
 
-/// ML-KEM-1024 private recipient keypair.
+/// ML-KEM-1024 recipient keypair.
 ///
 /// The decapsulation seed is stored in `SecretVec`; the public recipient key is
 /// cached separately for wrapping new content keys.
@@ -16,14 +16,18 @@ pub struct MlKemKeyPair {
     encapsulation_key: ml_kem::EncapsulationKey1024,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 /// Public ML-KEM-1024 recipient key.
-pub struct MlKemRecipientKey {
+///
+/// This key can be shared with a lockbox creator. It can wrap a lockbox content
+/// key for the holder of the matching `MlKemKeyPair`, but it cannot unlock a
+/// lockbox by itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlKemRecipientPublicKey {
     encapsulation_key: ml_kem::EncapsulationKey1024,
 }
 
-#[derive(Debug, Clone)]
 /// Content key wrapped to an ML-KEM-1024 recipient.
+#[derive(Debug, Clone)]
 pub struct MlKemWrappedKey {
     ciphertext: ml_kem::Ciphertext<MlKem1024>,
     encrypted_key: Vec<u8>,
@@ -31,6 +35,9 @@ pub struct MlKemWrappedKey {
 
 impl MlKemKeyPair {
     /// Generate a fresh ML-KEM-1024 keypair.
+    ///
+    /// Returns `Error::SecurityLimitExceeded` if the private seed cannot be
+    /// stored in secure memory.
     pub fn generate() -> Result<Self> {
         let (decapsulation_key, encapsulation_key) = MlKem1024::generate_keypair();
         let mut seed = decapsulation_key.to_bytes();
@@ -43,11 +50,16 @@ impl MlKemKeyPair {
     }
 
     /// Wrap a content key to this keypair's public recipient key.
+    ///
+    /// Returns `Error::InvalidKey` if authenticated wrapping fails.
     pub fn wrap_key(&self, content_key: &[u8]) -> Result<MlKemWrappedKey> {
-        self.recipient_key().wrap_key(content_key)
+        self.recipient_public_key().wrap_key(content_key)
     }
 
     /// Unwrap a content key previously wrapped for this keypair.
+    ///
+    /// Returns `Error::InvalidKey` if the seed or ciphertext is invalid, or
+    /// `Error::SecurityLimitExceeded` if secure memory access fails.
     pub fn unwrap_key(&self, wrapped: &MlKemWrappedKey) -> Result<Vec<u8>> {
         self.decapsulation_seed.with_bytes(|seed_bytes| {
             let seed = ml_kem::Seed::try_from(seed_bytes).map_err(|_| Error::InvalidKey)?;
@@ -67,13 +79,17 @@ impl MlKemKeyPair {
     }
 
     /// Return the public recipient key for this keypair.
-    pub fn recipient_key(&self) -> MlKemRecipientKey {
-        MlKemRecipientKey {
+    pub fn recipient_public_key(&self) -> MlKemRecipientPublicKey {
+        MlKemRecipientPublicKey {
             encapsulation_key: self.encapsulation_key.clone(),
         }
     }
 
     /// Construct a keypair by taking ownership of a secure seed buffer.
+    ///
+    /// Returns `Error::InvalidKey` if the seed does not encode an ML-KEM-1024
+    /// decapsulation key, or `Error::SecurityLimitExceeded` if secure memory
+    /// access fails.
     pub fn from_seed_secure(decapsulation_seed: SecretVec) -> Result<Self> {
         let encapsulation_key = decapsulation_seed.with_bytes(|bytes| {
             let seed = ml_kem::Seed::try_from(bytes).map_err(|_| Error::InvalidKey)?;
@@ -87,13 +103,19 @@ impl MlKemKeyPair {
     }
 
     /// Clone the private seed into a new secure buffer.
+    ///
+    /// Returns `Error::SecurityLimitExceeded` if secure memory allocation
+    /// fails.
     pub fn to_seed_secure(&self) -> Result<SecretVec> {
         self.decapsulation_seed.try_clone().map_err(Into::into)
     }
 }
 
-impl MlKemRecipientKey {
+impl MlKemRecipientPublicKey {
     /// Decode a public recipient key from its byte representation.
+    ///
+    /// Returns `Error::CorruptHeader` if the bytes do not encode an
+    /// ML-KEM-1024 recipient key.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let key = ml_kem::kem::Key::<ml_kem::EncapsulationKey1024>::try_from(bytes)
             .map_err(|_| Error::CorruptHeader)?;
@@ -108,6 +130,8 @@ impl MlKemRecipientKey {
     }
 
     /// Wrap a content key for this recipient.
+    ///
+    /// Returns `Error::InvalidKey` if authenticated wrapping fails.
     pub fn wrap_key(&self, content_key: &[u8]) -> Result<MlKemWrappedKey> {
         let (ciphertext, shared_secret) = self.encapsulation_key.encapsulate();
         let mut wrapping_key = derive_wrapping_key(shared_secret.as_ref());
@@ -125,6 +149,9 @@ impl MlKemRecipientKey {
 
 impl MlKemWrappedKey {
     /// Reconstruct a wrapped key from serialized ciphertext components.
+    ///
+    /// Returns `Error::CorruptHeader` if the ciphertext bytes are not a valid
+    /// ML-KEM-1024 ciphertext.
     pub fn from_parts(ciphertext: Vec<u8>, encrypted_key: Vec<u8>) -> Result<Self> {
         let ciphertext = ml_kem::Ciphertext::<MlKem1024>::try_from(ciphertext.as_slice())
             .map_err(|_| Error::CorruptHeader)?;

@@ -10,111 +10,146 @@ use crate::env_btree::{
 use crate::free_slot::FreeSlot;
 use crate::page::{page_size_for_objects, PageObject, PageObjectKind};
 use crate::page_cache::SecurePageAppend;
-use crate::security::{validate_env_name, validate_env_value, validate_env_value_ref};
+use crate::security::{validate_env_value, validate_env_value_ref};
 use crate::{crypto::derive_page_content_key, secret_vec::SecureVec};
-use crate::{EnvSensitivity, Error, Result, SecretString};
+use crate::{EnvName, EnvSensitivity, Error, Result, SecretString};
 use zeroize::Zeroize;
 
+/// Borrowed environment value yielded by `Lockbox::visit_env`.
+#[derive(Debug)]
+pub enum EnvValueRef<'a> {
+    /// Plain environment value.
+    Normal(&'a str),
+    /// Secret environment value; use `SecretString::with_str` for scoped plaintext access.
+    Secret(&'a SecretString),
+}
+
 impl Lockbox {
-    pub fn set_env(&mut self, name: &str, value: &str) -> Result<()> {
-        let name = validate_env_name(name)?;
+    /// Store or replace a non-secret environment variable.
+    ///
+    /// Returns `Error::InvalidInput` if the value contains unsupported
+    /// characters, `Error::SecurityLimitExceeded` if the value exceeds the
+    /// configured environment value size limit, `Error::InvalidOperation` when
+    /// attempting to overwrite an existing secret variable as non-secret, and
+    /// `Error::CorruptRecord` if stored environment metadata cannot be loaded.
+    pub fn set_env(&mut self, name: &EnvName, value: &str) -> Result<()> {
         let value = validate_env_value(value)?;
         self.ensure_env_loaded()?;
         let mut env = self.env_vars.borrow_mut();
         let env = env.as_mut().ok_or(Error::CorruptRecord)?;
-        if matches!(env.get(&name), Some(EnvValue::Secret(_))) {
-            return Err(Error::SecurityLimitExceeded(
+        if matches!(env.get(name), Some(EnvValue::Secret(_))) {
+            return Err(Error::InvalidOperation(
                 "environment variable is secret; delete and recreate to change sensitivity"
                     .to_string(),
             ));
         }
-        env.insert(name, EnvValue::Normal(value));
+        env.insert(name.clone(), EnvValue::Normal(value));
         self.dirty_env = true;
         Ok(())
     }
 
-    pub fn set_secret_env(&mut self, name: &str, value: &SecretString) -> Result<()> {
-        let name = validate_env_name(name)?;
+    /// Store or replace a secret environment variable.
+    ///
+    /// Secret values remain in secure storage. Changing an existing variable
+    /// between normal and secret sensitivity requires deleting it first.
+    ///
+    /// Returns `Error::InvalidInput` if the secret plaintext contains
+    /// unsupported characters, `Error::SecurityLimitExceeded` if the secret
+    /// plaintext exceeds the configured environment value size limit,
+    /// `Error::InvalidOperation` when attempting to overwrite an existing
+    /// non-secret variable as secret, and `Error::CorruptRecord` if stored
+    /// environment metadata cannot be loaded.
+    pub fn set_secret_env(&mut self, name: &EnvName, value: &SecretString) -> Result<()> {
         value.with_str(validate_env_value_ref)??;
         self.ensure_env_loaded()?;
         let mut env = self.env_vars.borrow_mut();
         let env = env.as_mut().ok_or(Error::CorruptRecord)?;
-        if matches!(env.get(&name), Some(EnvValue::Normal(_))) {
-            return Err(Error::SecurityLimitExceeded(
+        if matches!(env.get(name), Some(EnvValue::Normal(_))) {
+            return Err(Error::InvalidOperation(
                 "environment variable is not secret; delete and recreate to change sensitivity"
                     .to_string(),
             ));
         }
-        env.insert(name, EnvValue::Secret(Arc::new(value.try_clone()?)));
+        env.insert(name.clone(), EnvValue::Secret(Arc::new(value.try_clone()?)));
         self.dirty_env = true;
         Ok(())
     }
 
-    pub fn get_env(&self, name: &str) -> Result<Option<String>> {
-        let name = validate_env_name(name)?;
+    /// Return a non-secret environment variable by name.
+    ///
+    /// Returns `Ok(None)` when the variable is absent. Returns
+    /// `Error::InvalidOperation` if the variable exists but is secret, and
+    /// `Error::CorruptRecord` if stored environment metadata cannot be loaded.
+    pub fn get_env(&self, name: &EnvName) -> Result<Option<String>> {
         self.ensure_env_loaded()?;
         match self
             .env_vars
             .borrow()
             .as_ref()
             .ok_or(Error::CorruptRecord)?
-            .get(name.as_str())
+            .get(name)
         {
             Some(EnvValue::Normal(value)) => Ok(Some(value.clone())),
-            Some(EnvValue::Secret(_)) => Err(Error::SecurityLimitExceeded(
+            Some(EnvValue::Secret(_)) => Err(Error::InvalidOperation(
                 "environment variable is secret; use secret access".to_string(),
             )),
             None => Ok(None),
         }
     }
 
-    pub fn with_secret_env<R>(&self, name: &str, f: impl FnOnce(&str) -> R) -> Result<Option<R>> {
-        let name = validate_env_name(name)?;
+    /// Access a secret environment variable within a callback.
+    ///
+    /// The callback receives the `SecretString` handle. Use
+    /// `SecretString::with_str` inside the callback when plaintext access is
+    /// required.
+    ///
+    /// Returns `Ok(None)` when the variable is absent. Returns
+    /// `Error::InvalidOperation` if the variable exists but is non-secret,
+    /// and `Error::CorruptRecord` if stored environment metadata cannot be
+    /// loaded.
+    pub fn with_secret_env<R>(
+        &self,
+        name: &EnvName,
+        f: impl FnOnce(&SecretString) -> R,
+    ) -> Result<Option<R>> {
         self.ensure_env_loaded()?;
         let env = self.env_vars.borrow();
-        match env.as_ref().ok_or(Error::CorruptRecord)?.get(name.as_str()) {
-            Some(EnvValue::Secret(value)) => value.with_str(f).map(Some).map_err(Into::into),
-            Some(EnvValue::Normal(_)) => Err(Error::SecurityLimitExceeded(
+        match env.as_ref().ok_or(Error::CorruptRecord)?.get(name) {
+            Some(EnvValue::Secret(value)) => Ok(Some(f(value))),
+            Some(EnvValue::Normal(_)) => Err(Error::InvalidOperation(
                 "environment variable is not secret".to_string(),
             )),
             None => Ok(None),
         }
     }
 
-    pub fn get_secret_env(&self, name: &str) -> Result<Option<SecretString>> {
-        let name = validate_env_name(name)?;
-        self.ensure_env_loaded()?;
-        let env = self.env_vars.borrow();
-        match env.as_ref().ok_or(Error::CorruptRecord)?.get(name.as_str()) {
-            Some(EnvValue::Secret(value)) => value.try_clone().map(Some).map_err(Into::into),
-            Some(EnvValue::Normal(_)) => Err(Error::SecurityLimitExceeded(
-                "environment variable is not secret".to_string(),
-            )),
-            None => Ok(None),
-        }
-    }
-
-    pub fn env_sensitivity(&self, name: &str) -> Result<Option<EnvSensitivity>> {
-        let name = validate_env_name(name)?;
+    /// Return the sensitivity of an environment variable, if it exists.
+    ///
+    /// Returns `Error::CorruptRecord` if stored environment metadata cannot be
+    /// loaded.
+    pub fn env_sensitivity(&self, name: &EnvName) -> Result<Option<EnvSensitivity>> {
         self.ensure_env_loaded()?;
         Ok(self
             .env_vars
             .borrow()
             .as_ref()
             .ok_or(Error::CorruptRecord)?
-            .get(name.as_str())
+            .get(name)
             .map(EnvValue::sensitivity))
     }
 
-    pub fn remove_env(&mut self, name: &str) -> Result<()> {
-        let name = validate_env_name(name)?;
+    /// Delete an environment variable if it exists.
+    ///
+    /// Returns `Error::CorruptRecord` if stored environment metadata cannot be
+    /// loaded.
+    pub fn delete_env(&mut self, name: &EnvName) -> Result<()> {
         self.ensure_env_loaded()?;
         let removed = self
             .env_vars
             .borrow_mut()
             .as_mut()
             .ok_or(Error::CorruptRecord)?
-            .remove(&name)
+            .remove(name)
             .is_some();
         if removed {
             self.dirty_env = true;
@@ -122,23 +157,11 @@ impl Lockbox {
         Ok(())
     }
 
-    pub fn delete_env_var(&mut self, name: &str) -> Result<()> {
-        self.remove_env(name)
-    }
-
-    pub fn list_env(&self) -> Result<Vec<String>> {
-        self.ensure_env_loaded()?;
-        Ok(self
-            .env_vars
-            .borrow()
-            .as_ref()
-            .ok_or(Error::CorruptRecord)?
-            .keys()
-            .cloned()
-            .collect())
-    }
-
-    pub fn list_env_with_sensitivity(&self) -> Result<Vec<(String, EnvSensitivity)>> {
+    /// List environment variable names with their sensitivity.
+    ///
+    /// Returns `Error::CorruptRecord` if stored environment metadata cannot be
+    /// loaded.
+    pub fn list_env(&self) -> Result<Vec<(EnvName, EnvSensitivity)>> {
         self.ensure_env_loaded()?;
         Ok(self
             .env_vars
@@ -150,23 +173,38 @@ impl Lockbox {
             .collect())
     }
 
-    pub fn get_all_env(&self) -> Result<BTreeMap<String, String>> {
+    /// Visit every environment variable.
+    ///
+    /// Normal values are provided as borrowed strings. Secret values are
+    /// provided as `SecretString` references so callers must explicitly use the
+    /// secret type's scoped accessors.
+    ///
+    /// Returns `Error::CorruptRecord` if stored environment metadata cannot be
+    /// loaded, or any error returned by the visitor callback.
+    pub fn visit_env(
+        &self,
+        mut f: impl FnMut(&EnvName, EnvValueRef<'_>) -> Result<()>,
+    ) -> Result<()> {
         self.ensure_env_loaded()?;
-        Ok(self
+        for (name, value) in self
             .env_vars
             .borrow()
             .as_ref()
             .ok_or(Error::CorruptRecord)?
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .as_normal()
-                    .map(|value| (name.clone(), value.to_string()))
-            })
-            .collect())
+        {
+            match value {
+                EnvValue::Normal(value) => {
+                    f(name, EnvValueRef::Normal(value))?;
+                }
+                EnvValue::Secret(value) => {
+                    f(name, EnvValueRef::Secret(value))?;
+                }
+            }
+        }
+        Ok(())
     }
 
-    pub(crate) fn clone_all_env_values(&self) -> Result<BTreeMap<String, EnvValue>> {
+    pub(crate) fn clone_all_env_values(&self) -> Result<BTreeMap<EnvName, EnvValue>> {
         self.ensure_env_loaded()?;
         Ok(self
             .env_vars
@@ -176,8 +214,7 @@ impl Lockbox {
             .clone())
     }
 
-    pub(crate) fn set_env_value(&mut self, name: String, value: EnvValue) -> Result<()> {
-        validate_env_name(&name)?;
+    pub(crate) fn set_env_value(&mut self, name: EnvName, value: EnvValue) -> Result<()> {
         value.with_plaintext(validate_env_value_ref)??;
         self.ensure_env_loaded()?;
         self.env_vars
@@ -260,7 +297,7 @@ impl Lockbox {
     fn decode_env_btree(
         &self,
         root_offset: u64,
-    ) -> Result<(BTreeMap<String, EnvValue>, EnvTreeNode, Vec<EnvLeaf>)> {
+    ) -> Result<(BTreeMap<EnvName, EnvValue>, EnvTreeNode, Vec<EnvLeaf>)> {
         let mut env = BTreeMap::new();
         let root = self.decode_env_node_into(root_offset, &mut env, 0)?;
         let mut leaves = Vec::new();
@@ -284,7 +321,7 @@ impl Lockbox {
     fn decode_env_node_into(
         &self,
         offset: u64,
-        env: &mut BTreeMap<String, EnvValue>,
+        env: &mut BTreeMap<EnvName, EnvValue>,
         depth: usize,
     ) -> Result<EnvTreeNode> {
         if depth > 8 {
@@ -294,7 +331,7 @@ impl Lockbox {
             EnvNode::Leaf(entries) => {
                 let leaf_entries = entries.clone();
                 for entry in entries {
-                    env.insert(entry.name, entry.value);
+                    env.insert(EnvName::new(entry.name)?, entry.value);
                 }
                 Ok(EnvTreeNode::Leaf(EnvLeaf {
                     offset,

@@ -8,7 +8,7 @@ const HEADER_CHECKSUM_START: usize = 64;
 
 pub(crate) fn write_header(
     bytes: &mut Vec<u8>,
-    manifest_offset: u64,
+    toc_root_offset: u64,
     sequence: u64,
     key_directory_offset: u64,
     lockbox_id: LockboxId,
@@ -20,7 +20,7 @@ pub(crate) fn write_header(
     bytes[0..8].copy_from_slice(HEADER_MAGIC);
     bytes[8..10].copy_from_slice(&HEADER_VERSION.to_le_bytes());
     bytes[12..16].copy_from_slice(&(HEADER_LEN as u32).to_le_bytes());
-    bytes[16..24].copy_from_slice(&manifest_offset.to_le_bytes());
+    bytes[16..24].copy_from_slice(&toc_root_offset.to_le_bytes());
     bytes[24..32].copy_from_slice(&sequence.to_le_bytes());
     bytes[32..40].copy_from_slice(&key_directory_offset.to_le_bytes());
     bytes[40..56].copy_from_slice(lockbox_id.as_bytes());
@@ -54,13 +54,17 @@ pub(crate) fn read_header(bytes: &[u8]) -> Result<(u64, u64, u64, LockboxId)> {
     if bytes[HEADER_CHECKSUM_START..HEADER_LEN] != expected {
         return Err(Error::CorruptHeader);
     }
-    let manifest_offset = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    let toc_root_offset = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
     let sequence = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
     let key_directory_offset = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
     let lockbox_id = LockboxId::from_bytes(bytes[40..56].try_into().unwrap());
-    Ok((manifest_offset, sequence, key_directory_offset, lockbox_id))
+    Ok((toc_root_offset, sequence, key_directory_offset, lockbox_id))
 }
 
+/// Read the lockbox id from encoded lockbox header bytes.
+///
+/// Returns `Error::CorruptHeader` if `bytes` do not contain a complete valid
+/// lockbox header.
 pub fn read_lockbox_id(bytes: &[u8]) -> Result<LockboxId> {
     let (_, _, _, lockbox_id) = read_header(bytes)?;
     Ok(lockbox_id)

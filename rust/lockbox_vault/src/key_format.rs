@@ -1,5 +1,5 @@
 use base64ct::{Base64, Base64UrlUnpadded, Encoding};
-use lockbox_core::{Error, MlKemKeyPair, MlKemRecipientKey, Result, SecretVec};
+use lockbox_core::{Error, MlKemKeyPair, MlKemRecipientPublicKey, Result, SecretVec};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -56,7 +56,7 @@ struct Jwks {
 }
 
 pub fn export_private_key(keypair: &MlKemKeyPair, format: KeyFormat) -> Result<SecretVec> {
-    let public = keypair.recipient_key();
+    let public = keypair.recipient_public_key();
     let public_bytes = public.to_bytes();
     let public_x = Base64UrlUnpadded::encode_string(&public_bytes);
     let kid = fingerprint(&public_bytes);
@@ -97,7 +97,7 @@ pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<MlKemKeyPair> {
     import_private_key(bytes)
 }
 
-pub fn export_public_key(key: &MlKemRecipientKey, format: KeyFormat) -> Result<Vec<u8>> {
+pub fn export_public_key(key: &MlKemRecipientPublicKey, format: KeyFormat) -> Result<Vec<u8>> {
     match format {
         KeyFormat::LockboxPem => pem(PUBLIC_LABEL, &public_jwk(key)?),
         KeyFormat::Jwk => {
@@ -111,7 +111,7 @@ pub fn export_public_key(key: &MlKemRecipientKey, format: KeyFormat) -> Result<V
     }
 }
 
-pub fn import_public_key(bytes: &[u8]) -> Result<MlKemRecipientKey> {
+pub fn import_public_key(bytes: &[u8]) -> Result<MlKemRecipientPublicKey> {
     let text = std::str::from_utf8(bytes).map_err(|_| Error::CorruptHeader)?;
     if text.trim_start().starts_with("-----BEGIN ") {
         let (label, payload) = unpem(text)?;
@@ -128,7 +128,7 @@ pub fn import_public_key(bytes: &[u8]) -> Result<MlKemRecipientKey> {
         let key = serde_json::from_str::<JwkKey>(text).map_err(|_| Error::CorruptHeader)?;
         return public_from_jwk(&key);
     }
-    MlKemRecipientKey::from_bytes(&decode_hex(text.trim()).map_err(|_| Error::CorruptHeader)?)
+    MlKemRecipientPublicKey::from_bytes(&decode_hex(text.trim()).map_err(|_| Error::CorruptHeader)?)
 }
 
 fn private_jwk_secure(kid: &str, public_x: &str, seed: SecretVec) -> Result<SecretVec> {
@@ -352,7 +352,7 @@ fn trim_ascii_range(bytes: &[u8]) -> (usize, usize) {
     (start, end)
 }
 
-fn public_jwk(key: &MlKemRecipientKey) -> Result<JwkKey> {
+fn public_jwk(key: &MlKemRecipientPublicKey) -> Result<JwkKey> {
     let public_bytes = key.to_bytes();
     Ok(JwkKey {
         kty: KTY.to_string(),
@@ -365,10 +365,10 @@ fn public_jwk(key: &MlKemRecipientKey) -> Result<JwkKey> {
     })
 }
 
-fn public_from_jwk(key: &JwkKey) -> Result<MlKemRecipientKey> {
+fn public_from_jwk(key: &JwkKey) -> Result<MlKemRecipientPublicKey> {
     validate_jwk_header(key).map_err(|_| Error::CorruptHeader)?;
     let public = Base64UrlUnpadded::decode_vec(&key.x).map_err(|_| Error::CorruptHeader)?;
-    MlKemRecipientKey::from_bytes(&public)
+    MlKemRecipientPublicKey::from_bytes(&public)
 }
 
 fn validate_jwk_header(key: &JwkKey) -> Result<()> {
@@ -434,9 +434,13 @@ mod tests {
             keypair.to_seed_secure().unwrap()
         );
 
-        let public = export_public_key(&keypair.recipient_key(), KeyFormat::LockboxPem).unwrap();
+        let public =
+            export_public_key(&keypair.recipient_public_key(), KeyFormat::LockboxPem).unwrap();
         let loaded_public = import_public_key(&public).unwrap();
-        assert_eq!(loaded_public.to_bytes(), keypair.recipient_key().to_bytes());
+        assert_eq!(
+            loaded_public.to_bytes(),
+            keypair.recipient_public_key().to_bytes()
+        );
     }
 
     #[test]
@@ -447,10 +451,10 @@ mod tests {
             import_private_key(jwk).unwrap().to_seed_secure().unwrap(),
             keypair.to_seed_secure().unwrap()
         );
-        let jwks = export_public_key(&keypair.recipient_key(), KeyFormat::Jwks).unwrap();
+        let jwks = export_public_key(&keypair.recipient_public_key(), KeyFormat::Jwks).unwrap();
         assert_eq!(
             import_public_key(&jwks).unwrap().to_bytes(),
-            keypair.recipient_key().to_bytes()
+            keypair.recipient_public_key().to_bytes()
         );
     }
 

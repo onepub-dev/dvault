@@ -1,4 +1,6 @@
-use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair, Result};
+use lockbox_core::{
+    Error, Lockbox, LockboxCreate, LockboxPath, LockboxUnlock, MlKemKeyPair, Result, SecretVec,
+};
 use lockbox_vault::{
     export_private_key, import_private_key_file, ContentKeyStore, KeyFormat, SecretString, Vault,
     VaultDirectory,
@@ -10,6 +12,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn p(path: impl AsRef<str>) -> LockboxPath {
+    LockboxPath::new(path).unwrap()
+}
 
 #[derive(Default)]
 struct MemoryStore {
@@ -40,19 +46,21 @@ impl ContentKeyStore for MemoryStore {
 }
 
 #[test]
-fn vault_create_open_and_lock_with_raw_key() {
+fn vault_create_open_and_lock_with_content_key() {
     let path = unique_path("raw");
     let vault = Vault::new(MemoryStore::default());
-    let key = b"0123456789abcdef0123456789abcdef".to_vec();
+    let key = SecretVec::try_from_slice(b"0123456789abcdef0123456789abcdef").unwrap();
 
     let mut lockbox = vault
-        .create_lockbox(&path, LockboxCreate::RawKey(key))
+        .create_lockbox(&path, LockboxCreate::ContentKey(key))
         .unwrap();
-    lockbox.put_file("/docs/a.txt", b"alpha").unwrap();
+    lockbox
+        .add_file(&p("/docs/a.txt"), b"alpha", false)
+        .unwrap();
     lockbox.commit().unwrap();
 
     let opened = vault.open_lockbox(&path).unwrap();
-    assert_eq!(opened.get_file("/docs/a.txt").unwrap(), b"alpha");
+    assert_eq!(opened.get_file(&p("/docs/a.txt")).unwrap(), b"alpha");
 
     vault.lock_lockbox(&path).unwrap();
     assert!(matches!(vault.open_lockbox(&path), Err(Error::InvalidKey)));
@@ -69,7 +77,9 @@ fn vault_unlock_populates_cache_for_password_lockbox() {
     let mut lockbox = vault
         .create_lockbox(&path, LockboxCreate::Password(&password))
         .unwrap();
-    lockbox.put_file("/secret.txt", b"bravo").unwrap();
+    lockbox
+        .add_file(&p("/secret.txt"), b"bravo", false)
+        .unwrap();
     lockbox.commit().unwrap();
     vault.lock_lockbox(&path).unwrap();
 
@@ -79,7 +89,7 @@ fn vault_unlock_populates_cache_for_password_lockbox() {
         .unlock_lockbox(&path, LockboxUnlock::Password(&password))
         .unwrap();
     let opened = vault.open_lockbox(&path).unwrap();
-    assert_eq!(opened.get_file("/secret.txt").unwrap(), b"bravo");
+    assert_eq!(opened.get_file(&p("/secret.txt")).unwrap(), b"bravo");
 
     let _ = fs::remove_file(path);
 }
@@ -101,15 +111,17 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
     );
 
     vault
-        .store_trusted_recipient("alice", &keypair.recipient_key())
+        .store_trusted_recipient("alice", &keypair.recipient_public_key())
         .unwrap();
     let trusted = vault.list_trusted_recipients().unwrap();
     assert_eq!(trusted.len(), 1);
     assert_eq!(trusted[0].name, "alice");
 
     let password = SecretString::try_from_bytes(b"pw".to_vec()).unwrap();
-    let mut lockbox = Lockbox::create_with_password(&password).unwrap();
-    lockbox.put_file("/a.txt", b"alpha").unwrap();
+    let lockbox_path = root.join("backup-source.lbox");
+    let mut lockbox =
+        Lockbox::create_file(&lockbox_path, LockboxCreate::Password(&password)).unwrap();
+    lockbox.add_file(&p("/a.txt"), b"alpha", false).unwrap();
     lockbox.commit().unwrap();
     let backup = lockbox.export_key_directory_backup().unwrap();
     vault
@@ -139,7 +151,9 @@ fn vault_unlock_uses_key_directory_backup_when_embedded_directory_is_corrupt() {
     let password = SecretString::try_from_bytes(b"shared password".to_vec()).unwrap();
     let mut lockbox = Lockbox::create_file(&path, LockboxCreate::Password(&password))
         .expect("create password lockbox");
-    lockbox.put_file("/secret.txt", b"bravo").unwrap();
+    lockbox
+        .add_file(&p("/secret.txt"), b"bravo", false)
+        .unwrap();
     lockbox.commit().unwrap();
     let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
     VaultDirectory::open(&vault_root, &vault_password)
@@ -156,7 +170,7 @@ fn vault_unlock_uses_key_directory_backup_when_embedded_directory_is_corrupt() {
     let opened = vault
         .unlock_lockbox(&path, LockboxUnlock::Password(&password))
         .unwrap();
-    assert_eq!(opened.get_file("/secret.txt").unwrap(), b"bravo");
+    assert_eq!(opened.get_file(&p("/secret.txt")).unwrap(), b"bravo");
 
     std::env::remove_var("LOCKBOX_VAULT_DIR");
     std::env::remove_var("LOCKBOX_VAULT_PASSWORD");
@@ -175,7 +189,9 @@ fn vault_convenience_password_store_and_lock_all_flow() {
     let mut lockbox = vault
         .create_lockbox_with_password(&path, &password)
         .unwrap();
-    lockbox.put_file("/secret.txt", b"charlie").unwrap();
+    lockbox
+        .add_file(&p("/secret.txt"), b"charlie", false)
+        .unwrap();
     lockbox.commit().unwrap();
     vault.lock_lockbox(&path).unwrap();
     assert!(matches!(vault.open_lockbox(&path), Err(Error::InvalidKey)));
@@ -183,12 +199,12 @@ fn vault_convenience_password_store_and_lock_all_flow() {
     let opened = vault
         .unlock_lockbox_with_password(&path, &password)
         .unwrap();
-    assert_eq!(opened.get_file("/secret.txt").unwrap(), b"charlie");
+    assert_eq!(opened.get_file(&p("/secret.txt")).unwrap(), b"charlie");
     assert_eq!(
         vault
             .open_lockbox(&path)
             .unwrap()
-            .get_file("/secret.txt")
+            .get_file(&p("/secret.txt"))
             .unwrap(),
         b"charlie"
     );
@@ -226,7 +242,7 @@ fn vault_directory_public_crud_helpers_flow() {
     vault.delete_private_key("default").unwrap();
     assert!(!vault.private_key_exists("default").unwrap());
 
-    let recipient = keypair.recipient_key();
+    let recipient = keypair.recipient_public_key();
     assert!(!vault.trusted_recipient_exists("alice").unwrap());
     vault.store_trusted_recipient("alice", &recipient).unwrap();
     assert!(vault.trusted_recipient_exists("alice").unwrap());
@@ -240,7 +256,9 @@ fn vault_directory_public_crud_helpers_flow() {
 
     assert_eq!(vault.key_directory_backup_count().unwrap(), 0);
     let password = SecretString::try_from_bytes(b"pw".to_vec()).unwrap();
-    let mut lockbox = Lockbox::create_with_password(&password).unwrap();
+    let lockbox_path = root.join("backup-count-source.lbox");
+    let mut lockbox =
+        Lockbox::create_file(&lockbox_path, LockboxCreate::Password(&password)).unwrap();
     lockbox.commit().unwrap();
     vault
         .store_key_directory_backup(

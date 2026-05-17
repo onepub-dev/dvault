@@ -1,36 +1,46 @@
 use super::Lockbox;
 use crate::constants::DEFAULT_SYMLINK_PERMISSIONS;
 use crate::file_format::{decode_symlink_payload, encode_symlink_payload};
-use crate::logical_path::{canonicalize_api_path as canonicalize_path, LogicalPath};
-use crate::manifest_entry::ManifestEntry;
+use crate::lockbox_path::LockboxPath;
 use crate::node_kind::NodeKind;
 use crate::page::{
     encoded_object_len, uncompressed_objects_fit, PageObject, PageObjectKind,
     DEFAULT_METADATA_PAGE_BYTES,
 };
-use crate::symlink::Symlink;
+use crate::toc_entry::TocEntry;
 use crate::{Error, Result};
 
 impl Lockbox {
-    pub fn put_symlink(&mut self, path: &str, target: &str) -> Result<()> {
-        let symlink = Symlink::from_api(path, target)?;
-        let path = symlink.path().as_str().to_string();
-        let target = symlink.target().as_str().to_string();
+    /// Add or replace a symbolic link.
+    ///
+    /// When `replace` is `false`, returns `Error::AlreadyExists` if `path`
+    /// already names an existing file or symlink. When `replace` is `true`,
+    /// returns `Error::NotFound` if there is no existing entry to replace. Returns
+    /// `Error::InvalidPath` for directory-only or unsafe lockbox paths and
+    /// propagates storage errors from the write.
+    pub fn add_symlink(
+        &mut self,
+        path: &LockboxPath,
+        target: &LockboxPath,
+        replace: bool,
+    ) -> Result<()> {
+        let path = path.file_path()?;
+        let target = target.file_path()?;
+        self.validate_replace_intent(&path, replace)?;
         if self.should_discard_file_pages_after_flush()
-            && self.pending_small_files.contains_key(&path)
+            && self.pending_small_files.contains_key(path.as_str())
         {
             self.flush_bulk_small_file_packer()?;
         }
         self.remove_pending_small_file(&path);
 
-        if let Some(old) = self.manifest.get(path.as_str()) {
+        if let Some(old) = self.toc_entries.get(path.as_str()) {
             self.free_entry_slots(old.clone())?;
         }
 
         self.pending_symlinks.insert(path.clone(), target.clone());
-        let dirty_path = path.clone();
-        let entry = ManifestEntry {
-            path,
+        let entry = TocEntry {
+            path: path.clone(),
             len: 0,
             record_offset: 0,
             record_len: 0,
@@ -40,9 +50,8 @@ impl Lockbox {
             permissions: DEFAULT_SYMLINK_PERMISSIONS,
             chunks: Vec::new(),
         };
-        self.manifest
-            .insert(LogicalPath::from_canonical(entry.path.clone()), entry);
-        self.mark_toc_dirty(&dirty_path);
+        self.toc_entries.insert(path.clone(), entry);
+        self.mark_toc_dirty(&path);
         Ok(())
     }
 
@@ -90,28 +99,32 @@ impl Lockbox {
             .collect::<Vec<_>>();
         self.write_decoded_page_at(page_offset, self.sequence, objects)?;
         for pending in pending {
-            if let Some(entry) = self.manifest.get_mut(pending.path.as_str()) {
+            if let Some(entry) = self.toc_entries.get_mut(pending.path.as_str()) {
                 entry.record_offset = page_offset;
                 entry.record_len = DEFAULT_METADATA_PAGE_BYTES as u64;
                 entry.record_object_id = pending.object.id;
-                self.dirty_toc_paths
-                    .insert(LogicalPath::from_canonical(entry.path.clone()));
+                self.dirty_toc_paths.insert(entry.path.clone());
             }
         }
         Ok(())
     }
 
-    pub fn get_symlink_target(&self, path: &str) -> Result<String> {
-        let path = canonicalize_path(path, false)?;
+    /// Return the target path for a symbolic link.
+    ///
+    /// Returns `Error::InvalidPath` for directory-only paths,
+    /// `Error::NotFound` if `path` is absent or not a symlink, and
+    /// `Error::CorruptRecord` if the stored symlink metadata is inconsistent.
+    pub fn get_symlink_target(&self, path: &LockboxPath) -> Result<LockboxPath> {
+        let path = path.as_file_path()?;
         let entry = self
-            .manifest
-            .get(path.as_str())
+            .toc_entries
+            .get(path)
             .filter(|entry| !entry.deleted && entry.node_kind == NodeKind::Symlink)
-            .ok_or_else(|| Error::NotFound(path.clone()))?;
+            .ok_or_else(|| Error::NotFound(path.to_string()))?;
         self.symlink_target_for_entry(entry)
     }
 
-    pub(crate) fn symlink_target_for_entry(&self, entry: &ManifestEntry) -> Result<String> {
+    pub(crate) fn symlink_target_for_entry(&self, entry: &TocEntry) -> Result<LockboxPath> {
         if let Some(target) = self.pending_symlinks.get(entry.path.as_str()) {
             return Ok(target.clone());
         }
@@ -130,12 +143,13 @@ impl Lockbox {
         })
     }
 
-    pub fn is_symlink(&self, path: &str) -> bool {
-        let Ok(path) = canonicalize_path(path, false) else {
+    /// Return true when the logical path is a symbolic link.
+    pub fn is_symlink(&self, path: &LockboxPath) -> bool {
+        let Ok(path) = path.as_file_path() else {
             return false;
         };
-        self.manifest
-            .get(path.as_str())
+        self.toc_entries
+            .get(path)
             .filter(|entry| !entry.deleted)
             .map(|entry| entry.node_kind == NodeKind::Symlink)
             .unwrap_or(false)
@@ -143,6 +157,6 @@ impl Lockbox {
 }
 
 struct PendingSymlinkObject {
-    path: String,
+    path: LockboxPath,
     object: PageObject,
 }

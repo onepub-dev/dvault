@@ -9,12 +9,12 @@ use crate::constants::{
 };
 use crate::file_chunk::{FileChunk, FileFragment, PackedSmallFile, PendingFileChunk};
 use crate::file_format::{decode_file_fragment_payload_view, encode_file_fragment_payload};
-use crate::logical_path::{canonicalize_api_path as canonicalize_path, LogicalPath};
-use crate::manifest_entry::ManifestEntry;
+use crate::lockbox_path::LockboxPath;
 use crate::node_kind::NodeKind;
 use crate::page::{PageObject, PageObjectKind, DEFAULT_PAGE_BYTES};
 use crate::page_object_packer::{PackedPageObject, PageObjectPacker};
 use crate::security::validate_permissions;
+use crate::toc_entry::TocEntry;
 use crate::{Error, Result};
 
 const SMALL_FILE_PACKING_LIMIT: usize = 1024 * 1024;
@@ -22,61 +22,140 @@ const FILE_FRAME_BYTES: usize = 1020 * 1024;
 const MAX_FRAGMENT_BYTES: usize = DEFAULT_MAX_PAGE_BODY_BYTES - 64 * 1024;
 
 impl Lockbox {
-    pub fn put_file(&mut self, path: &str, data: &[u8]) -> Result<()> {
-        self.put_file_with_permissions(path, data, DEFAULT_FILE_PERMISSIONS)
+    pub(crate) fn validate_replace_intent(&self, path: &LockboxPath, replace: bool) -> Result<()> {
+        let exists = self.exists(path);
+        match (replace, exists) {
+            (false, true) => Err(Error::AlreadyExists(path.to_string())),
+            (true, false) => Err(Error::NotFound(path.to_string())),
+            _ => Ok(()),
+        }
     }
 
-    pub fn put_file_with_permissions(
+    /// Add or replace a file from an in-memory byte slice.
+    ///
+    /// When `replace` is `false`, returns `Error::AlreadyExists` if `path`
+    /// already names an existing file or symlink. When `replace` is `true`,
+    /// returns `Error::NotFound` if there is no existing entry to replace. Returns
+    /// `Error::InvalidPath` for directory-only or unsafe lockbox paths and
+    /// propagates storage or encoding errors from the write.
+    pub fn add_file(&mut self, path: &LockboxPath, data: &[u8], replace: bool) -> Result<()> {
+        self.add_file_with_permissions(path, data, DEFAULT_FILE_PERMISSIONS, replace)
+    }
+
+    /// Add or replace a file with explicit Unix-style permissions.
+    ///
+    /// `permissions` is a Unix mode value containing only the low permission
+    /// bits, written in Rust as octal literals such as `0o600`, `0o640`, or
+    /// `0o755`. File type bits, sticky/setuid/setgid bits, and platform ACLs
+    /// are not supported.
+    ///
+    /// When `replace` is `false`, returns `Error::AlreadyExists` if `path`
+    /// already names an existing file or symlink. When `replace` is `true`,
+    /// returns `Error::NotFound` if there is no existing entry to replace. Returns
+    /// `Error::InvalidPath` for directory-only or unsafe lockbox paths,
+    /// `Error::InvalidPath` for unsupported permission bits, and propagates
+    /// storage or encoding errors from the write.
+    pub fn add_file_with_permissions(
         &mut self,
-        path: &str,
+        path: &LockboxPath,
         data: &[u8],
         permissions: u32,
+        replace: bool,
     ) -> Result<()> {
         if data.len() <= SMALL_FILE_PACKING_LIMIT {
-            return self.stage_small_file(path, data, permissions);
+            return self.stage_small_file(path, data, permissions, replace);
         }
-        self.put_file_from_reader_with_permissions(path, Cursor::new(data), permissions)
+        self.add_file_from_reader_with_permissions(path, Cursor::new(data), permissions, replace)
     }
 
-    pub fn put_file_from_reader(&mut self, path: &str, reader: impl Read) -> Result<()> {
-        self.put_file_from_reader_with_permissions(path, reader, DEFAULT_FILE_PERMISSIONS)
+    /// Add or replace a file by streaming bytes from a reader.
+    ///
+    /// When `replace` is `false`, returns `Error::AlreadyExists` if `path`
+    /// already names an existing file or symlink. When `replace` is `true`,
+    /// returns `Error::NotFound` if there is no existing entry to replace. Returns
+    /// `Error::InvalidPath` for directory-only or unsafe lockbox paths and
+    /// propagates reader, storage, or encoding errors from the write.
+    pub fn add_file_from_reader(
+        &mut self,
+        path: &LockboxPath,
+        reader: impl Read,
+        replace: bool,
+    ) -> Result<()> {
+        self.add_file_from_reader_with_permissions(path, reader, DEFAULT_FILE_PERMISSIONS, replace)
     }
 
-    pub fn add_file_from_reader(&mut self, path: &str, reader: impl Read) -> Result<()> {
-        self.put_file_from_reader(path, reader)
-    }
-
-    pub fn add_file(&mut self, source: impl AsRef<Path>, destination: &str) -> Result<()> {
-        let source = source.as_ref();
+    /// Add or replace a file by reading from a host filesystem path.
+    ///
+    /// When `replace` is `false`, returns `Error::AlreadyExists` if
+    /// `destination` already names an existing file or symlink. When `replace`
+    /// is `true`, returns `Error::NotFound` if there is no existing entry to replace.
+    /// Returns `Error::InvalidPath` for directory-only or unsafe destination
+    /// paths and `Error::Io` if the host file cannot be read.
+    pub fn add_file_from_path(
+        &mut self,
+        source: &Path,
+        destination: &LockboxPath,
+        replace: bool,
+    ) -> Result<()> {
         let metadata = std::fs::metadata(source)
             .map_err(|err| Error::Io(format!("stat {}: {err}", source.display())))?;
         if metadata.len() <= SMALL_FILE_PACKING_LIMIT as u64 {
             let data = std::fs::read(source)
                 .map_err(|err| Error::Io(format!("read {}: {err}", source.display())))?;
-            return self.put_file(destination, &data);
+            return self.add_file(destination, &data, replace);
         }
         let file = std::fs::File::open(source)
             .map_err(|err| Error::Io(format!("open {}: {err}", source.display())))?;
-        self.add_file_from_reader(destination, file)
+        self.add_file_from_reader(destination, file, replace)
     }
 
-    pub fn put_file_from_reader_with_permissions(
+    /// Add or replace a streamed file with explicit Unix-style permissions.
+    ///
+    /// `permissions` is a Unix mode value containing only the low permission
+    /// bits, written in Rust as octal literals such as `0o600`, `0o640`, or
+    /// `0o755`. File type bits, sticky/setuid/setgid bits, and platform ACLs
+    /// are not supported.
+    ///
+    /// When `replace` is `false`, returns `Error::AlreadyExists` if `path`
+    /// already names an existing file or symlink. When `replace` is `true`,
+    /// returns `Error::NotFound` if there is no existing entry to replace. Returns
+    /// `Error::InvalidPath` for directory-only or unsafe lockbox paths,
+    /// `Error::InvalidPath` for unsupported permission bits, and propagates
+    /// reader, storage, or encoding errors from the write.
+    pub fn add_file_from_reader_with_permissions(
         &mut self,
-        path: &str,
+        path: &LockboxPath,
+        reader: impl Read,
+        permissions: u32,
+        replace: bool,
+    ) -> Result<()> {
+        self.write_file_from_reader_with_permissions(path, reader, permissions, replace)
+    }
+
+    fn write_file_from_reader_with_permissions(
+        &mut self,
+        path: &LockboxPath,
         mut reader: impl Read,
         permissions: u32,
+        replace: bool,
     ) -> Result<()> {
-        let path = canonicalize_path(path, false)?;
+        let path = path.file_path()?;
         let permissions = validate_permissions(permissions)?;
+        self.validate_replace_intent(&path, replace)?;
+        if self.should_discard_file_pages_after_flush()
+            && self.pending_small_files.contains_key(path.as_str())
+        {
+            self.flush_bulk_small_file_packer()?;
+        }
         self.remove_pending_small_file(&path);
-        if let Some(old) = self.manifest.get(path.as_str()).cloned() {
+        if let Some(old) = self.toc_entries.get(path.as_str()).cloned() {
             self.free_entry_slots(old)?;
         }
 
         let mut chunks = Vec::new();
         let mut file_offset = 0u64;
         let mut writer = FilePageWriter::new(self);
-        let skip_compression = likely_incompressible_path(&path);
+        let skip_compression = likely_incompressible_path(path.as_str());
         let mut buffer = vec![0; FILE_FRAME_BYTES];
         loop {
             let read = read_next_chunk(&mut reader, &mut buffer)?;
@@ -111,9 +190,8 @@ impl Lockbox {
         }
         writer.finish(&mut chunks)?;
 
-        let dirty_path = path.clone();
-        let entry = ManifestEntry {
-            path,
+        let entry = TocEntry {
+            path: path.clone(),
             len: file_offset,
             record_offset: chunks
                 .first()
@@ -132,32 +210,38 @@ impl Lockbox {
             chunks,
         };
         self.add_entry_record_refs(&entry);
-        self.manifest
-            .insert(LogicalPath::from_canonical(entry.path.clone()), entry);
-        self.mark_toc_dirty(&dirty_path);
+        self.toc_entries.insert(path.clone(), entry);
+        self.mark_toc_dirty(&path);
         self.needs_packing = true;
         Ok(())
     }
 
-    pub fn get_file(&self, path: &str) -> Result<Vec<u8>> {
+    /// Return the complete contents of a file.
+    ///
+    /// Returns `Error::InvalidPath` for directory-only paths, `Error::NotFound`
+    /// if `path` is absent or not a file, `Error::CorruptRecord` if stored file
+    /// metadata is inconsistent, and `Error::Io` if an internal write into the
+    /// output buffer fails.
+    pub fn get_file(&self, path: &LockboxPath) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         self.extract_file_to_writer(path, &mut out)?;
         Ok(out)
     }
 
-    pub fn write_file_to(&self, path: &str, mut writer: impl Write) -> Result<()> {
-        self.extract_file_to_writer(path, &mut writer)
-    }
-
-    pub fn extract_file_to_writer(&self, path: &str, mut writer: impl Write) -> Result<()> {
-        let path = canonicalize_path(path, false)?;
+    /// Extract a file's contents to a writer.
+    ///
+    /// Returns `Error::InvalidPath` for directory-only paths, `Error::NotFound`
+    /// if `path` is absent or not a file, `Error::CorruptRecord` if stored file
+    /// metadata is inconsistent, and `Error::Io` if the writer fails.
+    pub fn extract_file_to_writer(&self, path: &LockboxPath, mut writer: impl Write) -> Result<()> {
+        let path = path.as_file_path()?;
         let entry = self
-            .manifest
-            .get(path.as_str())
+            .toc_entries
+            .get(path)
             .filter(|entry| !entry.deleted && entry.node_kind == NodeKind::File)
-            .ok_or_else(|| Error::NotFound(path.clone()))?;
+            .ok_or_else(|| Error::NotFound(path.to_string()))?;
 
-        if let Some(pending) = self.pending_small_files.get(path.as_str()) {
+        if let Some(pending) = self.pending_small_files.get(path) {
             writer
                 .write_all(&pending.data)
                 .map_err(|err| Error::Io(err.to_string()))?;
@@ -190,34 +274,65 @@ impl Lockbox {
         Ok(())
     }
 
-    pub fn extract_file_to(&self, source: &str, destination: impl AsRef<Path>) -> Result<()> {
-        let mut file = std::fs::File::create(destination.as_ref()).map_err(|err| {
-            Error::Io(format!("create {}: {err}", destination.as_ref().display()))
-        })?;
+    /// Extract a file's contents to a host filesystem path.
+    ///
+    /// When `replace` is `false`, returns `Error::AlreadyExists` if the
+    /// destination path already exists. When `replace` is `true`, returns
+    /// `Error::NotFound` if the destination path does not already exist.
+    /// Returns `Error::Io` if the destination file cannot be created. Returns
+    /// the same errors as `extract_file_to_writer` for lockbox read failures.
+    pub fn extract_file_to(
+        &self,
+        source: &LockboxPath,
+        destination: &Path,
+        replace: bool,
+    ) -> Result<()> {
+        let destination_exists = destination.exists();
+        match (replace, destination_exists) {
+            (false, true) => {
+                return Err(Error::AlreadyExists(destination.display().to_string()));
+            }
+            (true, false) => {
+                return Err(Error::NotFound(destination.display().to_string()));
+            }
+            _ => {}
+        }
+        let mut file = std::fs::File::create(destination)
+            .map_err(|err| Error::Io(format!("create {}: {err}", destination.display())))?;
         self.extract_file_to_writer(source, &mut file)
     }
 
-    pub fn permissions(&self, path: &str) -> Option<u32> {
-        let path = canonicalize_path(path, false).ok()?;
-        self.manifest
-            .get(path.as_str())
+    /// Return stored Unix-style permissions for a file or symlink.
+    ///
+    /// The returned value uses the low Unix permission bits only, for example
+    /// `0o600`, `0o640`, or `0o755`.
+    pub fn permissions(&self, path: &LockboxPath) -> Option<u32> {
+        let path = path.as_file_path().ok()?;
+        self.toc_entries
+            .get(path)
             .filter(|entry| !entry.deleted)
             .map(|entry| entry.permissions)
     }
 
-    pub fn read_file_range(&self, path: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
-        let path = canonicalize_path(path, false)?;
+    /// Read a bounded byte range from a file.
+    ///
+    /// Returns `Error::InvalidPath` for directory-only paths, `Error::NotFound`
+    /// if `path` is absent or not a file, and `Error::CorruptRecord` if stored
+    /// file metadata is inconsistent. A range outside the file returns an empty
+    /// vector rather than an error.
+    pub fn read_file_range(&self, path: &LockboxPath, offset: u64, len: u64) -> Result<Vec<u8>> {
+        let path = path.as_file_path()?;
         let entry = self
-            .manifest
-            .get(path.as_str())
+            .toc_entries
+            .get(path)
             .filter(|entry| !entry.deleted && entry.node_kind == NodeKind::File)
-            .ok_or_else(|| Error::NotFound(path.clone()))?;
+            .ok_or_else(|| Error::NotFound(path.to_string()))?;
         if len == 0 || offset >= entry.len {
             return Ok(Vec::new());
         }
         let wanted_end = offset.saturating_add(len).min(entry.len);
 
-        if let Some(pending) = self.pending_small_files.get(path.as_str()) {
+        if let Some(pending) = self.pending_small_files.get(path) {
             let start = offset.min(pending.data.len() as u64) as usize;
             let end = wanted_end.min(pending.data.len() as u64) as usize;
             return Ok(pending.data[start..end].to_vec());
@@ -294,13 +409,20 @@ impl Lockbox {
         decode_file_frame(chunk.compression, &stored, chunk.len)
     }
 
-    fn stage_small_file(&mut self, path: &str, data: &[u8], permissions: u32) -> Result<()> {
-        let path = canonicalize_path(path, false)?;
+    fn stage_small_file(
+        &mut self,
+        path: &LockboxPath,
+        data: &[u8],
+        permissions: u32,
+        replace: bool,
+    ) -> Result<()> {
+        let path = path.file_path()?;
         let permissions = validate_permissions(permissions)?;
+        self.validate_replace_intent(&path, replace)?;
         if self.should_discard_file_pages_after_flush() {
-            return self.stage_bulk_small_file(path, data, permissions);
+            return self.stage_bulk_small_file(path, data, permissions, replace);
         }
-        if let Some(old) = self.manifest.get(path.as_str()).cloned() {
+        if let Some(old) = self.toc_entries.get(path.as_str()).cloned() {
             self.free_entry_slots(old)?;
         }
 
@@ -314,11 +436,10 @@ impl Lockbox {
                 data: Arc::from(data),
             },
         );
-        let dirty_path = path.clone();
-        self.manifest.insert(
-            LogicalPath::from_canonical(path.clone()),
-            ManifestEntry {
-                path,
+        self.toc_entries.insert(
+            path.clone(),
+            TocEntry {
+                path: path.clone(),
                 len: data.len() as u64,
                 record_offset: 0,
                 record_len: 0,
@@ -329,14 +450,21 @@ impl Lockbox {
                 chunks: Vec::new(),
             },
         );
-        self.mark_toc_dirty(&dirty_path);
+        self.mark_toc_dirty(&path);
         Ok(())
     }
 
-    fn stage_bulk_small_file(&mut self, path: String, data: &[u8], permissions: u32) -> Result<()> {
-        if self.manifest.contains_key(path.as_str()) {
+    fn stage_bulk_small_file(
+        &mut self,
+        path: LockboxPath,
+        data: &[u8],
+        permissions: u32,
+        replace: bool,
+    ) -> Result<()> {
+        self.validate_replace_intent(&path, replace)?;
+        if self.toc_entries.contains_key(path.as_str()) {
             self.flush_bulk_small_file_packer()?;
-            if let Some(old) = self.manifest.get(path.as_str()).cloned() {
+            if let Some(old) = self.toc_entries.get(path.as_str()).cloned() {
                 self.free_entry_slots(old)?;
             }
         }
@@ -348,7 +476,7 @@ impl Lockbox {
             file_offset: 0,
             data: Arc::from(data),
         };
-        let skip_compression = likely_incompressible_path(&path);
+        let skip_compression = likely_incompressible_path(path.as_str());
         let (compression, stored) = encode_file_frame(data, skip_compression);
         self.sequence += 1;
         let frame_id = self.sequence;
@@ -386,11 +514,10 @@ impl Lockbox {
         self.push_bulk_small_file_object(object, context)?;
 
         self.insert_pending_small_file(path.clone(), pending);
-        let dirty_path = path.clone();
-        self.manifest.insert(
-            LogicalPath::from_canonical(path.clone()),
-            ManifestEntry {
-                path,
+        self.toc_entries.insert(
+            path.clone(),
+            TocEntry {
+                path: path.clone(),
                 len: data.len() as u64,
                 record_offset: 0,
                 record_len: 0,
@@ -401,11 +528,14 @@ impl Lockbox {
                 chunks: Vec::new(),
             },
         );
-        self.mark_toc_dirty(&dirty_path);
+        self.mark_toc_dirty(&path);
         Ok(())
     }
 
-    pub(crate) fn remove_pending_small_file(&mut self, path: &str) -> Option<PendingFileChunk> {
+    pub(crate) fn remove_pending_small_file(
+        &mut self,
+        path: &LockboxPath,
+    ) -> Option<PendingFileChunk> {
         let removed = self.pending_small_files.remove(path);
         if let Some(pending) = removed.as_ref() {
             self.pending_small_file_bytes = self
@@ -415,7 +545,11 @@ impl Lockbox {
         removed
     }
 
-    pub(crate) fn insert_pending_small_file(&mut self, path: String, pending: PendingFileChunk) {
+    pub(crate) fn insert_pending_small_file(
+        &mut self,
+        path: LockboxPath,
+        pending: PendingFileChunk,
+    ) {
         let pending_len = pending.data.len();
         if let Some(old) = self.pending_small_files.insert(path, pending) {
             self.pending_small_file_bytes =
@@ -447,7 +581,7 @@ impl Lockbox {
                     total_len: chunk.total_len,
                     file_offset: 0,
                     data: &chunk.data,
-                    skip_compression: likely_incompressible_path(&chunk.path),
+                    skip_compression: likely_incompressible_path(chunk.path.as_str()),
                 },
                 &mut all_chunks,
             )?;
@@ -456,7 +590,7 @@ impl Lockbox {
         writer.finish(&mut all_chunks)?;
         for (path, permissions, total_len, start) in updates {
             let chunks = all_chunks[start..start + 1].to_vec();
-            if let Some(entry) = writer.lockbox.manifest.get_mut(path.as_str()) {
+            if let Some(entry) = writer.lockbox.toc_entries.get_mut(path.as_str()) {
                 entry.record_offset = chunks
                     .first()
                     .and_then(|chunk| chunk.fragments.first())
@@ -476,9 +610,7 @@ impl Lockbox {
                 writer.lockbox.add_entry_record_refs(&entry);
             }
         }
-        writer
-            .lockbox
-            .mark_toc_dirty_paths(dirty_paths.iter().map(String::as_str));
+        writer.lockbox.mark_toc_dirty_paths(dirty_paths.iter());
         Ok(())
     }
 
@@ -547,7 +679,7 @@ impl Lockbox {
                 }],
             }];
             self.remove_pending_small_file(&packed.path);
-            if let Some(entry) = self.manifest.get_mut(packed.path.as_str()) {
+            if let Some(entry) = self.toc_entries.get_mut(packed.path.as_str()) {
                 entry.record_offset = page_offset;
                 entry.record_len = DEFAULT_PAGE_BYTES as u64;
                 entry.record_object_id = packed.object_id;
@@ -559,13 +691,13 @@ impl Lockbox {
                 self.add_entry_record_refs(&entry);
             }
         }
-        self.mark_toc_dirty_paths(dirty_paths.iter().map(String::as_str));
+        self.mark_toc_dirty_paths(dirty_paths.iter());
         Ok(())
     }
 
     pub(crate) fn pack_small_file_pages(&mut self) -> Result<()> {
         let mut candidates = Vec::new();
-        for entry in self.manifest.values() {
+        for entry in self.toc_entries.values() {
             if entry.deleted || entry.node_kind != NodeKind::File || entry.len > 1024 * 1024 {
                 continue;
             }
@@ -595,7 +727,7 @@ impl Lockbox {
                     total_len: len,
                     file_offset: 0,
                     data: &data,
-                    skip_compression: likely_incompressible_path(&path),
+                    skip_compression: likely_incompressible_path(path.as_str()),
                 },
                 &mut all_chunks,
             )?;
@@ -604,7 +736,7 @@ impl Lockbox {
         writer.finish(&mut all_chunks)?;
         for (path, permissions, len, start) in updates {
             let chunks = all_chunks[start..start + 1].to_vec();
-            if let Some(entry) = writer.lockbox.manifest.get_mut(path.as_str()) {
+            if let Some(entry) = writer.lockbox.toc_entries.get_mut(path.as_str()) {
                 entry.record_offset = chunks
                     .first()
                     .and_then(|chunk| chunk.fragments.first())
@@ -624,9 +756,7 @@ impl Lockbox {
                 writer.lockbox.add_entry_record_refs(&entry);
             }
         }
-        writer
-            .lockbox
-            .mark_toc_dirty_paths(dirty_paths.iter().map(String::as_str));
+        writer.lockbox.mark_toc_dirty_paths(dirty_paths.iter());
         Ok(())
     }
 }
@@ -674,7 +804,7 @@ struct FilePageWriter<'a> {
 
 #[derive(Clone, Copy)]
 struct FileFrameWrite<'a> {
-    path: &'a str,
+    path: &'a LockboxPath,
     permissions: u32,
     total_len: u64,
     file_offset: u64,
@@ -700,7 +830,7 @@ impl<'a> FilePageWriter<'a> {
         let frame_id = self.lockbox.sequence;
         let chunk_index = chunks.len();
         chunks.push(FileChunk {
-            stored_path: frame.path.to_string(),
+            stored_path: frame.path.clone(),
             file_offset: frame.file_offset,
             len: frame.data.len() as u64,
             compressed_len: stored.len() as u64,
@@ -752,7 +882,7 @@ impl<'a> FilePageWriter<'a> {
     #[allow(clippy::too_many_arguments)]
     fn add_fragment(
         &mut self,
-        path: &str,
+        path: &LockboxPath,
         permissions: u32,
         total_len: u64,
         file_offset: u64,
@@ -769,7 +899,7 @@ impl<'a> FilePageWriter<'a> {
         let object_id = self.lockbox.sequence;
         let payload = encode_file_fragment_payload(
             &PendingFileChunk {
-                path: path.to_string(),
+                path: path.clone(),
                 permissions,
                 total_len,
                 file_offset,

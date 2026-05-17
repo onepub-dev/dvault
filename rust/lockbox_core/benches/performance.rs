@@ -1,11 +1,24 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use lockbox_core::{ExtractPolicy, ListOptions, Lockbox, SecretString};
+use lockbox_core::{
+    EnvName, ExtractPolicy, ListOptions, Lockbox, LockboxCreate, LockboxPath, SecretString,
+    SecretVec,
+};
 use lockbox_secure::read_access as secure_read_access;
 use std::fs;
-use std::io::{Read, Result as IoResult};
+use std::io::{sink, Read, Result as IoResult};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const KEY: &[u8] = b"criterion performance key";
+static LOCKBOX_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn p(path: impl AsRef<str>) -> LockboxPath {
+    LockboxPath::new(path).unwrap()
+}
+
+fn env(name: impl AsRef<str>) -> EnvName {
+    EnvName::new(name).unwrap()
+}
 
 fn bench_small_files(c: &mut Criterion) {
     let mut group = c.benchmark_group("small_files");
@@ -15,14 +28,14 @@ fn bench_small_files(c: &mut Criterion) {
         b.iter_batched(
             || vec![b'x'; 1024],
             |payload| {
-                let mut lockbox = Lockbox::create(KEY);
+                let mut lockbox = new_lockbox();
                 for i in 0..1000 {
                     lockbox
-                        .put_file(&format!("/tree/file-{i:06}.bin"), &payload)
+                        .add_file(&p(format!("/tree/file-{i:06}.bin")), &payload, false)
                         .unwrap();
                 }
                 lockbox.commit().unwrap();
-                black_box(lockbox.to_bytes().len());
+                black_box(lockbox.inspector().storage_len().unwrap() as usize);
             },
             BatchSize::SmallInput,
         );
@@ -33,10 +46,21 @@ fn bench_small_files(c: &mut Criterion) {
         max_files: 1001,
         ..ExtractPolicy::default()
     };
-    group.bench_function("extract_memory_1000x1k", |b| {
+    group.bench_function("extract_stream_1000x1k", |b| {
         b.iter(|| {
-            let files = lockbox.extract_all(&policy).unwrap();
-            black_box(files.len());
+            let mut count = 0usize;
+            for entry in lockbox
+                .list_iter(ListOptions {
+                    recursive: true,
+                    ..ListOptions::new(&p("/"))
+                })
+                .unwrap()
+            {
+                let entry = entry.unwrap();
+                lockbox.extract_file_to_writer(&entry.path, sink()).unwrap();
+                count += 1;
+            }
+            black_box(count);
         });
     });
 
@@ -61,14 +85,14 @@ fn bench_mixed_tree(c: &mut Criterion) {
 
     group.bench_function("add_commit_mixed", |b| {
         b.iter(|| {
-            let mut lockbox = Lockbox::create(KEY);
+            let mut lockbox = new_lockbox();
             add_mixed_tree(&mut lockbox);
             lockbox.commit().unwrap();
-            black_box(lockbox.to_bytes().len());
+            black_box(lockbox.inspector().storage_len().unwrap() as usize);
         });
     });
 
-    let mut lockbox = Lockbox::create(KEY);
+    let mut lockbox = new_lockbox();
     add_mixed_tree(&mut lockbox);
     lockbox.commit().unwrap();
 
@@ -77,7 +101,7 @@ fn bench_mixed_tree(c: &mut Criterion) {
             let count = lockbox
                 .list_iter(ListOptions {
                     recursive: true,
-                    ..ListOptions::new("/")
+                    ..ListOptions::new(&p("/"))
                 })
                 .unwrap()
                 .count();
@@ -112,23 +136,25 @@ fn bench_large_file(c: &mut Criterion) {
 
     group.bench_function("add_commit_16m_randomish", |b| {
         b.iter(|| {
-            let mut lockbox = Lockbox::create(KEY);
+            let mut lockbox = new_lockbox();
             lockbox
-                .put_file_from_reader(
-                    "/large/blob.bin",
+                .add_file_from_reader(
+                    &p("/large/blob.bin"),
                     PatternReader::new(16 * 1024 * 1024, Pattern::Randomish),
+                    false,
                 )
                 .unwrap();
             lockbox.commit().unwrap();
-            black_box(lockbox.to_bytes().len());
+            black_box(lockbox.inspector().storage_len().unwrap() as usize);
         });
     });
 
-    let mut lockbox = Lockbox::create(KEY);
+    let mut lockbox = new_lockbox();
     lockbox
-        .put_file_from_reader(
-            "/large/blob.bin",
+        .add_file_from_reader(
+            &p("/large/blob.bin"),
             PatternReader::new(16 * 1024 * 1024, Pattern::Randomish),
+            false,
         )
         .unwrap();
     lockbox.commit().unwrap();
@@ -136,7 +162,7 @@ fn bench_large_file(c: &mut Criterion) {
     group.bench_function("range_read_1m_middle", |b| {
         b.iter(|| {
             let data = lockbox
-                .read_file_range("/large/blob.bin", 8 * 1024 * 1024, 1024 * 1024)
+                .read_file_range(&p("/large/blob.bin"), 8 * 1024 * 1024, 1024 * 1024)
                 .unwrap();
             black_box(data.len());
         });
@@ -153,10 +179,10 @@ fn bench_append_delete(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let payload = vec![b'a'; 2048];
-                let mut lockbox = Lockbox::create(KEY);
+                let mut lockbox = new_lockbox();
                 for i in 0..1000 {
                     lockbox
-                        .put_file(&format!("/set/file-{i:06}.bin"), &payload)
+                        .add_file(&p(format!("/set/file-{i:06}.bin")), &payload, false)
                         .unwrap();
                 }
                 lockbox.commit().unwrap();
@@ -166,17 +192,17 @@ fn bench_append_delete(c: &mut Criterion) {
                 let payload = vec![b'b'; 2048];
                 for i in 1000..1200 {
                     lockbox
-                        .put_file(&format!("/set/file-{i:06}.bin"), &payload)
+                        .add_file(&p(format!("/set/file-{i:06}.bin")), &payload, false)
                         .unwrap();
                 }
                 for i in 0..200 {
-                    lockbox.delete(&format!("/set/file-{i:06}.bin")).unwrap();
+                    lockbox.delete(&p(format!("/set/file-{i:06}.bin"))).unwrap();
                     lockbox
-                        .put_file(&format!("/set/replacement-{i:06}.bin"), &payload)
+                        .add_file(&p(format!("/set/replacement-{i:06}.bin")), &payload, false)
                         .unwrap();
                 }
                 lockbox.commit().unwrap();
-                black_box(lockbox.to_bytes().len());
+                black_box(lockbox.inspector().storage_len().unwrap() as usize);
             },
             BatchSize::SmallInput,
         );
@@ -194,10 +220,10 @@ fn bench_toc_structure(c: &mut Criterion) {
             || prepared_small_lockbox(5000, 256),
             |mut lockbox| {
                 lockbox
-                    .put_file("/tree/file-000000.bin", black_box(b"changed"))
+                    .add_file(&p("/tree/file-000000.bin"), black_box(b"changed"), true)
                     .unwrap();
                 lockbox.commit().unwrap();
-                black_box(lockbox.to_bytes().len());
+                black_box(lockbox.inspector().storage_len().unwrap() as usize);
             },
             BatchSize::SmallInput,
         );
@@ -209,11 +235,11 @@ fn bench_toc_structure(c: &mut Criterion) {
             |mut lockbox| {
                 for i in 5000..5500 {
                     lockbox
-                        .put_file(&format!("/tree/file-{i:06}.bin"), b"new")
+                        .add_file(&p(format!("/tree/file-{i:06}.bin")), b"new", false)
                         .unwrap();
                 }
                 lockbox.commit().unwrap();
-                black_box(lockbox.to_bytes().len());
+                black_box(lockbox.inspector().storage_len().unwrap() as usize);
             },
             BatchSize::SmallInput,
         );
@@ -224,10 +250,12 @@ fn bench_toc_structure(c: &mut Criterion) {
             || prepared_small_lockbox(5000, 256),
             |mut lockbox| {
                 for i in 0..500 {
-                    lockbox.delete(&format!("/tree/file-{i:06}.bin")).unwrap();
+                    lockbox
+                        .delete(&p(format!("/tree/file-{i:06}.bin")))
+                        .unwrap();
                 }
                 lockbox.commit().unwrap();
-                black_box(lockbox.to_bytes().len());
+                black_box(lockbox.inspector().storage_len().unwrap() as usize);
             },
             BatchSize::SmallInput,
         );
@@ -243,11 +271,12 @@ fn bench_metadata_operations(c: &mut Criterion) {
     group.bench_function("rename_16m_file_commit", |b| {
         b.iter_batched(
             || {
-                let mut lockbox = Lockbox::create(KEY);
+                let mut lockbox = new_lockbox();
                 lockbox
-                    .put_file_from_reader(
-                        "/large/source.bin",
+                    .add_file_from_reader(
+                        &p("/large/source.bin"),
                         PatternReader::new(16 * 1024 * 1024, Pattern::Randomish),
+                        false,
                     )
                     .unwrap();
                 lockbox.commit().unwrap();
@@ -255,10 +284,10 @@ fn bench_metadata_operations(c: &mut Criterion) {
             },
             |mut lockbox| {
                 lockbox
-                    .rename("/large/source.bin", "/archive/renamed.bin")
+                    .rename(&p("/large/source.bin"), &p("/archive/renamed.bin"))
                     .unwrap();
                 lockbox.commit().unwrap();
-                black_box(lockbox.stat("/archive/renamed.bin").unwrap().len);
+                black_box(lockbox.stat(&p("/archive/renamed.bin")).unwrap().len);
             },
             BatchSize::SmallInput,
         );
@@ -267,14 +296,14 @@ fn bench_metadata_operations(c: &mut Criterion) {
     group.bench_function("list_env_1000", |b| {
         b.iter_batched(
             || {
-                let mut lockbox = Lockbox::create(KEY);
+                let mut lockbox = new_lockbox();
                 for i in 0..1000 {
                     lockbox
-                        .set_env(&format!("LOCKBOX_ENV_{i:04}"), "value")
+                        .set_env(&env(format!("LOCKBOX_ENV_{i:04}")), "value")
                         .unwrap();
                 }
                 lockbox.commit().unwrap();
-                Lockbox::open(lockbox.to_bytes(), KEY).unwrap()
+                lockbox
             },
             |lockbox| {
                 let names = lockbox.list_env().unwrap();
@@ -287,22 +316,25 @@ fn bench_metadata_operations(c: &mut Criterion) {
     group.bench_function("compact_16m_file_after_delete", |b| {
         b.iter_batched(
             || {
-                let mut lockbox = Lockbox::create(KEY);
+                let mut lockbox = new_lockbox();
                 lockbox
-                    .put_file_from_reader(
-                        "/large/blob.bin",
+                    .add_file_from_reader(
+                        &p("/large/blob.bin"),
                         PatternReader::new(16 * 1024 * 1024, Pattern::Randomish),
+                        false,
                     )
                     .unwrap();
-                lockbox.put_file("/delete-me.txt", b"delete").unwrap();
+                lockbox
+                    .add_file(&p("/delete-me.txt"), b"delete", false)
+                    .unwrap();
                 lockbox.commit().unwrap();
-                lockbox.delete("/delete-me.txt").unwrap();
+                lockbox.delete(&p("/delete-me.txt")).unwrap();
                 lockbox
             },
             |mut lockbox| {
-                lockbox.compact().unwrap();
                 lockbox.commit().unwrap();
-                black_box(lockbox.stat("/large/blob.bin").unwrap().len);
+                lockbox.commit().unwrap();
+                black_box(lockbox.stat(&p("/large/blob.bin")).unwrap().len);
             },
             BatchSize::SmallInput,
         );
@@ -384,14 +416,26 @@ fn bench_secure_string_store(c: &mut Criterion) {
 
 fn prepared_small_lockbox(files: usize, file_size: usize) -> Lockbox {
     let payload = vec![b'x'; file_size];
-    let mut lockbox = Lockbox::create(KEY);
+    let mut lockbox = new_lockbox();
     for i in 0..files {
         lockbox
-            .put_file(&format!("/tree/file-{i:06}.bin"), &payload)
+            .add_file(&p(format!("/tree/file-{i:06}.bin")), &payload, false)
             .unwrap();
     }
     lockbox.commit().unwrap();
     lockbox
+}
+
+fn new_lockbox() -> Lockbox {
+    let index = LOCKBOX_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path =
+        std::env::temp_dir().join(format!("lockbox-bench-{}-{index}.lbx", std::process::id()));
+    let _ = fs::remove_file(&path);
+    Lockbox::create_file(
+        &path,
+        LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+    )
+    .unwrap()
 }
 
 fn add_mixed_tree(lockbox: &mut Lockbox) {
@@ -400,14 +444,19 @@ fn add_mixed_tree(lockbox: &mut Lockbox) {
     for dir in 0..8 {
         for file in 0..25 {
             lockbox
-                .put_file(&format!("/mixed/dir-{dir:02}/tiny-{file:03}.txt"), &tiny)
+                .add_file(
+                    &p(format!("/mixed/dir-{dir:02}/tiny-{file:03}.txt")),
+                    &tiny,
+                    false,
+                )
                 .unwrap();
         }
         for file in 0..4 {
             lockbox
-                .put_file(
-                    &format!("/mixed/dir-{dir:02}/medium-{file:03}.bin"),
+                .add_file(
+                    &p(format!("/mixed/dir-{dir:02}/medium-{file:03}.bin")),
                     &medium,
+                    false,
                 )
                 .unwrap();
         }

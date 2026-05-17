@@ -8,7 +8,7 @@ use crate::page_tree::{
 };
 use crate::secret_vec::{secure_read_access, SecureVec};
 use crate::security::{validate_env_name, validate_env_value_ref};
-use crate::{EnvSensitivity, Error, Result, SecretString};
+use crate::{EnvName, EnvSensitivity, Error, Result, SecretString};
 
 const ENV_NODE_VERSION: u8 = 1;
 const ENV_NODE_VERSION_WITH_SENSITIVITY: u8 = 2;
@@ -37,13 +37,6 @@ impl EnvValue {
         match self {
             Self::Normal(_) => EnvSensitivity::Normal,
             Self::Secret(_) => EnvSensitivity::Secret,
-        }
-    }
-
-    pub(crate) fn as_normal(&self) -> Option<&str> {
-        match self {
-            Self::Normal(value) => Some(value),
-            Self::Secret(_) => None,
         }
     }
 
@@ -120,11 +113,11 @@ impl EnvTreeNode {
     }
 }
 
-pub(crate) fn env_entries_from_map(env: &BTreeMap<String, EnvValue>) -> Vec<EnvEntry> {
+pub(crate) fn env_entries_from_map(env: &BTreeMap<EnvName, EnvValue>) -> Vec<EnvEntry> {
     let mut entries = env
         .iter()
         .map(|(name, value)| EnvEntry {
-            name: internal_env_name(name, value.sensitivity()),
+            name: internal_env_name(name.as_str(), value.sensitivity()),
             value: value.clone(),
         })
         .collect::<Vec<_>>();
@@ -437,19 +430,21 @@ fn public_env_name_and_sensitivity(
     encoded_sensitivity: EnvSensitivity,
 ) -> Result<(String, EnvSensitivity)> {
     if let Some(name) = name.strip_prefix(ENV_PLAIN_PREFIX) {
-        validate_env_name(name)?;
+        let name = EnvName::new(name)?;
         if encoded_sensitivity != EnvSensitivity::Normal {
             return Err(Error::CorruptRecord);
         }
-        return Ok((name.to_string(), EnvSensitivity::Normal));
+        return Ok((name.as_str().to_string(), EnvSensitivity::Normal));
     }
     if let Some(name) = name.strip_prefix(ENV_SECRET_PREFIX) {
-        validate_env_name(name)?;
+        let name = EnvName::new(name)?;
         if encoded_sensitivity != EnvSensitivity::Secret {
             return Err(Error::CorruptRecord);
         }
-        return Ok((name.to_string(), EnvSensitivity::Secret));
+        return Ok((name.as_str().to_string(), EnvSensitivity::Secret));
     }
-    validate_env_name(name)?;
-    Ok((name.to_string(), encoded_sensitivity))
+    Ok((
+        EnvName::new(name)?.as_str().to_string(),
+        encoded_sensitivity,
+    ))
 }

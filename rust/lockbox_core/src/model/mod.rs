@@ -1,9 +1,7 @@
 pub(crate) mod entry;
+pub(crate) mod env_name;
 pub(crate) mod env_sensitivity;
 pub(crate) mod extract_policy;
-pub(crate) mod extracted_file;
-pub(crate) mod extracted_node;
-pub(crate) mod extracted_symlink;
 pub(crate) mod file_chunk;
 pub(crate) mod list_iter;
 pub(crate) mod list_options;

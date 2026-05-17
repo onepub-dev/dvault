@@ -1,8 +1,10 @@
+use crate::LockboxPath;
+
 /// Options for listing lockbox entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListOptions {
     /// Root logical path to list from.
-    pub path: String,
+    pub path: LockboxPath,
     /// Optional glob applied to returned logical paths.
     pub glob: Option<String>,
     /// Whether descendants should be included recursively.
@@ -17,9 +19,9 @@ pub struct ListOptions {
 
 impl ListOptions {
     /// Create default non-recursive listing options for `path`.
-    pub fn new(path: &str) -> Self {
+    pub fn new(path: &LockboxPath) -> Self {
         Self {
-            path: path.to_string(),
+            path: path.clone(),
             glob: None,
             recursive: false,
             include_files: true,

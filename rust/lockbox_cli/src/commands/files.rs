@@ -1,5 +1,5 @@
 use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
-use lockbox_core::{ExtractPolicy, ListOptions, Lockbox, WorkloadProfile};
+use lockbox_core::{Error, ExtractPolicy, ListOptions, Lockbox, LockboxPath, WorkloadProfile};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -24,30 +24,31 @@ pub(crate) fn extract(args: &[String], access: &Access) -> CliResult<()> {
     if args.get(1).map(String::as_str) == Some("--to") {
         let dest = require_arg(args, 2, "destination")?;
         let policy = extract_policy_from_args(&args[3..]);
-        lb.extract_all_to(dest, &policy)?;
+        lb.extract_to_directory(Path::new(dest), &policy)?;
     } else {
-        let path = require_arg(args, 1, "lockbox path")?;
+        let path = LockboxPath::new(require_arg(args, 1, "lockbox path")?)?;
         let dest = require_arg(args, 2, "destination")?;
-        lb.extract_file_to(path, dest)?;
+        let replace = args.iter().skip(3).any(|arg| arg == "--overwrite");
+        lb.extract_file_to(&path, Path::new(dest), replace)?;
     }
     Ok(())
 }
 
 pub(crate) fn cat(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let path = require_arg(args, 1, "lockbox path")?;
+    let path = LockboxPath::new(require_arg(args, 1, "lockbox path")?)?;
     let lb = open_existing(lockbox_path, access)?;
     let stdout = io::stdout();
     let mut lock = stdout.lock();
-    lb.extract_file_to_writer(path, &mut lock)?;
+    lb.extract_file_to_writer(&path, &mut lock)?;
     Ok(())
 }
 
 pub(crate) fn list(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let path = args.get(1).map(String::as_str).unwrap_or("/");
+    let path = LockboxPath::new(args.get(1).map(String::as_str).unwrap_or("/"))?;
     let lb = open_existing(lockbox_path, access)?;
-    for entry in lb.list_iter(ListOptions::new(path))? {
+    for entry in lb.list_iter(ListOptions::new(&path))? {
         let entry = entry?;
         println!("{}\t{}\t{}", kind_name(&entry.kind), entry.len, entry.path);
     }
@@ -56,19 +57,19 @@ pub(crate) fn list(args: &[String], access: &Access) -> CliResult<()> {
 
 pub(crate) fn remove(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let path = require_arg(args, 1, "lockbox path")?;
+    let path = LockboxPath::new(require_arg(args, 1, "lockbox path")?)?;
     let mut lb = open_existing(lockbox_path, access)?;
-    lb.delete(path)?;
+    lb.delete(&path)?;
     lb.commit()?;
     Ok(())
 }
 
 pub(crate) fn rename(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let from = require_arg(args, 1, "from")?;
-    let to = require_arg(args, 2, "to")?;
+    let from = LockboxPath::new(require_arg(args, 1, "from")?)?;
+    let to = LockboxPath::new(require_arg(args, 2, "to")?)?;
     let mut lb = open_existing(lockbox_path, access)?;
-    lb.rename(from, to)?;
+    lb.rename(&from, &to)?;
     lb.commit()?;
     Ok(())
 }
@@ -94,12 +95,13 @@ fn extract_policy_from_args(args: &[String]) -> ExtractPolicy {
 }
 
 fn add_source_path(lockbox: &mut Lockbox, source: &Path, lockbox_root: &str) -> CliResult<()> {
+    let lockbox_root = LockboxPath::new(lockbox_root)?;
     if source.is_file() {
-        lockbox.add_file(source, lockbox_root)?;
+        lockbox.add_file_from_path(source, &lockbox_root, false)?;
         return Ok(());
     }
     if source.is_dir() {
-        add_directory(lockbox, source, source, lockbox_root)?;
+        add_directory(lockbox, source, source, &lockbox_root)?;
         return Ok(());
     }
     Err(format!("unsupported source path: {}", source.display()).into())
@@ -109,7 +111,7 @@ fn add_directory(
     lockbox: &mut Lockbox,
     root: &Path,
     current: &Path,
-    lockbox_root: &str,
+    lockbox_root: &LockboxPath,
 ) -> CliResult<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
@@ -119,29 +121,29 @@ fn add_directory(
             add_directory(lockbox, root, &path, lockbox_root)?;
         } else if file_type.is_file() {
             let relative = path.strip_prefix(root)?;
-            let logical_path = join_logical_path(lockbox_root, relative)?;
-            lockbox.add_file(&path, &logical_path)?;
+            let lockbox_path = join_lockbox_path(lockbox_root, relative)?;
+            lockbox.add_file_from_path(&path, &lockbox_path, false)?;
         }
     }
     Ok(())
 }
 
-fn join_logical_path(lockbox_root: &str, relative: &Path) -> CliResult<String> {
-    let mut out = lockbox_root.trim_end_matches('/').to_string();
+fn join_lockbox_path(lockbox_root: &LockboxPath, relative: &Path) -> CliResult<LockboxPath> {
+    let mut out = lockbox_root.as_str().trim_end_matches('/').to_string();
     if out.is_empty() {
         out.push('/');
     }
     for component in relative.components() {
         let std::path::Component::Normal(part) = component else {
-            return Err("unsupported source path component".into());
+            return Err(Error::InvalidPath("unsupported source path component".to_string()).into());
         };
         let Some(part) = part.to_str() else {
-            return Err("source path is not valid UTF-8".into());
+            return Err(Error::InvalidPath("source path is not valid UTF-8".to_string()).into());
         };
         if !out.ends_with('/') {
             out.push('/');
         }
         out.push_str(part);
     }
-    Ok(out)
+    Ok(LockboxPath::new(out)?)
 }

@@ -2,7 +2,7 @@ use super::context::{
     load_private_key_from_arg, load_recipient_from_arg, mirror_key_directory, open_existing,
     read_new_password, read_password, require_arg, Access, CliResult,
 };
-use lockbox_core::{LockboxCreate, LockboxUnlock, MlKemKeyPair};
+use lockbox_core::{Error, LockboxCreate, LockboxUnlock, MlKemKeyPair};
 use lockbox_vault::{
     encode_hex, export_private_key, local_vault, KeyFormat, NoopStore, SecretVec, Vault,
 };
@@ -14,15 +14,15 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
         let lockbox_path = require_arg(args, 2, "lockbox")?;
         let recipient = load_recipient_from_arg(recipient_name)?;
         let lb = Vault::new(NoopStore)
-            .create_lockbox(lockbox_path, LockboxCreate::RecipientKey(recipient))?;
+            .create_lockbox(lockbox_path, LockboxCreate::RecipientPublicKey(recipient))?;
         mirror_key_directory(&lb)?;
         return Ok(());
     }
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     match access {
-        Access::RawKey(key) => {
+        Access::ContentKey(key) => {
             let lb = Vault::new(NoopStore)
-                .create_lockbox(lockbox_path, LockboxCreate::RawKey(key.clone()))?;
+                .create_lockbox(lockbox_path, LockboxCreate::ContentKey(key.try_clone()?))?;
             mirror_key_directory(&lb)?;
         }
         Access::PromptPassword => {
@@ -30,7 +30,9 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
             let lb = local_vault().create_lockbox_with_password(lockbox_path, &password)?;
             mirror_key_directory(&lb)?;
         }
-        Access::CacheOnly => return Err("create requires an unlock method".into()),
+        Access::CacheOnly => {
+            return Err(Error::InvalidInput("create requires an unlock method".to_string()).into());
+        }
     }
     Ok(())
 }
@@ -61,14 +63,18 @@ pub(crate) fn keygen(args: &[String]) -> CliResult<()> {
         private_path,
         &export_private_key(&keypair, KeyFormat::RawHex)?,
     )?;
-    fs::write(public_path, encode_hex(&keypair.recipient_key().to_bytes()))?;
+    fs::write(
+        public_path,
+        encode_hex(&keypair.recipient_public_key().to_bytes()),
+    )?;
     Ok(())
 }
 
 pub(crate) fn open_key(args: &[String]) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let keypair = load_private_key_from_arg(args.get(1).map(String::as_str))?;
-    let lb = local_vault().unlock_lockbox(lockbox_path, LockboxUnlock::RecipientKey(keypair))?;
+    let lb =
+        local_vault().unlock_lockbox(lockbox_path, LockboxUnlock::RecipientKeyPair(keypair))?;
     mirror_key_directory(&lb)?;
     Ok(())
 }
@@ -78,7 +84,7 @@ pub(crate) fn add_recipient(args: &[String], access: &Access) -> CliResult<()> {
     let recipient_arg = require_arg(args, 1, "recipient")?;
     let recipient = load_recipient_from_arg(recipient_arg)?;
     let mut lb = open_existing(lockbox_path, access)?;
-    lb.add_recipient_key(&recipient)?;
+    lb.add_recipient_public_key(&recipient)?;
     lb.commit()?;
     mirror_key_directory(&lb)?;
     Ok(())
@@ -97,7 +103,7 @@ pub(crate) fn remove_key(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let slot_id = require_arg(args, 1, "slot id")?.parse::<u64>()?;
     let mut lb = open_existing(lockbox_path, access)?;
-    lb.delete_key_slot_and_compact(slot_id)?;
+    lb.delete_key(slot_id)?;
     lb.commit()?;
     mirror_key_directory(&lb)?;
     Ok(())

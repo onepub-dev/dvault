@@ -11,7 +11,7 @@ pub enum LockboxEntryKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockboxEntry {
     /// Canonical logical path inside the lockbox.
-    pub path: String,
+    pub path: LockboxPath,
     /// Node kind.
     pub kind: LockboxEntryKind,
     /// File length in bytes, or symlink target length for symlinks.
@@ -19,5 +19,6 @@ pub struct LockboxEntry {
     /// Stored Unix-style permission bits.
     pub permissions: u32,
     /// Symlink target when `kind` is `LockboxEntryKind::Symlink`.
-    pub symlink_target: Option<String>,
+    pub symlink_target: Option<LockboxPath>,
 }
+use crate::LockboxPath;

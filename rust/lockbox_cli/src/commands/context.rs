@@ -1,5 +1,7 @@
 use crate::secret_prompt::prompt_secret;
-use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair, MlKemRecipientKey};
+use lockbox_core::{
+    Error, Lockbox, LockboxCreate, LockboxUnlock, MlKemKeyPair, MlKemRecipientPublicKey, SecretVec,
+};
 use lockbox_vault::{
     import_public_key, local_vault, NoopStore, SecretString, Vault, VaultDirectory,
 };
@@ -9,7 +11,7 @@ use std::path::Path;
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 pub(crate) enum Access {
-    RawKey(Vec<u8>),
+    ContentKey(SecretVec),
     PromptPassword,
     CacheOnly,
 }
@@ -17,26 +19,29 @@ pub(crate) enum Access {
 pub(crate) fn read_access(args: &mut Vec<String>) -> CliResult<Access> {
     if args.first().map(String::as_str) == Some("--key") {
         if args.len() < 2 {
-            return Err("missing --key value".into());
+            return Err(Error::InvalidInput("missing --key value".to_string()).into());
         }
         args.remove(0);
-        return Ok(Access::RawKey(args.remove(0).into_bytes()));
+        return Ok(Access::ContentKey(SecretVec::try_from_vec(
+            args.remove(0).into_bytes(),
+        )?));
     }
-    env::var("LOCKBOX_KEY")
-        .map(|key| Access::RawKey(key.into_bytes()))
-        .or_else(|_| {
-            if args.first().map(String::as_str) == Some("create") {
-                Ok(Access::PromptPassword)
-            } else {
-                Ok(Access::CacheOnly)
-            }
-        })
+    if let Ok(key) = env::var("LOCKBOX_KEY") {
+        return Ok(Access::ContentKey(SecretVec::try_from_vec(
+            key.into_bytes(),
+        )?));
+    }
+    if args.first().map(String::as_str) == Some("create") {
+        Ok(Access::PromptPassword)
+    } else {
+        Ok(Access::CacheOnly)
+    }
 }
 
 pub(crate) fn open_existing(path: &str, access: &Access) -> Result<Lockbox, Error> {
     match access {
-        Access::RawKey(key) => {
-            Vault::new(NoopStore).unlock_lockbox(path, LockboxUnlock::RawKey(key.clone()))
+        Access::ContentKey(key) => {
+            Vault::new(NoopStore).unlock_lockbox(path, LockboxUnlock::ContentKey(key.try_clone()?))
         }
         Access::PromptPassword => Err(Error::InvalidKey),
         Access::CacheOnly => local_vault().open_lockbox(path),
@@ -48,9 +53,9 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> Result<Lockbox, Err
         open_existing(path, access)
     } else {
         match access {
-            Access::RawKey(key) => {
+            Access::ContentKey(key) => {
                 let lockbox = Vault::new(NoopStore)
-                    .create_lockbox(path, LockboxCreate::RawKey(key.clone()))?;
+                    .create_lockbox(path, LockboxCreate::ContentKey(key.try_clone()?))?;
                 mirror_key_directory(&lockbox)?;
                 Ok(lockbox)
             }
@@ -68,7 +73,7 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> Result<Lockbox, Err
 pub(crate) fn require_arg<'a>(args: &'a [String], index: usize, name: &str) -> CliResult<&'a str> {
     args.get(index)
         .map(String::as_str)
-        .ok_or_else(|| format!("missing {name}").into())
+        .ok_or_else(|| Error::InvalidInput(format!("missing {name}")).into())
 }
 
 pub(crate) fn remove_global_flag(args: &mut Vec<String>, flag: &str) -> bool {
@@ -102,7 +107,7 @@ pub(crate) fn read_new_password() -> CliResult<SecretString> {
     let mut confirm = prompt_secret("Confirm password: ")?;
     if password != confirm {
         confirm.zeroize()?;
-        return Err("passwords do not match".into());
+        return Err(Error::InvalidInput("passwords do not match".to_string()).into());
     }
     confirm.zeroize()?;
     Ok(password)
@@ -130,7 +135,7 @@ pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<MlKemKey
     Ok(vault.load_private_key(name_or_path)?)
 }
 
-pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<MlKemRecipientKey> {
+pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<MlKemRecipientPublicKey> {
     if std::path::Path::new(arg).exists() {
         return Ok(import_public_key(&std::fs::read(arg)?)?);
     }
@@ -138,5 +143,5 @@ pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<MlKemRecipientKey>
     if let Ok(recipient) = vault.load_trusted_recipient(arg) {
         return Ok(recipient);
     }
-    Ok(vault.load_private_key(arg)?.recipient_key())
+    Ok(vault.load_private_key(arg)?.recipient_public_key())
 }

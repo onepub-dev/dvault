@@ -1,20 +1,17 @@
 use crate::file_chunk::{FileChunk, FileFragment};
-use crate::logical_path::validate_stored_path as validate_path;
-use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::security::validate_permissions;
-use crate::{Error, Result};
+use crate::toc_entry::TocEntry;
+use crate::{Error, LockboxPath, Result};
 
 #[cfg(test)]
-pub(crate) fn encode_manifest(
-    manifest: &std::collections::BTreeMap<String, ManifestEntry>,
+pub(crate) fn encode_toc(
+    toc_entries: &std::collections::BTreeMap<LockboxPath, TocEntry>,
 ) -> Vec<u8> {
-    encode_manifest_entries(manifest.values())
+    encode_toc_entries(toc_entries.values())
 }
 
-pub(crate) fn encode_manifest_entries<'a>(
-    entries: impl IntoIterator<Item = &'a ManifestEntry>,
-) -> Vec<u8> {
+pub(crate) fn encode_toc_entries<'a>(entries: impl IntoIterator<Item = &'a TocEntry>) -> Vec<u8> {
     let entries = entries.into_iter().collect::<Vec<_>>();
     let mut out = Vec::new();
     out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
@@ -30,7 +27,7 @@ pub(crate) fn encode_manifest_entries<'a>(
         out.extend_from_slice(&entry.permissions.to_le_bytes());
         out.extend_from_slice(&(entry.chunks.len() as u32).to_le_bytes());
         for chunk in &entry.chunks {
-            let stored_path = if chunk.stored_path == entry.path {
+            let stored_path = if chunk.stored_path == entry.path.as_str() {
                 ""
             } else {
                 chunk.stored_path.as_str()
@@ -58,16 +55,16 @@ pub(crate) fn encode_manifest_entries<'a>(
 }
 
 #[cfg(test)]
-pub(crate) fn decode_manifest(
+pub(crate) fn decode_toc(
     payload: &[u8],
-) -> Result<std::collections::BTreeMap<String, ManifestEntry>> {
-    Ok(decode_manifest_entries(payload)?
+) -> Result<std::collections::BTreeMap<LockboxPath, TocEntry>> {
+    Ok(decode_toc_entries(payload)?
         .into_iter()
         .map(|entry| (entry.path.clone(), entry))
         .collect())
 }
 
-pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntry>> {
+pub(crate) fn decode_toc_entries(payload: &[u8]) -> Result<Vec<TocEntry>> {
     if payload.len() < 4 {
         return Err(Error::CorruptRecord);
     }
@@ -88,7 +85,7 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
         }
         let path = String::from_utf8(payload[offset..offset + path_len].to_vec())
             .map_err(|_| Error::CorruptRecord)?;
-        validate_path(&path)?;
+        let path = LockboxPath::from_stored(&path, false)?;
         offset += path_len;
         let len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
         offset += 8;
@@ -131,8 +128,7 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
                 let stored_path =
                     String::from_utf8(payload[offset..offset + stored_path_len].to_vec())
                         .map_err(|_| Error::CorruptRecord)?;
-                validate_path(&stored_path)?;
-                stored_path
+                LockboxPath::from_stored(&stored_path, false)?
             };
             offset += stored_path_len;
             let file_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
@@ -195,7 +191,7 @@ pub(crate) fn decode_manifest_entries(payload: &[u8]) -> Result<Vec<ManifestEntr
             NodeKind::Symlink if !chunks.is_empty() => return Err(Error::CorruptRecord),
             _ => {}
         }
-        entries.push(ManifestEntry {
+        entries.push(TocEntry {
             path,
             len,
             record_offset,
@@ -220,12 +216,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn decoded_manifest_rejects_tampered_host_paths() {
-        let mut manifest = BTreeMap::new();
-        manifest.insert(
-            "/C:/Users/target.txt".to_string(),
-            ManifestEntry {
-                path: "/C:/Users/target.txt".to_string(),
+    fn decoded_toc_rejects_tampered_host_paths() {
+        let mut toc_entries = BTreeMap::new();
+        let invalid_path = LockboxPath::from_unchecked_for_test("/C:/Users/target.txt");
+        toc_entries.insert(
+            invalid_path.clone(),
+            TocEntry {
+                path: invalid_path,
                 len: 1,
                 record_offset: 64,
                 record_len: 64,
@@ -236,29 +233,26 @@ mod tests {
                 chunks: Vec::new(),
             },
         );
-        let payload = encode_manifest(&manifest);
-        assert!(matches!(
-            decode_manifest(&payload),
-            Err(Error::InvalidPath(_))
-        ));
+        let payload = encode_toc(&toc_entries);
+        assert!(matches!(decode_toc(&payload), Err(Error::InvalidPath(_))));
     }
 
     #[test]
-    fn decoded_manifest_rejects_impossible_entry_count_before_allocating() {
+    fn decoded_toc_rejects_impossible_entry_count_before_allocating() {
         let payload = u32::MAX.to_le_bytes();
 
         assert!(matches!(
-            decode_manifest_entries(&payload),
+            decode_toc_entries(&payload),
             Err(Error::CorruptRecord)
         ));
     }
 
     #[test]
-    fn decoded_manifest_rejects_symlink_without_object_reference() {
+    fn decoded_toc_rejects_symlink_without_object_reference() {
         let payload = encoded_symlink_entry("/links/current", 0, 0, 0);
 
         assert!(matches!(
-            decode_manifest_entries(&payload),
+            decode_toc_entries(&payload),
             Err(Error::CorruptRecord)
         ));
     }
