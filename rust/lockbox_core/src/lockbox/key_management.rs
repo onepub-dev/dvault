@@ -4,7 +4,7 @@ use crate::key_directory::{
     best_key_directory, encode_key_directory, read_key_directory, read_key_directory_backup,
     scan_key_directories,
 };
-use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, KeySlotInfo};
+use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, LockboxKeySlot};
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey};
 use crate::lockbox_id::LockboxId;
 use crate::secret_vec::{SecretString, SecretVec};
@@ -305,7 +305,7 @@ impl Lockbox {
         )
     }
 
-    pub fn list_key_slots(&self) -> Vec<KeySlotInfo> {
+    pub fn list_key_slots(&self) -> Vec<LockboxKeySlot> {
         self.key_slots.iter().map(KeySlot::info).collect()
     }
 

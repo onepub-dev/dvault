@@ -420,6 +420,13 @@ bytes.
 It must not store paths, file names, environment variable names, or file
 contents.
 
+It also must not store recipient identities. Recipient names, email addresses,
+local vault aliases, public recipient keys, and stable public-key fingerprints
+would let a holder of one lockbox correlate membership with another lockbox or
+another user's vault. The format stores only the slot material needed to attempt
+unlock. ML-KEM encapsulation data must be freshly generated per slot creation
+so the same recipient key does not produce a reusable cross-lockbox identifier.
+
 The key directory is intentionally readable before the content key is available,
 so it is stored as a page-cache-managed clear-text metadata page. Its wrapped
 content-key values are authenticated by their wrapping algorithms. The page

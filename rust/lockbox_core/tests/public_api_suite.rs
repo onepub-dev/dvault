@@ -1,7 +1,8 @@
 use lockbox_core::{
-    CacheLimit, Error, ExtractPolicy, ExtractedNode, KeySlotKind, ListOptions, Lockbox,
-    LockboxCreate, LockboxId, LockboxOptions, LockboxUnlock, MlKemKeyPair, MlKemRecipientKey,
-    MlKemWrappedKey, RecoveryReportOptions, SecretString, SecretVec, WorkloadProfile,
+    CacheLimit, Error, ExtractPolicy, ExtractedNode, ListOptions, Lockbox, LockboxCreate,
+    LockboxId, LockboxKeySlotAlgorithm, LockboxKeySlotKind, LockboxOptions, LockboxUnlock,
+    MlKemKeyPair, MlKemRecipientKey, MlKemWrappedKey, RecoveryReportOptions, SecretString,
+    SecretVec, WorkloadProfile,
 };
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -105,6 +106,17 @@ fn public_api_password_and_recipient_key_management_flow() {
     let mut lb = Lockbox::create_with_password(&old_password).unwrap();
     let password_slot = lb.list_key_slots()[0].id;
     let recipient_slot = lb.add_recipient(&recipient).unwrap();
+    let slots = lb.list_key_slots();
+    assert!(slots.iter().any(|slot| {
+        slot.id == password_slot
+            && slot.kind == LockboxKeySlotKind::Password
+            && slot.algorithm == LockboxKeySlotAlgorithm::Argon2idChaCha20Poly1305
+    }));
+    assert!(slots.iter().any(|slot| {
+        slot.id == recipient_slot
+            && slot.kind == LockboxKeySlotKind::Recipient
+            && slot.algorithm == LockboxKeySlotAlgorithm::MlKem1024ChaCha20Poly1305
+    }));
 
     lb.put_file("/secret.txt", b"shared").unwrap();
     lb.commit().unwrap();
@@ -137,7 +149,7 @@ fn public_api_password_and_recipient_key_management_flow() {
     let slots = reopened.list_key_slots();
     assert!(slots
         .iter()
-        .any(|slot| slot.id == new_slot && slot.kind == KeySlotKind::Password));
+        .any(|slot| slot.id == new_slot && slot.kind == LockboxKeySlotKind::Password));
     assert!(slots.iter().all(|slot| slot.id != password_slot));
     assert!(slots.iter().all(|slot| slot.id != recipient_slot));
     assert!(Lockbox::open_with_password(reopened.to_bytes(), &new_password).is_ok());

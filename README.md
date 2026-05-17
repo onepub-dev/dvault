@@ -73,6 +73,10 @@ Trust someone else's public key:
 lockbox vault trust alice ./alice.pub
 ```
 
+Vault names such as `alice` are local aliases. They are not copied into shared
+lockboxes when you add a recipient, so lockboxes do not publish recipient names
+or email addresses as membership metadata.
+
 Create a lockbox for a recipient:
 
 ```bash

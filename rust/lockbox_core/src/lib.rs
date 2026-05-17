@@ -43,7 +43,7 @@ pub use extract_policy::ExtractPolicy;
 pub use extracted_file::ExtractedFile;
 pub use extracted_node::ExtractedNode;
 pub use extracted_symlink::ExtractedSymlink;
-pub use key_slot::{KeySlotInfo, KeySlotKind};
+pub use key_slot::{LockboxKeySlot, LockboxKeySlotAlgorithm, LockboxKeySlotKind};
 pub use key_wrap::{MlKemKeyPair, MlKemRecipientKey, MlKemWrappedKey};
 pub use list_iter::ListIter;
 pub use list_options::ListOptions;

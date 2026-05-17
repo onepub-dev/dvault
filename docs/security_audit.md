@@ -17,6 +17,11 @@ cryptographic review.
   page-format checksums.
 - Password slots use Argon2id with per-slot salts.
 - Recipient slots use ML-KEM-1024 wrapping.
+- Recipient aliases, email addresses, public keys, and stable public-key
+  fingerprints are not serialized into shared lockbox key directories. Local
+  vault recipient names remain local vault metadata, and ML-KEM encapsulation is
+  generated per slot so recipient slots do not intentionally correlate
+  membership across lockboxes.
 - Key directories are capped at 1 MiB.
 - Unlock caching stores unwrapped content keys only in a per-user agent process,
   not on disk.

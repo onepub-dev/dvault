@@ -16,6 +16,9 @@ The intended sharing model is narrow and practical:
 - A lockbox can also be shared with a one-time password.
 - A lockbox may contain both access methods at the same time.
 - The public API and CLI should hide the content key from normal users.
+- A lockbox must not store human recipient labels, email addresses, vault
+  aliases, or stable recipient fingerprints that let observers correlate
+  membership across independent lockboxes or local vaults.
 
 This preserves the original Lockbox sharing idea:
 
@@ -88,6 +91,20 @@ leak names, devices, email addresses, or organization structure. If labels are
 added later, they should be optional and treated as public metadata unless
 explicitly encrypted.
 
+Recipient slots must also avoid stable recipient identifiers. The local vault
+may use names such as `alice`, `prod-team`, or an email address to help the
+local user manage trusted public keys, but those names are local-only. Adding a
+trusted recipient to a lockbox resolves the local name to a public key and
+writes only the slot material needed for unlock. The shared lockbox must not
+receive the vault alias.
+
+ML-KEM recipient slots store encapsulation ciphertext and the encrypted content
+key. Encapsulation must be freshly randomized when a slot is created, so two
+lockboxes shared with the same recipient should not contain the same recipient
+slot bytes unless a serialized slot was deliberately copied. The format should
+not add public-key fingerprints as convenience metadata, because fingerprints
+would create a stable cross-lockbox membership correlation handle.
+
 ## Key Directory
 
 Key slots are stored in clear-text key-directory metadata pages inside the
@@ -112,6 +129,12 @@ file names, environment variable names, or file contents. It contains only:
 
 Password salts and ML-KEM ciphertexts are visible metadata. The content key
 itself is never stored in cleartext.
+
+The key directory is intentionally not a recipient directory. It must not store
+recipient names, local vault aliases, email addresses, public keys, public-key
+fingerprints, or other stable identity hints. A user who can open multiple
+lockboxes should not be able to prove that the same named recipient has access
+to each lockbox from key-directory metadata alone.
 
 The key-directory payload header includes the lockbox UUID, generation, and copy
 index. Integrity for the clear-text key-directory page is owned by the page
@@ -257,6 +280,11 @@ ordinary file records. Loading a vault private key therefore asks the page cache
 for a secure page and materializes the seed into `SecretVec`, not `Vec<u8>`.
 Trusted recipient keys and key-directory backups are not private-key seed
 material, so they remain normal lockbox file records.
+
+Vault record names are local user metadata. They are encrypted inside the local
+vault, but they must not be copied into shared lockboxes. Two users may use
+different local names for the same recipient key without affecting the portable
+lockbox format.
 
 These records are local recovery and convenience data. They are not required for
 a password-shared lockbox to be portable, and they are not the canonical copy of

@@ -1,7 +1,8 @@
 use lockbox_core::{
-    CacheLimit, Error, ExtractPolicy, ExtractedNode, KeySlotKind, ListOptions, Lockbox,
-    LockboxCreate, LockboxEntry, LockboxEntryKind, LockboxOptions, LockboxUnlock, MlKemKeyPair,
-    MlKemRecipientKey, RecoveryReportOptions, SecretString, WorkloadProfile,
+    CacheLimit, Error, ExtractPolicy, ExtractedNode, ListOptions, Lockbox, LockboxCreate,
+    LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotKind, LockboxOptions,
+    LockboxUnlock, MlKemKeyPair, MlKemRecipientKey, RecoveryReportOptions, SecretString,
+    WorkloadProfile,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -314,6 +315,19 @@ fn content_keys_can_be_wrapped_with_ml_kem_1024() {
 }
 
 #[test]
+fn ml_kem_wraps_for_same_recipient_do_not_share_ciphertext() {
+    let key_pair = MlKemKeyPair::generate().unwrap();
+    let content_key = [9u8; 32];
+
+    let first = key_pair.wrap_key(&content_key).unwrap();
+    let second = key_pair.wrap_key(&content_key).unwrap();
+
+    assert_ne!(first.ciphertext_bytes(), second.ciphertext_bytes());
+    assert_eq!(key_pair.unwrap_key(&first).unwrap(), content_key);
+    assert_eq!(key_pair.unwrap_key(&second).unwrap(), content_key);
+}
+
+#[test]
 fn password_slots_unlock_the_random_content_key() {
     let share_password = password("share-password");
     let mut lb = Lockbox::create_with_password(&share_password).unwrap();
@@ -331,7 +345,12 @@ fn password_slots_unlock_the_random_content_key() {
     let reopened = Lockbox::open_with_password(bytes, &share_password).unwrap();
     assert_eq!(reopened.lockbox_id(), lockbox_id);
     assert_eq!(reopened.get_file("/docs/a.txt").unwrap(), b"alpha");
-    assert_eq!(reopened.list_key_slots()[0].kind, KeySlotKind::Password);
+    let slot = &reopened.list_key_slots()[0];
+    assert_eq!(slot.kind, LockboxKeySlotKind::Password);
+    assert_eq!(
+        slot.algorithm,
+        LockboxKeySlotAlgorithm::Argon2idChaCha20Poly1305
+    );
 }
 
 #[test]

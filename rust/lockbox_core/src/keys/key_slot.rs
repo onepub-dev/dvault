@@ -6,25 +6,51 @@ use crate::key_derivation::{derive_key_from_password, derive_key_from_password_b
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey, MlKemWrappedKey};
 use crate::secret_vec::SecretString;
 use crate::{Error, Result};
+use std::fmt;
 
 /// Type of key slot that can unlock a lockbox content key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeySlotKind {
+pub enum LockboxKeySlotKind {
     /// Password-derived wrapping key.
     Password,
-    /// ML-KEM-1024 recipient wrapping key.
-    MlKem1024,
+    /// Public-key recipient wrapping key.
+    Recipient,
+}
+
+/// Algorithm used by a key slot to wrap the lockbox content key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockboxKeySlotAlgorithm {
+    /// Argon2id password derivation plus ChaCha20-Poly1305 key wrapping.
+    Argon2idChaCha20Poly1305,
+    /// ML-KEM-1024 recipient encapsulation plus ChaCha20-Poly1305 key wrapping.
+    MlKem1024ChaCha20Poly1305,
+}
+
+impl LockboxKeySlotAlgorithm {
+    /// Stable display name for this key slot algorithm.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Argon2idChaCha20Poly1305 => "argon2id+chacha20-poly1305",
+            Self::MlKem1024ChaCha20Poly1305 => "ml-kem-1024+chacha20-poly1305",
+        }
+    }
+}
+
+impl fmt::Display for LockboxKeySlotAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Public metadata for one key slot.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeySlotInfo {
+pub struct LockboxKeySlot {
     /// Stable slot id used for deletion.
     pub id: u64,
     /// Slot type.
-    pub kind: KeySlotKind,
-    /// Human-readable algorithm description.
-    pub algorithm: String,
+    pub kind: LockboxKeySlotKind,
+    /// Algorithm used to wrap the lockbox content key.
+    pub algorithm: LockboxKeySlotAlgorithm,
 }
 
 #[derive(Debug, Clone)]
@@ -47,17 +73,17 @@ impl KeySlot {
         }
     }
 
-    pub(crate) fn info(&self) -> KeySlotInfo {
+    pub(crate) fn info(&self) -> LockboxKeySlot {
         match self {
-            KeySlot::Password { id, .. } => KeySlotInfo {
+            KeySlot::Password { id, .. } => LockboxKeySlot {
                 id: *id,
-                kind: KeySlotKind::Password,
-                algorithm: "argon2id+chacha20-poly1305".to_string(),
+                kind: LockboxKeySlotKind::Password,
+                algorithm: LockboxKeySlotAlgorithm::Argon2idChaCha20Poly1305,
             },
-            KeySlot::MlKem1024 { id, .. } => KeySlotInfo {
+            KeySlot::MlKem1024 { id, .. } => LockboxKeySlot {
                 id: *id,
-                kind: KeySlotKind::MlKem1024,
-                algorithm: "ml-kem-1024+chacha20-poly1305".to_string(),
+                kind: LockboxKeySlotKind::Recipient,
+                algorithm: LockboxKeySlotAlgorithm::MlKem1024ChaCha20Poly1305,
             },
         }
     }
