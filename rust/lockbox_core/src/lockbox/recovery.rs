@@ -11,7 +11,7 @@ use crate::manifest_entry::ManifestEntry;
 use crate::node_kind::NodeKind;
 use crate::page_scanner::PageScanner;
 use crate::record::RecordKind;
-use crate::{Entry, Error, RecoveryReport, Result};
+use crate::{Error, LockboxEntry, RecoveryReport, Result};
 
 impl Lockbox {
     pub fn recover_path(path: impl AsRef<Path>, key: impl AsRef<[u8]>) -> RecoveryReport {
@@ -83,13 +83,12 @@ impl Lockbox {
             } else {
                 partial_files += 1;
             }
-            intact_files.push(Entry {
+            intact_files.push(LockboxEntry {
                 path: entry.path.clone(),
                 kind: entry.entry_kind(),
                 len: entry.len,
                 permissions: entry.permissions,
                 symlink_target: recovered_symlink_target,
-                is_deleted: false,
             });
         }
 

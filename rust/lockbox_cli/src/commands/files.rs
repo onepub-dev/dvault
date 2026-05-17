@@ -73,10 +73,10 @@ pub(crate) fn rename(args: &[String], access: &Access) -> CliResult<()> {
     Ok(())
 }
 
-fn kind_name(kind: &lockbox_core::EntryKind) -> &'static str {
+fn kind_name(kind: &lockbox_core::LockboxEntryKind) -> &'static str {
     match kind {
-        lockbox_core::EntryKind::File => "file",
-        lockbox_core::EntryKind::Symlink => "symlink",
+        lockbox_core::LockboxEntryKind::File => "file",
+        lockbox_core::LockboxEntryKind::Symlink => "symlink",
     }
 }
 

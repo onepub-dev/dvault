@@ -27,11 +27,11 @@ fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
     })? {
         let entry = entry?;
         match entry.kind {
-            lockbox_core::EntryKind::File => {
+            lockbox_core::LockboxEntryKind::File => {
                 file_count += 1;
                 total_file_bytes = total_file_bytes.saturating_add(entry.len);
             }
-            lockbox_core::EntryKind::Symlink => symlink_count += 1,
+            lockbox_core::LockboxEntryKind::Symlink => symlink_count += 1,
         }
     }
 

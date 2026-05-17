@@ -3,7 +3,7 @@ use crate::logical_path::{
     canonicalize_api_path as canonicalize_path, glob_matches, validate_glob,
 };
 use crate::node_kind::NodeKind;
-use crate::{Entry, ListIter, ListOptions, Result};
+use crate::{ListIter, ListOptions, LockboxEntry, Result};
 
 impl Lockbox {
     pub fn list_iter(&self, options: ListOptions) -> Result<ListIter<'_>> {
@@ -51,18 +51,18 @@ impl Lockbox {
         Ok(ListIter::new(Box::new(iter)))
     }
 
-    pub fn list(&self, path: &str) -> Result<Vec<Entry>> {
+    pub fn list(&self, path: &str) -> Result<Vec<LockboxEntry>> {
         self.list_iter(ListOptions::new(path))?.collect()
     }
 
-    pub fn list_glob(&self, path: &str, glob: &str) -> Result<Vec<Entry>> {
+    pub fn list_glob(&self, path: &str, glob: &str) -> Result<Vec<LockboxEntry>> {
         let mut options = ListOptions::new(path);
         options.glob = Some(glob.to_string());
         options.recursive = glob.contains("**") || glob.contains('/');
         self.list_iter(options)?.collect()
     }
 
-    pub fn stat(&self, path: &str) -> Option<Entry> {
+    pub fn stat(&self, path: &str) -> Option<LockboxEntry> {
         let path = canonicalize_path(path, false).ok()?;
         self.manifest
             .get(path.as_str())
@@ -73,7 +73,7 @@ impl Lockbox {
     fn public_entry_for_manifest(
         &self,
         entry: &crate::manifest_entry::ManifestEntry,
-    ) -> Result<Entry> {
+    ) -> Result<LockboxEntry> {
         let mut public = entry.to_public_entry();
         if entry.node_kind == NodeKind::Symlink {
             public.symlink_target = Some(self.symlink_target_for_entry(entry)?);

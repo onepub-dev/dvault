@@ -9,7 +9,7 @@ use crate::key_wrap::{MlKemKeyPair, MlKemRecipientKey};
 use crate::lockbox_id::LockboxId;
 use crate::secret_vec::{SecretString, SecretVec};
 use crate::storage::{Storage, StorageBackend};
-use crate::{EntryKind, Error, LockboxOptions, Result};
+use crate::{Error, LockboxEntryKind, LockboxOptions, Result};
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -402,7 +402,7 @@ impl Lockbox {
 
         for entry in entries {
             match entry.entry_kind() {
-                EntryKind::File => {
+                LockboxEntryKind::File => {
                     let reader = FileEntryReader::new(self, &entry)?;
                     compacted.put_file_from_reader_with_permissions(
                         &entry.path,
@@ -410,7 +410,7 @@ impl Lockbox {
                         entry.permissions,
                     )?;
                 }
-                EntryKind::Symlink => {
+                LockboxEntryKind::Symlink => {
                     let target = self.get_symlink_target(&entry.path)?;
                     compacted.put_symlink(&entry.path, &target)?;
                 }

@@ -1,7 +1,7 @@
 use lockbox_core::{
-    CacheLimit, Entry, EntryKind, Error, ExtractPolicy, ExtractedNode, KeySlotKind, ListOptions,
-    Lockbox, LockboxCreate, LockboxOptions, LockboxUnlock, MlKemKeyPair, MlKemRecipientKey,
-    RecoveryReportOptions, SecretString, WorkloadProfile,
+    CacheLimit, Error, ExtractPolicy, ExtractedNode, KeySlotKind, ListOptions, Lockbox,
+    LockboxCreate, LockboxEntry, LockboxEntryKind, LockboxOptions, LockboxUnlock, MlKemKeyPair,
+    MlKemRecipientKey, RecoveryReportOptions, SecretString, WorkloadProfile,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -22,13 +22,12 @@ fn create_put_get_list_stat_commit_open() {
     assert_eq!(lb.read_file_range("/docs/b.txt", 1, 3).unwrap(), b"rav");
     assert_eq!(
         lb.stat("/docs/a.txt"),
-        Some(Entry {
+        Some(LockboxEntry {
             path: "/docs/a.txt".to_string(),
-            kind: EntryKind::File,
+            kind: LockboxEntryKind::File,
             len: 5,
             permissions: 0o600,
             symlink_target: None,
-            is_deleted: false,
         })
     );
 
@@ -1121,7 +1120,9 @@ fn list_iter_streams_entries_and_supports_rust_side_filtering() {
         .collect();
 
     assert_eq!(pdfs.len(), 2);
-    assert!(pdfs.iter().all(|entry| entry.kind == EntryKind::File));
+    assert!(pdfs
+        .iter()
+        .all(|entry| entry.kind == LockboxEntryKind::File));
 }
 
 #[test]
@@ -1153,7 +1154,7 @@ fn list_options_can_limit_and_filter_node_types() {
         .collect::<lockbox_core::Result<_>>()
         .unwrap();
     assert_eq!(links.len(), 1);
-    assert_eq!(links[0].kind, EntryKind::Symlink);
+    assert_eq!(links[0].kind, LockboxEntryKind::Symlink);
     assert_eq!(links[0].symlink_target.as_deref(), Some("/docs/a.txt"));
 
     let mut options = ListOptions::new("/docs");
@@ -1223,7 +1224,7 @@ fn symlink_recovery_records_are_packed_into_metadata_pages() {
     let report = Lockbox::recover(damaged, KEY);
     assert!(report.intact_files.iter().any(|entry| {
         entry.path == "/links/link-07"
-            && entry.kind == EntryKind::Symlink
+            && entry.kind == LockboxEntryKind::Symlink
             && entry.symlink_target.as_deref() == Some("/targets/target-07")
     }));
 }
@@ -1254,7 +1255,7 @@ fn symlink_recovery_records_spill_across_metadata_pages() {
     let recovered = report
         .intact_files
         .iter()
-        .filter(|entry| entry.kind == EntryKind::Symlink)
+        .filter(|entry| entry.kind == LockboxEntryKind::Symlink)
         .map(|entry| (entry.path.as_str(), entry.symlink_target.as_deref()))
         .collect::<std::collections::BTreeMap<_, _>>();
     assert_eq!(recovered.len(), 1400);

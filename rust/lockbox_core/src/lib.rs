@@ -36,7 +36,7 @@ pub(crate) use storage::{cache_options, free_index, free_slot, memory_pressure, 
 pub(crate) use toc::{env_btree, manifest_codec, manifest_entry, page_tree, toc_btree};
 
 pub use cache_options::{CacheLimit, CacheStats, LockboxOptions, WorkloadProfile};
-pub use entry::{Entry, EntryKind};
+pub use entry::{LockboxEntry, LockboxEntryKind};
 pub use env_sensitivity::EnvSensitivity;
 pub use error::{Error, Result};
 pub use extract_policy::ExtractPolicy;

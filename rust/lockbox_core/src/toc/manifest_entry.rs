@@ -1,5 +1,5 @@
 use crate::file_chunk::FileChunk;
-use crate::{Entry, EntryKind};
+use crate::{LockboxEntry, LockboxEntryKind};
 
 use crate::node_kind::NodeKind;
 
@@ -17,21 +17,20 @@ pub(crate) struct ManifestEntry {
 }
 
 impl ManifestEntry {
-    pub(crate) fn entry_kind(&self) -> EntryKind {
+    pub(crate) fn entry_kind(&self) -> LockboxEntryKind {
         match self.node_kind {
-            NodeKind::File => EntryKind::File,
-            NodeKind::Symlink => EntryKind::Symlink,
+            NodeKind::File => LockboxEntryKind::File,
+            NodeKind::Symlink => LockboxEntryKind::Symlink,
         }
     }
 
-    pub(crate) fn to_public_entry(&self) -> Entry {
-        Entry {
+    pub(crate) fn to_public_entry(&self) -> LockboxEntry {
+        LockboxEntry {
             path: self.path.clone(),
             kind: self.entry_kind(),
             len: self.len,
             permissions: self.permissions,
             symlink_target: None,
-            is_deleted: self.deleted,
         }
     }
 }

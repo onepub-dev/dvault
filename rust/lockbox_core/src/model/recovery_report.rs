@@ -1,10 +1,10 @@
-use crate::{Entry, RecoveryReportOptions};
+use crate::{LockboxEntry, RecoveryReportOptions};
 
 /// Summary produced by lockbox recovery and salvage scans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryReport {
     /// Intact file entries discovered by the scan.
-    pub intact_files: Vec<Entry>,
+    pub intact_files: Vec<LockboxEntry>,
     /// Total number of intact files, including entries omitted from
     /// `intact_files` by reporting limits.
     pub intact_file_count: usize,

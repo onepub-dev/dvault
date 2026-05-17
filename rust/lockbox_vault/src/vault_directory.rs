@@ -1,6 +1,6 @@
 use lockbox_core::{
-    EntryKind, Error, ListOptions, Lockbox, LockboxCreate, LockboxId, LockboxUnlock, MlKemKeyPair,
-    MlKemRecipientKey, Result, SecretString, SecretVec,
+    Error, ListOptions, Lockbox, LockboxCreate, LockboxEntryKind, LockboxId, LockboxUnlock,
+    MlKemKeyPair, MlKemRecipientKey, Result, SecretString, SecretVec,
 };
 use std::cell::RefCell;
 use std::env;
@@ -152,7 +152,7 @@ impl VaultDirectory {
             .borrow()
             .list_iter(recursive_list("/key_directories"))?
             .filter_map(Result::ok)
-            .filter(|entry| entry.kind == EntryKind::File)
+            .filter(|entry| entry.kind == LockboxEntryKind::File)
             .count())
     }
 
@@ -200,7 +200,7 @@ impl VaultDirectory {
         let mut out = Vec::new();
         for entry in self.lockbox.borrow().list_iter(recursive_list(root))? {
             let entry = entry?;
-            if entry.kind != EntryKind::File || !entry.path.ends_with(extension) {
+            if entry.kind != LockboxEntryKind::File || !entry.path.ends_with(extension) {
                 continue;
             }
             let name = entry
