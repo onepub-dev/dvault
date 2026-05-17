@@ -8,17 +8,19 @@ pub enum LockboxEntryKind {
 }
 
 /// Metadata returned by lockbox listing and stat APIs.
+///
+/// This type contains only metadata stored in the table of contents. Symlink
+/// targets are stored in symlink page objects, so callers that need a target
+/// should call `Lockbox::get_symlink_target` for symlink entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockboxEntry {
     /// Canonical logical path inside the lockbox.
     pub path: LockboxPath,
     /// Node kind.
     pub kind: LockboxEntryKind,
-    /// File length in bytes, or symlink target length for symlinks.
+    /// File length in bytes. Symlink entries report zero.
     pub len: u64,
     /// Stored Unix-style permission bits.
     pub permissions: u32,
-    /// Symlink target when `kind` is `LockboxEntryKind::Symlink`.
-    pub symlink_target: Option<LockboxPath>,
 }
 use crate::LockboxPath;

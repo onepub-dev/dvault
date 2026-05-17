@@ -92,13 +92,9 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
         if entry.deleted {
             continue;
         }
-        let recovered_symlink_target = match entry.node_kind {
-            NodeKind::Symlink => recover_symlink_target(&scanner, entry).ok(),
-            NodeKind::File => None,
-        };
         let complete = match entry.node_kind {
             NodeKind::File => read_page_file_bytes(&scanner, entry).is_ok(),
-            NodeKind::Symlink => recovered_symlink_target.is_some(),
+            NodeKind::Symlink => recover_symlink_target(&scanner, entry).is_ok(),
         };
         if complete {
             intact_file_count += 1;
@@ -110,7 +106,6 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
             kind: entry.entry_kind(),
             len: entry.len,
             permissions: entry.permissions,
-            symlink_target: recovered_symlink_target,
         });
     }
 

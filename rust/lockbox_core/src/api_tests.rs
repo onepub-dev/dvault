@@ -37,7 +37,6 @@ fn create_put_get_list_stat_commit_open() {
             kind: LockboxEntryKind::File,
             len: 5,
             permissions: 0o600,
-            symlink_target: None,
         })
     );
 
@@ -1303,7 +1302,10 @@ fn list_options_can_limit_and_filter_node_types() {
     let links: Vec<_> = lb.list(options).unwrap().collect::<Result<_>>().unwrap();
     assert_eq!(links.len(), 1);
     assert_eq!(links[0].kind, LockboxEntryKind::Symlink);
-    assert_eq!(links[0].symlink_target.as_deref(), Some("/docs/a.txt"));
+    assert_eq!(
+        lb.get_symlink_target(&links[0].path).unwrap(),
+        "/docs/a.txt"
+    );
 
     let mut options = ListOptions::new(&p("/docs"));
     options.limit = Some(1);
@@ -1380,9 +1382,7 @@ fn symlink_recovery_records_are_packed_into_metadata_pages() {
     damaged[0] ^= 0xff;
     let report = RecoveryScanner::scan_bytes(damaged, KEY);
     assert!(report.intact_files.iter().any(|entry| {
-        entry.path == "/links/link-07"
-            && entry.kind == LockboxEntryKind::Symlink
-            && entry.symlink_target.as_deref() == Some("/targets/target-07")
+        entry.path == "/links/link-07" && entry.kind == LockboxEntryKind::Symlink
     }));
 }
 
@@ -1415,16 +1415,12 @@ fn symlink_recovery_records_spill_across_metadata_pages() {
         .intact_files
         .iter()
         .filter(|entry| entry.kind == LockboxEntryKind::Symlink)
-        .map(|entry| (entry.path.as_str(), entry.symlink_target.as_deref()))
+        .map(|entry| entry.path.as_str())
         .collect::<std::collections::BTreeMap<_, _>>();
     assert_eq!(recovered.len(), 1400);
     for index in 0..1400 {
         let path = format!("/links/{index:04}/{}", "l".repeat(40));
-        let target = format!("/targets/{index:04}/{}", "t".repeat(40));
-        assert_eq!(
-            recovered.get(path.as_str()).copied().flatten(),
-            Some(target.as_str())
-        );
+        assert!(recovered.contains_key(path.as_str()));
     }
 }
 

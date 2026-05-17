@@ -7,8 +7,8 @@ impl Lockbox {
     /// Return an iterator over entries matching listing options.
     ///
     /// Returns `Error::InvalidPath` if the list root or glob pattern is unsafe.
-    /// Iteration can also return `Error::CorruptRecord` if a symlink entry
-    /// points at invalid stored metadata.
+    /// Iteration returns only table-of-contents metadata. It does not read
+    /// symlink page objects; call `get_symlink_target` for symlink targets.
     pub fn list(
         &self,
         options: ListOptions,
@@ -52,7 +52,7 @@ impl Lockbox {
                 }
             }
             yielded += 1;
-            Some(self.public_entry_for_toc(entry))
+            Some(Ok(entry.to_public_entry()))
         });
         Ok(iter)
     }
@@ -63,7 +63,7 @@ impl Lockbox {
         self.toc_entries
             .get(path)
             .filter(|e| !e.deleted)
-            .and_then(|entry| self.public_entry_for_toc(entry).ok())
+            .map(|entry| entry.to_public_entry())
     }
 
     /// Return true when `path` names an existing file or symlink entry.
@@ -79,13 +79,5 @@ impl Lockbox {
             .get(path)
             .filter(|entry| !entry.deleted)
             .is_some()
-    }
-
-    fn public_entry_for_toc(&self, entry: &crate::toc_entry::TocEntry) -> Result<LockboxEntry> {
-        let mut public = entry.to_public_entry();
-        if entry.node_kind == NodeKind::Symlink {
-            public.symlink_target = Some(self.symlink_target_for_entry(entry)?);
-        }
-        Ok(public)
     }
 }

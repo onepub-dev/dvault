@@ -30,7 +30,6 @@ impl TocEntry {
             kind: self.entry_kind(),
             len: self.len,
             permissions: self.permissions,
-            symlink_target: None,
         }
     }
 }
