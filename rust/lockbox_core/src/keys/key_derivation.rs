@@ -9,7 +9,7 @@ pub(crate) fn derive_key_from_password(password: &SecretString, salt: &[u8]) -> 
 
 pub(crate) fn derive_key_from_password_bytes(password: &[u8], salt: &[u8]) -> Result<[u8; 32]> {
     if salt.len() < 16 {
-        return Err(Error::SecurityLimitExceeded(
+        return Err(Error::InvalidInput(
             "Argon2id salt must be at least 16 bytes".to_string(),
         ));
     }
@@ -19,6 +19,6 @@ pub(crate) fn derive_key_from_password_bytes(password: &[u8], salt: &[u8]) -> Re
     let mut key = [0u8; 32];
     argon2
         .hash_password_into(password, salt, &mut key)
-        .map_err(|err| Error::InvalidPath(err.to_string()))?;
+        .map_err(|_| Error::InvalidKey)?;
     Ok(key)
 }

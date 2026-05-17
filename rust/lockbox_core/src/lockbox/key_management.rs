@@ -326,8 +326,10 @@ impl Lockbox {
     /// key-directory entry. `Lockbox::open_file` with `LockboxUnlock::Password`
     /// tries each embedded password entry until one unwraps the content key.
     ///
-    /// Returns `Error::SecurityLimitExceeded` if secure memory access, random
-    /// salt generation, or password wrapping fails.
+    /// Returns `Error::Io` if random salt generation fails,
+    /// `Error::InvalidInput` if internal password-derivation parameters are
+    /// invalid, `Error::InvalidKey` if authenticated key wrapping fails, or
+    /// `Error::SecurityLimitExceeded` if secure memory access fails.
     pub fn add_password(&mut self, password: &SecretString) -> Result<u64> {
         let id = next_key_slot_id(&self.key_slots);
         let salt = random_salt()?;
