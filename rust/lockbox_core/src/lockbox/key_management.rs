@@ -23,7 +23,7 @@ pub struct UnlockedContentKey {
     key: SecretVec,
 }
 
-/// Method used to create a new lockbox file.
+/// Key material used when creating a new lockbox file.
 ///
 /// `Password` and `RecipientPublicKey` generate a fresh random content key and
 /// store only a wrapped copy of that key in the lockbox key directory.
@@ -44,7 +44,7 @@ pub enum LockboxCreate<'a> {
     RecipientPublicKey(RecipientPublicKey),
 }
 
-/// Method used to unlock an existing lockbox file.
+/// Key material used to unlock an existing lockbox file.
 ///
 /// `Password` and `RecipientKeyPair` unwrap a stored content key from the
 /// lockbox key directory. `ContentKey` is for callers that already hold the
@@ -94,13 +94,13 @@ impl UnlockedContentKey {
 }
 
 impl Lockbox {
-    /// Create a new lockbox file using the selected creation method.
+    /// Create a new lockbox file using the supplied key material.
     ///
     /// Returns `Error::Io` if the host file cannot be created or written,
     /// `Error::SecurityLimitExceeded` if key material cannot be generated or
     /// wrapped, and storage/encoding errors from the initial commit.
-    pub fn create_file(path: &Path, method: LockboxCreate<'_>) -> Result<Self> {
-        let mut lockbox = match method {
+    pub fn create_file(path: &Path, protection: LockboxCreate<'_>) -> Result<Self> {
+        let mut lockbox = match protection {
             LockboxCreate::ContentKey(key) => Self::create_path_with_secret_key_and_options(
                 path,
                 key,
@@ -134,7 +134,7 @@ impl Lockbox {
         Ok(lockbox)
     }
 
-    /// Open an existing lockbox file using the selected unlock method.
+    /// Open an existing lockbox file using the supplied unlock key material.
     ///
     /// Password and recipient unlocks use only key slots embedded in the
     /// lockbox file. This method does not read the local vault, cached content
@@ -142,10 +142,10 @@ impl Lockbox {
     /// when that behavior is required.
     ///
     /// Returns `Error::Io` if the host file cannot be read, `Error::InvalidKey`
-    /// when no supplied unlock method can authenticate the content key, or
+    /// when the supplied unlock material cannot authenticate the content key, or
     /// corrupt/truncated errors if the lockbox structure cannot be parsed.
-    pub fn open_file(path: &Path, method: LockboxUnlock<'_>) -> Result<Self> {
-        match method {
+    pub fn open_file(path: &Path, unlock: LockboxUnlock<'_>) -> Result<Self> {
+        match unlock {
             LockboxUnlock::ContentKey(key) => {
                 Self::open_path_with_secret_key_options(path, key, LockboxOptions::default())
             }
@@ -341,6 +341,9 @@ impl Lockbox {
     }
 
     /// Add a recipient public key to the lockbox and return its key id.
+    ///
+    /// Once a recipient's public key has been added to a lockbox, then the recipient's
+    /// private key must be used to decrypt the lockbox's content.
     ///
     /// Returns `Error::SecurityLimitExceeded` if secure key access or key
     /// wrapping fails.

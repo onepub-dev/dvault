@@ -45,10 +45,10 @@ impl<S: ContentKeyStore> Vault<S> {
     pub fn create_lockbox(
         &self,
         path: impl AsRef<Path>,
-        method: LockboxCreate<'_>,
+        protection: LockboxCreate<'_>,
     ) -> Result<Lockbox> {
         let path = path.as_ref();
-        match method {
+        match protection {
             LockboxCreate::ContentKey(key) => {
                 let store_key = key.try_clone()?;
                 let lockbox = Lockbox::create_file(path, LockboxCreate::ContentKey(key))?;
@@ -88,10 +88,10 @@ impl<S: ContentKeyStore> Vault<S> {
     pub fn unlock_lockbox(
         &self,
         path: impl AsRef<Path>,
-        method: LockboxUnlock<'_>,
+        unlock: LockboxUnlock<'_>,
     ) -> Result<Lockbox> {
         let path = path.as_ref();
-        match method {
+        match unlock {
             LockboxUnlock::ContentKey(key) => {
                 let store_key = key.try_clone()?;
                 let lockbox = Lockbox::open_file(path, LockboxUnlock::ContentKey(key))?;
