@@ -342,8 +342,9 @@ impl Lockbox {
 
     /// Add a recipient public key to the lockbox and return its key id.
     ///
-    /// Once a recipient's public key has been added to a lockbox, then the recipient's
-    /// private key must be used to decrypt the lockbox's content.
+    /// Once a recipient's public key has been added to a lockbox, the matching
+    /// recipient keypair can be used to unlock the lockbox. Add recipients with
+    /// their public key, not their private keypair.
     ///
     /// Returns `Error::SecurityLimitExceeded` if secure key access or key
     /// wrapping fails.
