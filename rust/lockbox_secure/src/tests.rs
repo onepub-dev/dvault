@@ -86,10 +86,31 @@ fn secure_vec_grow_and_zeroize() {
     }
 
     assert_eq!(bytes.len(), 200);
+    assert_eq!(bytes.capacity_for_test(), 256);
     assert_eq!(bytes.try_pop().unwrap(), Some(199));
     bytes.zeroize().unwrap();
     assert!(bytes.is_empty());
     bytes.with_bytes(|bytes| assert!(bytes.is_empty())).unwrap();
+}
+
+#[test]
+fn secure_vec_uses_smallest_secure_size_class() {
+    assert_eq!(SecureVec::new().capacity_for_test(), 0);
+    assert_secure_vec_capacity(1, 64);
+    assert_secure_vec_capacity(64, 64);
+    assert_secure_vec_capacity(65, 128);
+    assert_secure_vec_capacity(128, 128);
+    assert_secure_vec_capacity(129, 256);
+    assert_secure_vec_capacity(255, 256);
+    assert_secure_vec_capacity(257, 512);
+    assert_secure_vec_capacity(4096, 4096);
+    assert_secure_vec_capacity(4097, page_size() * 2);
+}
+
+fn assert_secure_vec_capacity(len: usize, expected_capacity: usize) {
+    let bytes = SecureVec::try_from_slice(&vec![0xa5; len]).unwrap();
+    assert_eq!(bytes.len(), len);
+    assert_eq!(bytes.capacity_for_test(), expected_capacity);
 }
 
 #[test]

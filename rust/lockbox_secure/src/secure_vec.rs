@@ -252,6 +252,11 @@ impl SecureVec {
     }
 
     #[cfg(test)]
+    pub(crate) fn capacity_for_test(&self) -> usize {
+        self.allocation.map_or(0, |allocation| allocation.capacity)
+    }
+
+    #[cfg(test)]
     pub(crate) fn canaries_intact_for_test(&self) -> bool {
         let Some(allocation) = self.allocation else {
             return true;
