@@ -14,18 +14,15 @@ This review covers the current Rust implementation shape.
 
 ## Cleanup Needed
 
-- `Lockbox::create` currently panics if the system random source fails while
-  generating a lockbox UUID. Prefer `try_create` or make `create` return
-  `Result<Self>` before stabilizing the public API.
+- Raw-key byte APIs have been hidden from the generated public docs; keep
+  pressure on tests and internal tools to use file-backed high-level helpers
+  where practical.
 - CLI command behavior now lives under command-family modules in
   `lockbox_cli/src/commands/`, with `main.rs` kept as the binary entrypoint.
 - Agent request handling is duplicated between Unix and Windows. The shared
   parser is now factored out, but response handling can be shared further.
-- The core has raw-key APIs for test/developer use. Consider naming them
-  `create_with_raw_key`/`open_with_raw_key` and making the password/recipient
-  APIs the obvious default.
-- `to_bytes()` clones the whole lockbox. That is fine for tests but should not be
-  the main production persistence API.
+- `to_bytes()` remains available only as a hidden test/developer convenience.
+  It should not be presented as the production persistence API.
 - Several APIs still return `Vec<u8>` for convenience. Keep them, but add
   stream-first alternatives as the primary path in language bindings.
 - The CLI should move from hand-rolled argument parsing to `clap` once command
@@ -36,7 +33,7 @@ This review covers the current Rust implementation shape.
 - Root-level core files have been moved into domain subdirectories:
   `format/` for header, page, payload, commit root, key directory, and codecs;
   `paths/` for logical and host paths; `keys/` for derivation, wrapping, slots,
-  secret bytes, and crypto; `toc/` for manifest entries/codecs and BTree code;
+  secret bytes, and crypto; `toc/` for TOC entries/codecs and BTree code;
   `storage/` for storage, page cache, free space, free index, cache options, and
   memory pressure; and `model/` for public data structs and shared record
   metadata.

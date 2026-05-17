@@ -359,7 +359,7 @@ Summary:
   Partial files: 3
   Metadata-only files: 1
   Corrupt pages: 7
-  Latest manifest: damaged
+  Latest TOC: damaged
 
 Partial:
   /photos/c.jpg
@@ -371,7 +371,7 @@ Metadata only:
 
 Corrupt:
   page at offset 184320
-  latest manifest
+  latest TOC
 ```
 
 Use verbose output when the user really wants to list intact files:
@@ -406,7 +406,7 @@ lockbox salvage damaged.lbox clean.lbox
 should skip partial or corrupt files by default and include them in the report.
 
 Recovery scans fixed-size encrypted pages and encrypted metadata. It
-should identify intact files even if the latest manifest is damaged.
+should identify intact files even if the latest TOC is damaged.
 
 ## Recipient Keys
 
@@ -517,7 +517,7 @@ Remove a key slot:
 lockbox remove-key secrets.lbox 2
 ```
 
-Removing a key is a compaction operation. The CLI rewrites the live lockbox state
+Removing a key is a compaction operation. The CLI rewrites the current lockbox state
 so stale key-directory history is not left behind as an easy way for the removed
 credential to keep opening the lockbox.
 

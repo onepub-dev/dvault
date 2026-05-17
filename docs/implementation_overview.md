@@ -1,8 +1,8 @@
 # Implementation Overview
 
 This document keeps implementation and format direction out of the top-level
-README. User-facing command examples live in [cli_how_to.md](cli_how_to.md).
-Exact on-disk structures live in [file_formats.md](file_formats.md).
+README. User-facing command examples are in [cli_how_to.md](cli_how_to.md).
+Exact on-disk structures are in [file_formats.md](file_formats.md).
 
 ## Goals
 
@@ -10,8 +10,8 @@ Exact on-disk structures live in [file_formats.md](file_formats.md).
 - Browser-compatible reads over HTTP range requests.
 - Private paths and metadata; paths are not stored in cleartext indexes.
 - Append-friendly writes with reuse of deleted or replaced page space.
-- Checkpointed manifests for fast open.
-- Recovery APIs that can salvage valid files when headers, manifests, or pages
+- Checkpointed TOCs for fast open.
+- Recovery APIs that can salvage valid files when headers, TOCs, or pages
   are damaged.
 - Native and WASM-friendly Rust crates.
 
@@ -53,24 +53,24 @@ SHA-256 public header checksum
 ```
 
 Paths, file names, file contents, env names, env values, permissions, symlink
-targets, and manifest entries are inside fixed-size encrypted pages. Metadata
+targets, and TOC entries are inside fixed-size encrypted pages. Metadata
 pages are currently 128 KiB and file-data pages are 8 MiB. Normal storage
 writes operate on whole physical pages.
 
-## Manifest And Recovery
+## TOC And Recovery
 
 Normal open uses the header's latest authenticated commit root. The commit root
 points at the current TOC root, env root, and persisted free-space index.
 
-Recovery does not trust the fixed header or manifest. It scans fixed-size
+Recovery does not trust the fixed header or TOC. It scans fixed-size
 pages, verifies checksums, authenticates encrypted pages, and rebuilds the best
-available manifest. If the latest manifest is corrupt but file pages are
+available TOC. If the latest TOC is corrupt but file pages are
 intact, files can still be recovered. If a file page is corrupt but the
-manifest survives, recovery reports that file as partial.
+TOC survives, recovery reports that file as partial.
 
 ```rust
-let report = Lockbox::recover(bytes, key);
-let clean = Lockbox::salvage(damaged_bytes, key)?;
+let report = RecoveryScanner::scan_bytes(bytes, key);
+let clean = RecoveryScanner::salvage_bytes(damaged_bytes, key)?;
 ```
 
 ## Page Cache
@@ -110,11 +110,11 @@ Deleted or replaced pages become reusable slots. New pages reuse available
 slots when they fit, while metadata updates remain checkpointed and crash-safe.
 
 Deletes and replacements redact old physical pages during commit. If a page
-also contains live objects, those objects are relocated first, then the old page
+also contains current objects, those objects are relocated first, then the old page
 is zeroed so stale ciphertext is not left recoverable through normal recovery.
 
 Compaction is a maintenance operation for heavily fragmented archives. It
-logically rewrites the live state into a fresh lockbox through the same
+logically rewrites the current state into a fresh lockbox through the same
 page-cache-backed APIs and swaps the backing storage after the replacement
 commits.
 
@@ -124,9 +124,9 @@ The target web flow is:
 
 ```text
 1. Browser fetches the fixed header range.
-2. Browser fetches the latest checkpoint/manifest ranges.
+2. Browser fetches the latest checkpoint/TOC ranges.
 3. User lists a directory.
-4. Browser fetches only the manifest pages and file pages needed.
+4. Browser fetches only the TOC pages and file pages needed.
 5. WASM decrypts/decompresses selected files locally.
 ```
 

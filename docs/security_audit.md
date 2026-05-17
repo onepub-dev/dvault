@@ -30,11 +30,11 @@ cryptographic review.
   internal separators, invalid child offsets, and invalid stored paths before
   extraction trusts TOC metadata.
 - Current commits now publish an authenticated commit-root object inside a
-  fixed-size encrypted page. The commit root points at the live TOC root,
-  the live env root, and the persisted free-space index.
-- The committed TOC is live-only; deletes redact the referenced payload or
+  fixed-size encrypted page. The commit root points at the current TOC root,
+  the current env root, and the persisted free-space index.
+- The committed TOC stores only current entries; deletes redact the referenced payload or
   metadata object and are not represented as tombstones or recovery history.
-- The committed env namespace is live-only. Env values are active secrets, so
+- The committed env namespace stores only current entries. Env values are active secrets, so
   updates and deletes stage sanitized replacements for old env tree pages
   through the page cache before a newly added recipient can decrypt stale
   values. Linked env-page logs, tombstone histories, and legacy env scans are
@@ -55,9 +55,10 @@ cryptographic review.
   help only and should be discouraged for real use. Any password environment
   variable path must construct `SecretString` directly with
   `SecretString::try_from_env`, not via a normal `String`.
-- The core still exposes raw-key APIs for developer/testing use. Normal bindings
-  should guide callers toward password/recipient unlock APIs.
-- The live storage path now uses fixed-size page-cache managed pages. Format
+- The core still exposes content-key APIs for callers that deliberately manage
+  their own high-entropy lockbox key. Normal bindings should guide callers
+  toward password or recipient unlock APIs.
+- The current storage path now uses fixed-size page-cache managed pages. Format
   review should treat `docs/file_formats.md` as the current contract. Normal writes,
   including compaction rewrites, pass through the page cache. Unlock reads of
   current key-directory pages also go through the page-cache page read/decode
@@ -75,7 +76,7 @@ cryptographic review.
   metadata has already been authenticated and validated. Any future recovery or
   partial-scan path must continue using validating decoders.
 - Fuzzing is still required for header, key directory, page scanner,
-  manifest, payload decoders, path validation, and recovery.
+  TOC, payload decoders, path validation, and recovery.
 - Fuzz scaffolding exists under `rust/fuzz`, and CI runs a short fuzz smoke
   pass. Corpus collection and longer scheduled fuzz runs are still needed.
 

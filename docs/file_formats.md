@@ -209,8 +209,8 @@ a commit. Other page classes, including clear-text key-directory pages, use the
 page-cache read/write boundary.
 
 Compaction is a logical rewrite rather than an in-place page defragmenter. The
-implementation reads the current live TOC/env/key state, creates a fresh
-lockbox with the same lockbox id and content key, writes each live object
+implementation reads the current TOC/env/key state, creates a fresh
+lockbox with the same lockbox id and content key, writes each current object
 through the normal page-cache APIs, commits that replacement, then swaps the
 backing storage. It does not move encrypted or clear-text pages into free slots
 inside the existing file, because that would require layout-specific rewrites of
@@ -237,7 +237,7 @@ Object ids are stable references used by TOC entries and indexes. A logical file
 may reference one or more file-data objects. Multiple small logical files may be
 packed into one file-pack object.
 
-Symlinks are live TOC entries that reference symlink metadata objects. The live
+Symlinks are current TOC entries that reference symlink metadata objects. The current
 TOC stores the symlink node kind plus the metadata page offset, object length,
 and object id. It does not store the symlink target. The target is stored only
 inside the referenced symlink object, and many symlink objects may be packed into
@@ -295,7 +295,7 @@ that an attacker has not replaced the entire file with an older valid copy.
 
 An external freshness anchor is state outside the lockbox that records the
 latest known version, generation, hash, or signed timestamp. Examples include a
-server-side object generation number, transparency log entry, signed manifest,
+server-side object generation number, transparency log entry, signed TOC,
 append-only audit log, or application database row. Lockbox can reject stale
 internal metadata within one file by choosing the highest authenticated
 generation; only an external anchor can detect replacement of the whole file
@@ -303,14 +303,14 @@ with an older but internally valid lockbox.
 
 ## Table Of Contents
 
-The TOC is a live-only copy-on-write BTree. Tombstones are not stored in the
-current TOC. Deletes remove entries from the live TOC, redact the referenced
+The TOC is a current-entry copy-on-write BTree. Tombstones are not stored in the
+current TOC. Deletes remove entries from the current TOC, redact the referenced
 payload or metadata object through the page cache, and return old object/page
 references to the free-space index once they are no longer referenced. Deleted
 files and symlinks are not discoverable during recovery after their metadata has
 been redacted.
 
-Leaf payloads contain sorted manifest entries. Internal payloads contain sorted
+Leaf payloads contain sorted TOC entries. Internal payloads contain sorted
 child separators and child object references.
 
 Decode rules are intentionally strict:
@@ -333,9 +333,9 @@ Environment variables are encrypted metadata, not files. They must not appear in
 file listings, file recovery listings, visualizations, or unauthenticated public
 metadata.
 
-The committed env namespace is live-only, like the TOC. It must contain only the
+The committed env namespace stores only current entries, like the TOC. It must contain only the
 current value for each env name. Old env values are secret material; they must
-not remain decryptable in old COW pages after `set_env`, `remove_env`, or
+not remain decryptable in old COW pages after `set_env`, `delete_env`, or
 recipient changes are committed. This is required because adding a recipient
 grants access to the lockbox content key, and that recipient could otherwise
 decrypt stale env pages containing secrets that are still valid elsewhere.
@@ -350,22 +350,24 @@ Each env leaf entry stores its sensitivity bit. Sensitivity is declared when the
 env var is created, updates preserve it, and changing sensitivity requires
 delete plus recreate. All env values are encrypted at rest. In memory, normal
 values use ordinary string access and secret values use secure string storage
-and scoped access. Normal `get_env`, `list_env`, and `get_all_env` operations
-load from the env root and must not discover env vars by scanning the whole
-lockbox; `get_all_env` only returns non-secret values.
+and scoped access. Normal `get_env`, `list_env`, and scoped `visit_env`
+operations load from the env root and must not discover env vars by scanning the
+whole lockbox; `visit_env` includes both normal and secret values, yielding
+secret entries as `SecretString` references so plaintext access still goes
+through the secret value's scoped callback.
 
 Env pages must not embed forward or backward linked-list pointers as the primary
 structure. Page-embedded linked lists interact poorly with copy-on-write: when a
 middle page changes, every link that reaches it may need to be rewritten, and a
 tail/head mutation can force extra page rewrites. Use a root-referenced
 directory/tree or other immutable index structure. The current pre-1.0
-implementation writes a packed env BTree from the live namespace on env commits
+implementation writes a packed env BTree from the current namespace on env commits
 and reuses the same encoded-size grouping and routing-child codec as the TOC.
 
 An env update follows the same secret-redaction rule as file replacement:
 
 1. read the current env directory
-2. build replacement env page(s) containing only live env entries
+2. build replacement env page(s) containing only current env entries
 3. stage sanitized replacements for old env tree pages through the page cache
 4. publish the new env root in the next commit root
 5. add the old env tree page slots to the committed free-space index
@@ -470,7 +472,7 @@ Removing a password or recipient is not just a metadata delete. Because old COW
 history may contain old key directories or data pages, the CLI must treat key
 removal as a conservative maintenance operation:
 
-1. remove the key slot from the live key directory
+1. remove the key slot from the current key directory
 2. logically rewrite reachable files, symlinks, env vars, TOC nodes, free-space
    metadata, and key-directory pages through the page cache into a replacement
    lockbox
@@ -502,10 +504,10 @@ pages.
 
 When a file, symlink, or environment variable is deleted or replaced, the commit
 path must redact the physical page that held the old encrypted object. If the
-old page also contains live objects, those live objects are relocated to a new
+old page also contains current objects, those objects are relocated to a new
 page first; then the old physical page is overwritten with zeros and removed
 from the decoded-page cache. This is required because old COW pages may still
-contain decryptable ciphertext even after the live TOC or env root no longer
+contain decryptable ciphertext even after the current TOC or env root no longer
 references them.
 
 `CacheLimit::Auto` is page-aware:
@@ -527,7 +529,7 @@ Recovery can:
 
 - authenticate and decrypt intact pages independently
 - locate valid commit roots
-- rebuild a best-effort live view from the highest valid commit root
+- rebuild a best-effort current view from the highest valid commit root
 - salvage file objects whose metadata can still be associated with paths
 - report intact, corrupt, and lost counts
 

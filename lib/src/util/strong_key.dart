@@ -63,7 +63,7 @@ class StrongKey {
   static Uint8List generateNonce(int length) =>
       Uint8List.fromList(List.generate(length, (_) => Random.secure().nextInt(256)));
 
-  /// Derives raw key bytes using Argon2id.
+  /// Derives key bytes using Argon2id.
   Future<Uint8List> deriveKeyBytes({
     required Uint8List salt,
     int memoryKib = 65536,

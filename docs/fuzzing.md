@@ -22,7 +22,7 @@ cargo fuzz run paths
 Next steps:
 
 - Add seed corpora from valid small vaults, corrupted headers, corrupted
-  manifests, and path edge cases.
+  TOCs, and path edge cases.
 - Add CI/nightly fuzz smoke jobs with short time limits.
-- Add dedicated manifest and payload decoder targets if those internals become
+- Add dedicated TOC and payload decoder targets if those internals become
   public to the fuzz crate or move behind a fuzzing feature.

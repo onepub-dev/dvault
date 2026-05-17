@@ -164,8 +164,8 @@ This avoids labels as a required concept and keeps the default UX simple:
 
 ```rust
 let password = SecretString::try_from_bytes(b"shared password".to_vec())?;
-let lockbox = Lockbox::open_with_password(bytes, &password)?;
-let lockbox = Lockbox::open_with_recipient(bytes, &my_private_key)?;
+let lockbox = Lockbox::open_file(path, LockboxUnlock::Password(&password))?;
+let lockbox = Lockbox::open_file(path, LockboxUnlock::RecipientKeyPair(my_private_key))?;
 ```
 
 Labels or fingerprints can be added later as optional hints, but they are not

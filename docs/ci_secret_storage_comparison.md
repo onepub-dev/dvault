@@ -55,7 +55,7 @@ more self-contained, but does not provide organization-level vault governance.
   those values.
 - Do not pretend Lockbox replaces dynamic secret engines. Document Vault,
   Secrets Manager, and 1Password as better choices for rotation, central audit,
-  and live workload identity.
+  and active workload identity.
 - Treat Lockbox as an encrypted, recoverable, cross-platform bundle that can
   carry secrets when central infrastructure is unavailable or deliberately out
   of scope.

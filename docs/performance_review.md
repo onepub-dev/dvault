@@ -37,14 +37,14 @@ lockbox expansion/extraction.
 - Commit roots, free-space index checkpoints, TOC nodes, env tree nodes, and
   symlink metadata now use 128 KiB metadata pages. File data still uses 8 MiB
   data pages.
-- Live symlinks are TOC entries that point at packed symlink metadata objects.
+- Current symlinks are TOC entries that point at packed symlink metadata objects.
   The target is not stored in the TOC, and many symlink objects share each
   metadata page.
 - Env vars are packed into a commit-root-referenced env BTree instead of being
   stored as one tiny object per page or linked through page-embedded lists.
   `list_env` now reads from the env root instead of scanning the whole lockbox.
   Env tree writes and redactions are staged through the page cache.
-- Full expansion currently walks manifest entries serially. It should support a
+- Full expansion currently walks TOC entries serially. It should support a
   bounded worker pool for independent records.
 - The convenience extraction APIs still return owned `Vec<u8>` values. That is
   appropriate for language bindings and small extractions, but CLI-scale
@@ -93,7 +93,7 @@ pages.
 - Peak RSS during recursive add.
 - Full extraction throughput in MiB/s and files/s.
 - Single-file range-read latency for large files.
-- Manifest open/list latency for 10k, 100k, and 1M entries.
+- TOC open/list latency for 10k, 100k, and 1M entries.
 
 ## Current Benchmark Harness
 
@@ -142,7 +142,7 @@ logical bytes, lockbox bytes, add time, commit time, list time, extraction or
 delete/replace time, large-file range-read latency, and lockbox/logical size
 ratio.
 
-Repeatable microbenchmarks live in
+Repeatable microbenchmarks are in
 `rust/lockbox_core/benches/performance.rs` and run with:
 
 ```bash

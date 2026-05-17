@@ -673,7 +673,7 @@ profile while preserving the production format and transaction model. Changes:
   sparse gaps, and avoids cloning decoded pages before encoding.
 - Auto cache sizing samples OS memory pressure every 1024 cache operations
   instead of every 256 operations.
-- TOC commit avoids sorting manifest values already ordered by `LogicalPath`.
+- TOC commit avoids sorting TOC values already ordered by `LogicalPath`.
 - TOC internal rebuild no longer performs a linear child-position search for
   each child group.
 - Compression entropy probing counts sampled ranges directly instead of
@@ -761,9 +761,9 @@ Conclusion:
   large-file commit/range timing, which remain dominated by fixed commit work
   and normal local disk noise at this workload size.
 - The remaining visible profile cost is mostly allocation/copying around commit
-  rollback and manifest/TOC materialization, plus zstd internals. Further
+  rollback and TOC materialization, plus zstd internals. Further
   reductions likely require a larger structural change: building TOC leaves from
-  borrowed manifest entries and making rollback journal-based instead of
+  borrowed TOC entries and making rollback journal-based instead of
   snapshot-based.
 
 ## 2026-05-13 - Workload-Aware Cache Policy Pass

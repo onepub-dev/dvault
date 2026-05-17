@@ -41,14 +41,14 @@ support, and both password and recipient-key access.
 
 - Lockbox can store many files, symlinks, and environment variables in one
   encrypted container instead of requiring a tarball or directory convention.
-- Paths, file names, environment variable names, values, and manifest entries
+- Paths, file names, environment variable names, values, and TOC entries
   are private metadata rather than cleartext indexes.
 - Fixed-size encrypted pages hide the exact size of tiny files and env entries
   better than a simple encrypted file.
 - The format is designed for range reads, browser/WASM access, and extracting
   selected files without decrypting a whole archive.
 - The recovery model can scan valid pages and salvage data when headers,
-  manifests, or records are damaged.
+  TOCs, or records are damaged.
 - Password slots and public-key recipient slots can coexist in the same
   container.
 - The UX can be domain-specific: `lockbox env export`,

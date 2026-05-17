@@ -10,10 +10,10 @@ The env tree uses internal names to separate storage classes:
 - `.secret/<name>` for secret environment variables
 
 Leaf grouping keeps storage classes from sharing leaf pages. Env tree reads use
-the encrypted env toc to know that the requested page is env-related before the
-page body is decrypted. Env pages are read from storage with `read_at_secure`
-into `SecureVec`, decrypted in place, and decoded through the secure single
-object page path.
+the encrypted env tree metadata to know that the requested page is env-related
+before the page body is decrypted. Env pages are read from storage with
+`read_at_secure` into `SecureVec`, decrypted in place, and decoded through the
+secure single object page path.
 
 Env tree pages are inserted into the decoded page cache only when requested with
 the secure page policy. The cache stores one `DecodedPage` type, but each page

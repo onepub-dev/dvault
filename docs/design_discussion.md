@@ -163,7 +163,7 @@ blocks without safety comments. Further reduction options:
 
 ## Compaction Disk Usage
 
-Current compaction creates a replacement lockbox, writes live state through the
+Current compaction creates a replacement lockbox, writes current state through the
 normal page-cache APIs, commits it, then swaps the backing storage. This is
 simple and preserves page-cache invariants, but peak disk usage can approach
 old lockbox size plus new lockbox size.
@@ -174,7 +174,7 @@ Potential mitigations:
 
 - Preflight available disk space and report expected peak usage.
 - Add `--compact-to <path>` so users can compact onto another filesystem.
-- Add `--dry-run` with live bytes, stale bytes, and estimated output size.
+- Add `--dry-run` with current bytes, stale bytes, and estimated output size.
 - Consider future in-place compaction only if we can prove COW, redaction, and
   crash recovery remain simple. It should not move physical pages behind the
   page cache.
@@ -185,7 +185,7 @@ Current state:
 
 - `MlKemKeyPair` stores the long-lived private decapsulation seed in
   `SecretVec`.
-- `MlKemKeyPair::generate()` and `to_seed_bytes()` are fallible because secure
+- `MlKemKeyPair::generate()` and `to_seed_secure()` are fallible because secure
   storage can fail.
 - Vault private-key storage uses scoped secret access instead of cloning the
   seed into an ordinary buffer.
@@ -209,13 +209,13 @@ passwords use `SecretString::try_from_env` rather than first allocating a Rust
 Current protections:
 
 - Page-body decode checks declared decompressed page size before allocation.
-- File-frame decode verifies decoded length equals manifest length.
+- File-frame decode verifies decoded length equals TOC length.
 - Extraction policies enforce max single-file bytes, total bytes, and file
   count.
-- Manifest and TOC decoders reject impossible counts, malformed paths,
+- TOC and TOC decoders reject impossible counts, malformed paths,
   traversal, unsorted entries, duplicates, and corrupt checksums.
 - Recovery skips corrupt records and has tests for partial files, corrupt
-  headers, corrupt manifests, and truncated tails.
+  headers, corrupt TOCs, and truncated tails.
 - Page reads validate page header checksums and either AEAD authentication or
   clear-text page checksums before decoding objects.
 

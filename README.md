@@ -156,18 +156,23 @@ log, or process environment controlled by other tooling.
 Use `lockbox_core` when you need the portable storage engine:
 
 ```rust
-use lockbox_core::Lockbox;
+use lockbox_core::{Lockbox, LockboxCreate, LockboxUnlock, SecretVec};
 
-let key = b"correct horse battery staple";
-let mut lockbox = Lockbox::create(key);
+let key = SecretVec::try_from_slice(b"correct horse battery staple")?;
+let mut lockbox = Lockbox::create_file(
+    "secrets.lbox",
+    LockboxCreate::ContentKey(key.try_clone()?),
+)?;
 
-lockbox.put_file("/docs/a.txt", b"alpha")?;
-lockbox.put_file("/docs/b.txt", b"bravo")?;
+lockbox.add_file("/docs/a.txt", b"alpha")?;
+lockbox.add_file("/docs/b.txt", b"bravo")?;
 lockbox.set_env("DATABASE_URL", "postgres://localhost/app")?;
 lockbox.commit()?;
 
-let bytes = lockbox.to_bytes();
-let reopened = Lockbox::open(bytes, key)?;
+let reopened = Lockbox::open_file(
+    "secrets.lbox",
+    LockboxUnlock::ContentKey(key),
+)?;
 let file = reopened.get_file("/docs/a.txt")?;
 let env = reopened.get_env("DATABASE_URL")?;
 ```
