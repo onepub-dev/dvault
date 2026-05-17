@@ -35,16 +35,47 @@ impl Default for LockboxOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// High-level access pattern hint for cache and write behavior.
+///
+/// This value is a tuning hint, not a security setting. It does not change the
+/// lockbox file format or the data returned by any API. The current
+/// implementation uses the profile to decide how aggressively to retain staged
+/// file pages during writes; decoded-page cache capacity is still controlled by
+/// `LockboxOptions::cache_limit`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkloadProfile {
     /// Balanced defaults for interactive CLI/API use.
+    ///
+    /// Use this for normal applications that mix reads, writes, listing, and
+    /// occasional commits. Small files may be kept in staging memory and packed
+    /// together before commit so repeated edits can be compact and efficient.
+    /// This is the default profile.
     Interactive,
     /// Prefer bounded memory during large imports.
+    ///
+    /// Use this when adding many files or very large batches where predictable
+    /// memory use matters more than post-import packing. Small-file staging is
+    /// flushed incrementally and file pages written during import are discarded
+    /// from the decoded-page cache after they are flushed. Pending staged data
+    /// may also be flushed before delete, rename, or symlink operations that
+    /// touch the same path. This reduces peak memory at the cost of less
+    /// aggressive small-file packing.
     BulkImport,
     /// Favor repeated reads from an existing lockbox.
+    ///
+    /// Use this when the lockbox is mostly opened for listing, stat, range
+    /// reads, or repeated file extraction with few mutations. In the current
+    /// implementation this does not add behavior beyond the configured
+    /// `cache_limit`; choose an appropriate cache limit if repeated reads should
+    /// retain more decoded pages.
     ReadMostly,
     /// Favor extracting many records in sequence.
+    ///
+    /// Use this when streaming many files out of a lockbox, such as bulk
+    /// restore or export flows. In the current implementation this does not add
+    /// behavior beyond the configured `cache_limit`; it exists to make caller
+    /// intent explicit and to allow future extraction-specific tuning without
+    /// changing the public API.
     ExtractMany,
 }
 
