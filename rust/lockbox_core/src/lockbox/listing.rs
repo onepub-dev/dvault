@@ -1,7 +1,7 @@
 use super::Lockbox;
 use crate::lockbox_path::{glob_matches, validate_glob};
 use crate::node_kind::NodeKind;
-use crate::{ListIter, ListOptions, LockboxEntry, LockboxPath, Result};
+use crate::{ListOptions, LockboxEntry, LockboxPath, Result};
 
 impl Lockbox {
     /// Return an iterator over entries matching listing options.
@@ -9,7 +9,10 @@ impl Lockbox {
     /// Returns `Error::InvalidPath` if the list root or glob pattern is unsafe.
     /// Iteration can also return `Error::CorruptRecord` if a symlink entry
     /// points at invalid stored metadata.
-    pub fn list_iter(&self, options: ListOptions) -> Result<ListIter<'_>> {
+    pub fn list_iter(
+        &self,
+        options: ListOptions,
+    ) -> Result<impl Iterator<Item = Result<LockboxEntry>> + '_> {
         let path = options.path.as_str().to_string();
         let glob = match &options.glob {
             Some(pattern) => Some(validate_glob(pattern)?),
@@ -51,7 +54,7 @@ impl Lockbox {
             yielded += 1;
             Some(self.public_entry_for_toc(entry))
         });
-        Ok(ListIter::new(Box::new(iter)))
+        Ok(iter)
     }
 
     /// List direct child entries below a logical path.
