@@ -7,7 +7,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::constants::{MAX_COMPONENT_BYTES, MAX_PATH_BYTES, MAX_PATH_DEPTH};
 use crate::{Error, Result};
 
-/// Canonical path for an entry inside a lockbox.
+/// Canonical path for an directory, file or symlink entry inside a lockbox.
 ///
 /// `LockboxPath` is distinct from `std::path::Path`, which represents a host
 /// filesystem path. Lockbox paths always use `/` separators, are stored in
