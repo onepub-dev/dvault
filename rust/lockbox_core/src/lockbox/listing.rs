@@ -9,7 +9,7 @@ impl Lockbox {
     /// Returns `Error::InvalidPath` if the list root or glob pattern is unsafe.
     /// Iteration can also return `Error::CorruptRecord` if a symlink entry
     /// points at invalid stored metadata.
-    pub fn list_iter(
+    pub fn list(
         &self,
         options: ListOptions,
     ) -> Result<impl Iterator<Item = Result<LockboxEntry>> + '_> {
@@ -55,24 +55,6 @@ impl Lockbox {
             Some(self.public_entry_for_toc(entry))
         });
         Ok(iter)
-    }
-
-    /// List direct child entries below a logical path.
-    ///
-    /// Returns the same errors as `list_iter`.
-    pub fn list(&self, path: &LockboxPath) -> Result<Vec<LockboxEntry>> {
-        self.list_iter(ListOptions::new(path))?.collect()
-    }
-
-    /// List entries below a path filtered by a glob pattern.
-    ///
-    /// Returns the same errors as `list_iter`, including `Error::InvalidPath`
-    /// for unsafe glob patterns.
-    pub fn list_glob(&self, path: &LockboxPath, glob: &str) -> Result<Vec<LockboxEntry>> {
-        let mut options = ListOptions::new(path);
-        options.glob = Some(glob.to_string());
-        options.recursive = glob.contains("**") || glob.contains('/');
-        self.list_iter(options)?.collect()
     }
 
     /// Return metadata for one file or symlink.

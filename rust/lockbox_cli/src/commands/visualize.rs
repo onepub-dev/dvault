@@ -18,7 +18,7 @@ fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
     let mut file_count = 0usize;
     let mut symlink_count = 0usize;
     let mut total_file_bytes = 0u64;
-    for entry in lb.list_iter(ListOptions {
+    for entry in lb.list(ListOptions {
         path: LockboxPath::new("/")?,
         glob: None,
         recursive: true,

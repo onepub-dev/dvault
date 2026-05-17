@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use lockbox_core::{Lockbox, LockboxPath, LockboxProtection, SecretVec};
+use lockbox_core::{ListOptions, Lockbox, LockboxPath, LockboxProtection, SecretVec};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static LOCKBOX_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -23,7 +23,7 @@ fuzz_target!(|data: &[u8]| {
         .unwrap();
         let _ = lockbox.add_file(&path, b"x", false);
         let _ = lockbox.add_symlink(&path, &LockboxPath::new("/target").unwrap(), false);
-        let _ = lockbox.list(&path);
+        let _ = lockbox.list(ListOptions::new(&path));
         let _ = std::fs::remove_file(storage_path);
     }
 });

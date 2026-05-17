@@ -41,8 +41,7 @@ fn create_put_get_list_stat_commit_open() {
         })
     );
 
-    let listed = lb.list(&p("/docs")).unwrap();
-    assert_eq!(listed.len(), 2);
+    assert_eq!(lb.list(ListOptions::new(&p("/docs"))).unwrap().count(), 2);
 
     lb.commit().unwrap();
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
@@ -287,7 +286,12 @@ fn unicode_paths_are_canonicalized_to_nfc_for_storage_and_lookup() {
     assert_eq!(reopened.get_file(&p(composed)).unwrap(), b"cv");
     assert_eq!(reopened.get_file(&p(decomposed)).unwrap(), b"cv");
     assert!(reopened.stat(&p(composed)).is_some());
-    assert_eq!(reopened.list(&p("/docs")).unwrap()[0].path, composed);
+    let listed = reopened
+        .list(ListOptions::new(&p("/docs")))
+        .unwrap()
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(listed[0].path, composed);
 }
 
 #[test]
@@ -300,7 +304,13 @@ fn unicode_normalization_collisions_replace_same_lockbox_path() {
 
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
     assert_eq!(reopened.get_file(&p("/docs/résumé.pdf")).unwrap(), b"two");
-    assert_eq!(reopened.list(&p("/docs")).unwrap().len(), 1);
+    assert_eq!(
+        reopened
+            .list(ListOptions::new(&p("/docs")))
+            .unwrap()
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -729,7 +739,7 @@ fn toc_round_trips_when_toc_payload_exceeds_minimum_page_body() {
 
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
     let entries = reopened
-        .list_iter(ListOptions {
+        .list(ListOptions {
             recursive: true,
             ..ListOptions::new(&p("/toc-overflow"))
         })
@@ -762,7 +772,7 @@ fn toc_btree_create_round_trips_multiple_leaves() {
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
     assert_eq!(
         reopened
-            .list_iter(ListOptions {
+            .list(ListOptions {
                 recursive: true,
                 ..ListOptions::new(&p("/toc-create"))
             })
@@ -793,7 +803,7 @@ fn toc_btree_append_round_trips_across_commits() {
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
     assert_eq!(
         reopened
-            .list_iter(ListOptions {
+            .list(ListOptions {
                 recursive: true,
                 ..ListOptions::new(&p("/toc-append"))
             })
@@ -828,7 +838,7 @@ fn toc_btree_delete_round_trips_across_commits() {
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
     assert_eq!(
         reopened
-            .list_iter(ListOptions {
+            .list(ListOptions {
                 recursive: true,
                 ..ListOptions::new(&p("/toc-delete"))
             })
@@ -860,7 +870,13 @@ fn appending_after_commit_preserves_existing_files() {
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
     assert_eq!(reopened.get_file(&p("/docs/a.txt")).unwrap(), b"alpha");
     assert_eq!(reopened.get_file(&p("/docs/b.txt")).unwrap(), b"bravo");
-    assert_eq!(reopened.list(&p("/docs")).unwrap().len(), 2);
+    assert_eq!(
+        reopened
+            .list(ListOptions::new(&p("/docs")))
+            .unwrap()
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -883,7 +899,13 @@ fn delete_removes_file_after_commit_and_reopen() {
         Err(Error::NotFound(_))
     ));
     assert_eq!(reopened.get_file(&p("/docs/b.txt")).unwrap(), b"bravo");
-    assert_eq!(reopened.list(&p("/docs")).unwrap().len(), 1);
+    assert_eq!(
+        reopened
+            .list(ListOptions::new(&p("/docs")))
+            .unwrap()
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -1137,7 +1159,7 @@ fn list_iter_and_streaming_extract_return_regular_files_when_within_limits() {
     lb.add_file(&p("/docs/b.txt"), b"bravo", false).unwrap();
 
     let entries = lb
-        .list_iter(ListOptions {
+        .list(ListOptions {
             recursive: true,
             ..ListOptions::new(&p("/docs"))
         })
@@ -1211,7 +1233,11 @@ fn list_is_non_recursive() {
         .unwrap();
     lb.add_file(&p("/other/c.txt"), b"charlie", false).unwrap();
 
-    let docs = lb.list(&p("/docs")).unwrap();
+    let docs = lb
+        .list(ListOptions::new(&p("/docs")))
+        .unwrap()
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].path, "/docs/a.txt");
 }
@@ -1224,7 +1250,7 @@ fn list_iter_streams_entries_and_supports_rust_side_filtering() {
     lb.add_file(&p("/docs/c.pdf"), b"charlie", false).unwrap();
 
     let pdfs: Vec<_> = lb
-        .list_iter(ListOptions::new(&p("/docs")))
+        .list(ListOptions::new(&p("/docs")))
         .unwrap()
         .filter_map(Result::ok)
         .filter(|entry| entry.path.ends_with(".pdf"))
@@ -1244,11 +1270,24 @@ fn list_glob_filters_without_callback_bindings() {
     lb.add_file(&p("/docs/nested/c.pdf"), b"charlie", false)
         .unwrap();
 
-    let direct = lb.list_glob(&p("/docs"), "*.pdf").unwrap();
+    let mut options = ListOptions::new(&p("/docs"));
+    options.set_glob("*.pdf");
+    let direct = lb
+        .list(options)
+        .unwrap()
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
     assert_eq!(direct.len(), 1);
     assert_eq!(direct[0].path, "/docs/b.pdf");
 
-    let recursive = lb.list_glob(&p("/docs"), "**/*.pdf").unwrap();
+    let mut options = ListOptions::new(&p("/docs"));
+    options.set_glob("**/*.pdf");
+    options.recursive = true;
+    let recursive = lb
+        .list(options)
+        .unwrap()
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
     assert_eq!(recursive.len(), 2);
 }
 
@@ -1261,18 +1300,14 @@ fn list_options_can_limit_and_filter_node_types() {
 
     let mut options = ListOptions::new(&p("/docs"));
     options.include_files = false;
-    let links: Vec<_> = lb
-        .list_iter(options)
-        .unwrap()
-        .collect::<Result<_>>()
-        .unwrap();
+    let links: Vec<_> = lb.list(options).unwrap().collect::<Result<_>>().unwrap();
     assert_eq!(links.len(), 1);
     assert_eq!(links[0].kind, LockboxEntryKind::Symlink);
     assert_eq!(links[0].symlink_target.as_deref(), Some("/docs/a.txt"));
 
     let mut options = ListOptions::new(&p("/docs"));
     options.limit = Some(1);
-    assert_eq!(lb.list_iter(options).unwrap().count(), 1);
+    assert_eq!(lb.list(options).unwrap().count(), 1);
 }
 
 #[test]
@@ -1293,7 +1328,7 @@ fn symlink_support_round_trips_and_safe_extraction_skips_by_default() {
     assert_eq!(reopened.permissions(&p("/docs/a.txt")), Some(0o640));
 
     let files = reopened
-        .list_iter(ListOptions {
+        .list(ListOptions {
             recursive: true,
             include_symlinks: false,
             ..ListOptions::new(&p("/docs"))
@@ -1668,7 +1703,13 @@ fn env_vars_are_private_and_do_not_appear_in_listings() {
     assert!(!text.contains("super-secret"));
 
     let reopened = Lockbox::open(bytes, KEY).unwrap();
-    assert_eq!(reopened.list(&p("/docs")).unwrap().len(), 1);
+    assert_eq!(
+        reopened
+            .list(ListOptions::new(&p("/docs")))
+            .unwrap()
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -1768,7 +1809,13 @@ fn replacing_a_file_updates_content_and_keeps_old_version_out_of_toc() {
         reopened.get_file(&p("/docs/a.txt")).unwrap(),
         b"version two"
     );
-    assert_eq!(reopened.list(&p("/docs")).unwrap().len(), 1);
+    assert_eq!(
+        reopened
+            .list(ListOptions::new(&p("/docs")))
+            .unwrap()
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -2029,7 +2076,13 @@ fn many_files_round_trip_and_recover_after_toc_loss() {
     lb.commit().unwrap();
 
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
-    assert_eq!(reopened.list(&p("/many")).unwrap().len(), 100);
+    assert_eq!(
+        reopened
+            .list(ListOptions::new(&p("/many")))
+            .unwrap()
+            .count(),
+        100
+    );
     assert_eq!(
         reopened.get_file(&p("/many/file-042.txt")).unwrap(),
         b"content-042"

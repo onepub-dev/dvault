@@ -73,7 +73,7 @@ fn public_api_files_listing_env_symlink_and_rename_flow() {
     );
 
     let entries = reopened
-        .list_iter(ListOptions {
+        .list(ListOptions {
             path: p("/srv"),
             glob: Some("**/*.txt".to_string()),
             recursive: true,
@@ -113,12 +113,16 @@ fn public_api_files_listing_env_symlink_and_rename_flow() {
             .map(|(value, sensitivity)| (value.as_str(), *sensitivity)),
         Some(("secret-token", lockbox_core::EnvSensitivity::Normal))
     );
-    assert!(reopened.list(&p("/srv")).unwrap().iter().all(|entry| {
-        !entry.path.contains("DATABASE_URL") && !entry.path.contains("API_TOKEN")
-    }));
+    assert!(reopened
+        .list(ListOptions::new(&p("/srv")))
+        .unwrap()
+        .all(|entry| {
+            let entry = entry.unwrap();
+            !entry.path.contains("DATABASE_URL") && !entry.path.contains("API_TOKEN")
+        }));
 
     let all_entries = reopened
-        .list_iter(ListOptions {
+        .list(ListOptions {
             path: p("/srv"),
             glob: None,
             recursive: true,
@@ -326,7 +330,7 @@ fn public_api_path_inspector_and_file_helpers_flow() {
     lb.delete_env(&env("TEMP")).unwrap();
     lb.commit().unwrap();
 
-    let entries = lb.list_iter(ListOptions::new(&p("/docs"))).unwrap();
+    let entries = lb.list(ListOptions::new(&p("/docs"))).unwrap();
     assert_eq!(entries.count(), 2);
     let mut out = Vec::new();
     lb.extract_file_to_writer(&p("/docs/source.txt"), &mut out)

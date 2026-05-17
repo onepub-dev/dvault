@@ -63,7 +63,7 @@ fn small_files() -> Result<(), Box<dyn std::error::Error>> {
 
     let start = Instant::now();
     let listed = lockbox
-        .list_iter(ListOptions {
+        .list(ListOptions {
             recursive: true,
             ..ListOptions::new(&p("/"))
         })?
@@ -194,7 +194,7 @@ fn append_delete() -> Result<(), Box<dyn std::error::Error>> {
 
     let start = Instant::now();
     let listed = lockbox
-        .list_iter(ListOptions {
+        .list(ListOptions {
             recursive: true,
             ..ListOptions::new(&p("/"))
         })?
@@ -289,7 +289,7 @@ fn run_extract(
         match mode.as_str() {
             "stream" => {
                 let mut count = 0usize;
-                for entry in lockbox.list_iter(ListOptions {
+                for entry in lockbox.list(ListOptions {
                     recursive: true,
                     ..ListOptions::new(&p("/"))
                 })? {

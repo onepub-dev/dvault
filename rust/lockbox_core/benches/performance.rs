@@ -50,7 +50,7 @@ fn bench_small_files(c: &mut Criterion) {
         b.iter(|| {
             let mut count = 0usize;
             for entry in lockbox
-                .list_iter(ListOptions {
+                .list(ListOptions {
                     recursive: true,
                     ..ListOptions::new(&p("/"))
                 })
@@ -99,7 +99,7 @@ fn bench_mixed_tree(c: &mut Criterion) {
     group.bench_function("list_recursive_mixed", |b| {
         b.iter(|| {
             let count = lockbox
-                .list_iter(ListOptions {
+                .list(ListOptions {
                     recursive: true,
                     ..ListOptions::new(&p("/"))
                 })

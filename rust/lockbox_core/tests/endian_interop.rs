@@ -111,7 +111,7 @@ fn verify_fixture(path: &Path) {
     );
 
     let entries = lockbox
-        .list_iter(ListOptions {
+        .list(ListOptions {
             recursive: true,
             ..ListOptions::new(&p("/"))
         })

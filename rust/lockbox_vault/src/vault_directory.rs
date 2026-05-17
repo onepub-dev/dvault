@@ -150,7 +150,7 @@ impl VaultDirectory {
         Ok(self
             .lockbox
             .borrow()
-            .list_iter(recursive_list("/key_directories"))?
+            .list(recursive_list("/key_directories"))?
             .filter_map(Result::ok)
             .filter(|entry| entry.kind == LockboxEntryKind::File)
             .count())
@@ -198,7 +198,7 @@ impl VaultDirectory {
 
     fn list_record_names(&self, root: &str, extension: &str) -> Result<Vec<String>> {
         let mut out = Vec::new();
-        for entry in self.lockbox.borrow().list_iter(recursive_list(root))? {
+        for entry in self.lockbox.borrow().list(recursive_list(root))? {
             let entry = entry?;
             if entry.kind != LockboxEntryKind::File || !entry.path.ends_with(extension) {
                 continue;
