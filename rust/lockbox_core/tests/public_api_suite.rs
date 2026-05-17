@@ -381,7 +381,7 @@ fn public_api_path_inspector_and_file_helpers_flow() {
 }
 
 #[test]
-fn public_api_password_recipient_unlock_helper_flow() {
+fn public_api_password_recipient_open_file_flow() {
     let root = unique_dir("unlock");
     let password_path = root.join("password.lbox");
     let recipient_path = root.join("recipient.lbox");
@@ -395,22 +395,12 @@ fn public_api_password_recipient_unlock_helper_flow() {
         .add_file(&p("/secret.txt"), b"password", false)
         .unwrap();
     by_password.commit().unwrap();
-    let unlocked = Lockbox::unlock_path_with_password(&password_path, &password).unwrap();
-    assert_eq!(unlocked.lockbox_id, by_password.lockbox_id());
-    unlocked.with_key(|key| assert_eq!(key.len(), 32)).unwrap();
     assert_eq!(
         Lockbox::open_file(&password_path, LockboxUnlock::Password(&password))
             .unwrap()
             .get_file(&p("/secret.txt"))
             .unwrap(),
         b"password"
-    );
-    let password_backup = by_password.export_key_directory_backup().unwrap();
-    assert_eq!(
-        Lockbox::unlock_key_directory_backup_with_password(&password_backup, &password)
-            .unwrap()
-            .lockbox_id,
-        by_password.lockbox_id()
     );
 
     let recipient = MlKemKeyPair::generate().unwrap();
@@ -429,24 +419,6 @@ fn public_api_password_recipient_unlock_helper_flow() {
             .get_file(&p("/secret.txt"))
             .unwrap(),
         b"recipient"
-    );
-
-    let recipient = MlKemKeyPair::generate().unwrap();
-    let recipient_backup = {
-        let mut lb = Lockbox::create_file(
-            &root.join("recipient-backup.lbox"),
-            LockboxCreate::RecipientPublicKey(recipient.recipient_public_key()),
-        )
-        .unwrap();
-        lb.add_file(&p("/a.txt"), b"a", false).unwrap();
-        lb.commit().unwrap();
-        lb.export_key_directory_backup().unwrap()
-    };
-    assert_eq!(
-        Lockbox::unlock_key_directory_backup_with_recipient(&recipient_backup, &recipient)
-            .unwrap()
-            .with_key(|key| assert_eq!(key.len(), 32)),
-        Ok(())
     );
 
     let _ = std::fs::remove_dir_all(root);

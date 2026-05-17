@@ -2,9 +2,9 @@ use super::Lockbox;
 use crate::file_format::read_header;
 #[cfg(test)]
 use crate::key_directory::read_key_directory;
-use crate::key_directory::{
-    best_key_directory, encode_key_directory, read_key_directory_backup, scan_key_directories,
-};
+#[cfg(feature = "vault-bridge")]
+use crate::key_directory::read_key_directory_backup;
+use crate::key_directory::{best_key_directory, encode_key_directory, scan_key_directories};
 use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, LockboxKeySlot};
 use crate::key_wrap::{MlKemKeyPair, MlKemRecipientPublicKey};
 use crate::lockbox_id::LockboxId;
@@ -69,6 +69,7 @@ impl UnlockedContentKey {
     /// Borrow the decrypted content key for the duration of the callback.
     ///
     /// Returns `Error::SecurityLimitExceeded` if secure memory access fails.
+    #[cfg(feature = "vault-bridge")]
     pub fn with_key<R>(&self, f: impl FnOnce(&[u8]) -> R) -> Result<R> {
         Ok(self.key.with_bytes(f)?)
     }
@@ -135,6 +136,11 @@ impl Lockbox {
 
     /// Open an existing lockbox file using the selected unlock method.
     ///
+    /// Password and recipient unlocks use only key slots embedded in the
+    /// lockbox file. This method does not read the local vault, cached content
+    /// keys, or vault-stored key-directory backups. Use `lockbox_vault::Vault`
+    /// when that behavior is required.
+    ///
     /// Returns `Error::Io` if the host file cannot be read, `Error::InvalidKey`
     /// when no supplied unlock method can authenticate the content key, or
     /// corrupt/truncated errors if the lockbox structure cannot be parsed.
@@ -198,7 +204,7 @@ impl Lockbox {
     }
 
     /// Unlock a lockbox file with a password and return its decrypted content key.
-    pub fn unlock_path_with_password(
+    pub(crate) fn unlock_path_with_password(
         path: &Path,
         password: &SecretString,
     ) -> Result<UnlockedContentKey> {
@@ -218,7 +224,8 @@ impl Lockbox {
     }
 
     /// Unlock a key-directory backup with a password.
-    pub fn unlock_key_directory_backup_with_password(
+    #[cfg(feature = "vault-bridge")]
+    pub(crate) fn unlock_key_directory_backup_with_password(
         bytes: &[u8],
         password: &SecretString,
     ) -> Result<UnlockedContentKey> {
@@ -274,7 +281,7 @@ impl Lockbox {
     }
 
     /// Unlock a lockbox file with a recipient private key.
-    pub fn unlock_path_with_recipient(
+    pub(crate) fn unlock_path_with_recipient(
         path: &Path,
         recipient: &MlKemKeyPair,
     ) -> Result<UnlockedContentKey> {
@@ -294,7 +301,8 @@ impl Lockbox {
     }
 
     /// Unlock a key-directory backup with a recipient private key.
-    pub fn unlock_key_directory_backup_with_recipient(
+    #[cfg(feature = "vault-bridge")]
+    pub(crate) fn unlock_key_directory_backup_with_recipient(
         bytes: &[u8],
         recipient: &MlKemKeyPair,
     ) -> Result<UnlockedContentKey> {

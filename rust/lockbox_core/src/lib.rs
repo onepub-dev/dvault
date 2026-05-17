@@ -21,6 +21,8 @@ mod scan;
 mod security;
 mod storage;
 mod toc;
+#[cfg(feature = "vault-bridge")]
+pub mod vault_bridge;
 
 #[cfg(test)]
 mod api_tests;
@@ -51,7 +53,6 @@ pub use list_iter::ListIter;
 pub use list_options::ListOptions;
 pub use lockbox::{
     EnvValueRef, Lockbox, LockboxCreate, LockboxInspector, LockboxUnlock, RecoveryScanner,
-    UnlockedContentKey,
 };
 pub use lockbox_id::LockboxId;
 pub use lockbox_path::LockboxPath;

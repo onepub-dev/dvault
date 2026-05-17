@@ -1,7 +1,5 @@
-use lockbox_core::{
-    Error, Lockbox, LockboxCreate, LockboxUnlock, Result, SecretString, SecretVec,
-    UnlockedContentKey,
-};
+use lockbox_core::vault_bridge::{UnlockedContentKey, VaultUnlock};
+use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, Result, SecretString, SecretVec};
 use std::path::Path;
 
 use crate::{AgentClient, ContentKeyStore, VaultDirectory};
@@ -60,7 +58,7 @@ impl<S: ContentKeyStore> Vault<S> {
             }
             LockboxCreate::Password(password) => {
                 let lockbox = Lockbox::create_file(path, LockboxCreate::Password(password))?;
-                let unlocked = Lockbox::unlock_path_with_password(path, password)?;
+                let unlocked = VaultUnlock::path_with_password(path, password)?;
                 if let Err(err) = unlocked
                     .with_key(|key| self.store.put_content_key(unlocked.lockbox_id, key))
                     .and_then(|result| result)
@@ -128,7 +126,7 @@ fn unlock_path_or_backup_with_password(
     path: &Path,
     password: &SecretString,
 ) -> Result<UnlockedContentKey> {
-    match Lockbox::unlock_path_with_password(path, password) {
+    match VaultUnlock::path_with_password(path, password) {
         Ok(unlocked) => Ok(unlocked),
         Err(primary_err) => {
             let lockbox_id =
@@ -137,7 +135,7 @@ fn unlock_path_or_backup_with_password(
             let backup = VaultDirectory::open_default(&vault_password)
                 .and_then(|vault| vault.load_key_directory_backup(lockbox_id))
                 .map_err(|_| primary_err.clone())?;
-            Lockbox::unlock_key_directory_backup_with_password(&backup, password)
+            VaultUnlock::key_directory_backup_with_password(&backup, password)
                 .map_err(|_| primary_err)
         }
     }
@@ -147,7 +145,7 @@ fn unlock_path_or_backup_with_recipient(
     path: &Path,
     recipient: &lockbox_core::MlKemKeyPair,
 ) -> Result<UnlockedContentKey> {
-    match Lockbox::unlock_path_with_recipient(path, recipient) {
+    match VaultUnlock::path_with_recipient(path, recipient) {
         Ok(unlocked) => Ok(unlocked),
         Err(primary_err) => {
             let lockbox_id =
@@ -156,7 +154,7 @@ fn unlock_path_or_backup_with_recipient(
             let backup = VaultDirectory::open_default(&vault_password)
                 .and_then(|vault| vault.load_key_directory_backup(lockbox_id))
                 .map_err(|_| primary_err.clone())?;
-            Lockbox::unlock_key_directory_backup_with_recipient(&backup, recipient)
+            VaultUnlock::key_directory_backup_with_recipient(&backup, recipient)
                 .map_err(|_| primary_err)
         }
     }

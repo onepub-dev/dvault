@@ -42,7 +42,9 @@ mod recovery;
 mod symlinks;
 
 pub use env::EnvValueRef;
-pub use key_management::{LockboxCreate, LockboxUnlock, UnlockedContentKey};
+#[cfg(feature = "vault-bridge")]
+pub use key_management::UnlockedContentKey;
+pub use key_management::{LockboxCreate, LockboxUnlock};
 pub use recovery::RecoveryScanner;
 
 /// Read-only diagnostics for an opened lockbox.
