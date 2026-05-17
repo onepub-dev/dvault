@@ -1,5 +1,5 @@
 use lockbox_core::{
-    EnvName, ListOptions, Lockbox, LockboxCreate, LockboxPath, LockboxUnlock, SecretVec,
+    EnvName, ListOptions, Lockbox, LockboxPath, LockboxProtection, LockboxUnlock, SecretVec,
 };
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ fn create_fixture(path: &Path) {
 
     let mut lockbox = Lockbox::create_file(
         path,
-        LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+        LockboxProtection::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
     )
     .unwrap();
     lockbox

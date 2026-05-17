@@ -1,5 +1,5 @@
 use lockbox_core::{
-    EnvName, ExtractPolicy, ListOptions, Lockbox, LockboxCreate, LockboxPath, SecretVec,
+    EnvName, ExtractPolicy, ListOptions, Lockbox, LockboxPath, LockboxProtection, SecretVec,
 };
 use std::io::{Read, Result as IoResult};
 use std::path::PathBuf;
@@ -335,7 +335,7 @@ impl BenchLockbox {
             Ok(Self {
                 lockbox: Lockbox::create_file(
                     &path,
-                    LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+                    LockboxProtection::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
                 )?,
                 path: Some(path),
                 backend,
@@ -347,7 +347,7 @@ impl BenchLockbox {
             Ok(Self {
                 lockbox: Lockbox::create_file(
                     &path,
-                    LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+                    LockboxProtection::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
                 )?,
                 path: Some(path),
                 backend,

@@ -30,7 +30,7 @@ mod api_tests;
 mod compression_regression_tests;
 
 pub(crate) use file_format::{
-    commit_root, header, key_directory, page, page_buffer, page_inspection, page_scanner, payload,
+    commit_root, key_directory, page, page_buffer, page_inspection, page_scanner, payload,
 };
 pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_vec};
 pub(crate) use model::{
@@ -47,12 +47,12 @@ pub use env_name::EnvName;
 pub use env_sensitivity::EnvSensitivity;
 pub use error::{Error, Result};
 pub use extract_policy::ExtractPolicy;
-pub use key_slot::{LockboxKeySlot, LockboxKeySlotAlgorithm, LockboxKeySlotKind};
+pub use key_slot::{LockboxKeySlot, LockboxKeySlotAlgorithm, LockboxKeySlotProtection};
 pub use key_wrap::{RecipientKeyPair, RecipientPublicKey, RecipientWrappedKey};
 pub use list_iter::ListIter;
 pub use list_options::ListOptions;
 pub use lockbox::{
-    EnvValueRef, Lockbox, LockboxCreate, LockboxInspector, LockboxUnlock, RecoveryScanner,
+    EnvValueRef, Lockbox, LockboxInspector, LockboxProtection, LockboxUnlock, RecoveryScanner,
 };
 pub use lockbox_id::LockboxId;
 pub use lockbox_path::LockboxPath;

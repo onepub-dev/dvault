@@ -1,5 +1,7 @@
 use lockbox_core::vault_bridge::{UnlockedContentKey, VaultUnlock};
-use lockbox_core::{Error, Lockbox, LockboxCreate, LockboxUnlock, Result, SecretString, SecretVec};
+use lockbox_core::{
+    Error, Lockbox, LockboxProtection, LockboxUnlock, Result, SecretString, SecretVec,
+};
 use std::path::Path;
 
 use crate::{AgentClient, ContentKeyStore, VaultDirectory};
@@ -31,7 +33,7 @@ impl<S: ContentKeyStore> Vault<S> {
         path: impl AsRef<Path>,
         password: &SecretString,
     ) -> Result<Lockbox> {
-        self.create_lockbox(path, LockboxCreate::Password(password))
+        self.create_lockbox(path, LockboxProtection::Password(password))
     }
 
     pub fn unlock_lockbox_with_password(
@@ -45,19 +47,19 @@ impl<S: ContentKeyStore> Vault<S> {
     pub fn create_lockbox(
         &self,
         path: impl AsRef<Path>,
-        protection: LockboxCreate<'_>,
+        protection: LockboxProtection<'_>,
     ) -> Result<Lockbox> {
         let path = path.as_ref();
         match protection {
-            LockboxCreate::ContentKey(key) => {
+            LockboxProtection::ContentKey(key) => {
                 let store_key = key.try_clone()?;
-                let lockbox = Lockbox::create_file(path, LockboxCreate::ContentKey(key))?;
+                let lockbox = Lockbox::create_file(path, LockboxProtection::ContentKey(key))?;
                 store_key
                     .with_bytes(|key| self.store.put_content_key(lockbox.lockbox_id(), key))??;
                 Ok(lockbox)
             }
-            LockboxCreate::Password(password) => {
-                let lockbox = Lockbox::create_file(path, LockboxCreate::Password(password))?;
+            LockboxProtection::Password(password) => {
+                let lockbox = Lockbox::create_file(path, LockboxProtection::Password(password))?;
                 let unlocked = VaultUnlock::path_with_password(path, password)?;
                 if let Err(err) = unlocked
                     .with_key(|key| self.store.put_content_key(unlocked.lockbox_id, key))
@@ -69,15 +71,15 @@ impl<S: ContentKeyStore> Vault<S> {
                 }
                 Ok(lockbox)
             }
-            LockboxCreate::RecipientPublicKey(recipient) => {
-                Lockbox::create_file(path, LockboxCreate::RecipientPublicKey(recipient))
+            LockboxProtection::RecipientPublicKey(recipient) => {
+                Lockbox::create_file(path, LockboxProtection::RecipientPublicKey(recipient))
             }
         }
     }
 
     pub fn open_lockbox(&self, path: impl AsRef<Path>) -> Result<Lockbox> {
         let path = path.as_ref();
-        let lockbox_id = Lockbox::read_lockbox_id_path(path)?;
+        let lockbox_id = VaultUnlock::read_lockbox_id(path)?;
         let Some(key) = self.store.get_content_key(lockbox_id)? else {
             return Err(Error::InvalidKey);
         };
@@ -113,7 +115,7 @@ impl<S: ContentKeyStore> Vault<S> {
     }
 
     pub fn lock_lockbox(&self, path: impl AsRef<Path>) -> Result<()> {
-        let lockbox_id = Lockbox::read_lockbox_id_path(path.as_ref())?;
+        let lockbox_id = VaultUnlock::read_lockbox_id(path.as_ref())?;
         self.store.forget_content_key(lockbox_id)
     }
 
@@ -129,8 +131,7 @@ fn unlock_path_or_backup_with_password(
     match VaultUnlock::path_with_password(path, password) {
         Ok(unlocked) => Ok(unlocked),
         Err(primary_err) => {
-            let lockbox_id =
-                Lockbox::read_lockbox_id_path(path).map_err(|_| primary_err.clone())?;
+            let lockbox_id = VaultUnlock::read_lockbox_id(path).map_err(|_| primary_err.clone())?;
             let vault_password = vault_password_from_env().map_err(|_| primary_err.clone())?;
             let backup = VaultDirectory::open_default(&vault_password)
                 .and_then(|vault| vault.load_key_directory_backup(lockbox_id))
@@ -148,8 +149,7 @@ fn unlock_path_or_backup_with_recipient(
     match VaultUnlock::path_with_recipient(path, recipient) {
         Ok(unlocked) => Ok(unlocked),
         Err(primary_err) => {
-            let lockbox_id =
-                Lockbox::read_lockbox_id_path(path).map_err(|_| primary_err.clone())?;
+            let lockbox_id = VaultUnlock::read_lockbox_id(path).map_err(|_| primary_err.clone())?;
             let vault_password = vault_password_from_env().map_err(|_| primary_err.clone())?;
             let backup = VaultDirectory::open_default(&vault_password)
                 .and_then(|vault| vault.load_key_directory_backup(lockbox_id))

@@ -1,6 +1,8 @@
 use crate::secret_prompt::prompt_secret;
+use lockbox_core::vault_bridge::VaultUnlock;
 use lockbox_core::{
-    Error, Lockbox, LockboxCreate, LockboxUnlock, RecipientKeyPair, RecipientPublicKey, SecretVec,
+    Error, Lockbox, LockboxProtection, LockboxUnlock, RecipientKeyPair, RecipientPublicKey,
+    SecretVec,
 };
 use lockbox_vault::{
     import_public_key, local_vault, NoopStore, SecretString, Vault, VaultDirectory,
@@ -55,7 +57,7 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> Result<Lockbox, Err
         match access {
             Access::ContentKey(key) => {
                 let lockbox = Vault::new(NoopStore)
-                    .create_lockbox(path, LockboxCreate::ContentKey(key.try_clone()?))?;
+                    .create_lockbox(path, LockboxProtection::ContentKey(key.try_clone()?))?;
                 mirror_key_directory(&lockbox)?;
                 Ok(lockbox)
             }
@@ -123,10 +125,8 @@ pub(crate) fn mirror_key_directory(lockbox: &Lockbox) -> Result<(), Error> {
         return Ok(());
     }
     let vault = default_vault()?;
-    vault.store_key_directory_backup(
-        lockbox.lockbox_id(),
-        &lockbox.export_key_directory_backup()?,
-    )
+    let backup = VaultUnlock::export_key_directory_backup(lockbox)?;
+    vault.store_key_directory_backup(lockbox.lockbox_id(), &backup)
 }
 
 pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<RecipientKeyPair> {

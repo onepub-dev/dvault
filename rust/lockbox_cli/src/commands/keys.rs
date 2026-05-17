@@ -2,7 +2,7 @@ use super::context::{
     load_private_key_from_arg, load_recipient_from_arg, mirror_key_directory, open_existing,
     read_new_password, read_password, require_arg, Access, CliResult,
 };
-use lockbox_core::{Error, LockboxCreate, LockboxUnlock, RecipientKeyPair};
+use lockbox_core::{Error, LockboxProtection, LockboxUnlock, RecipientKeyPair};
 use lockbox_vault::{
     encode_hex, export_private_key, local_vault, KeyFormat, NoopStore, SecretVec, Vault,
 };
@@ -13,16 +13,20 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
         let recipient_name = require_arg(args, 1, "recipient")?;
         let lockbox_path = require_arg(args, 2, "lockbox")?;
         let recipient = load_recipient_from_arg(recipient_name)?;
-        let lb = Vault::new(NoopStore)
-            .create_lockbox(lockbox_path, LockboxCreate::RecipientPublicKey(recipient))?;
+        let lb = Vault::new(NoopStore).create_lockbox(
+            lockbox_path,
+            LockboxProtection::RecipientPublicKey(recipient),
+        )?;
         mirror_key_directory(&lb)?;
         return Ok(());
     }
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     match access {
         Access::ContentKey(key) => {
-            let lb = Vault::new(NoopStore)
-                .create_lockbox(lockbox_path, LockboxCreate::ContentKey(key.try_clone()?))?;
+            let lb = Vault::new(NoopStore).create_lockbox(
+                lockbox_path,
+                LockboxProtection::ContentKey(key.try_clone()?),
+            )?;
             mirror_key_directory(&lb)?;
         }
         Access::PromptPassword => {
@@ -91,7 +95,7 @@ pub(crate) fn list_keys(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let lb = open_existing(lockbox_path, access)?;
     for slot in lb.list_key_slots() {
-        println!("{}\t{:?}\t{}", slot.id, slot.kind, slot.algorithm);
+        println!("{}\t{:?}\t{}", slot.id, slot.protection, slot.algorithm);
     }
     Ok(())
 }

@@ -1,6 +1,7 @@
 use lockbox_core::{
-    EnvName, Error, ListOptions, Lockbox, LockboxCreate, LockboxEntryKind, LockboxId, LockboxPath,
-    LockboxUnlock, RecipientKeyPair, RecipientPublicKey, Result, SecretString, SecretVec,
+    EnvName, Error, ListOptions, Lockbox, LockboxEntryKind, LockboxId, LockboxPath,
+    LockboxProtection, LockboxUnlock, RecipientKeyPair, RecipientPublicKey, Result, SecretString,
+    SecretVec,
 };
 use std::cell::RefCell;
 use std::env;
@@ -38,7 +39,7 @@ impl VaultDirectory {
         let lockbox = if path.exists() {
             Lockbox::open_file(&path, LockboxUnlock::Password(password))?
         } else {
-            let lockbox = Lockbox::create_file(&path, LockboxCreate::Password(password))?;
+            let lockbox = Lockbox::create_file(&path, LockboxProtection::Password(password))?;
             set_private_file_permissions(&path)?;
             lockbox
         };

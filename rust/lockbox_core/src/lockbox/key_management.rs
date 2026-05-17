@@ -1,10 +1,12 @@
 use super::Lockbox;
 use crate::file_format::read_header;
+#[cfg(feature = "vault-bridge")]
+use crate::key_directory::encode_key_directory;
 #[cfg(test)]
 use crate::key_directory::read_key_directory;
 #[cfg(feature = "vault-bridge")]
 use crate::key_directory::read_key_directory_backup;
-use crate::key_directory::{best_key_directory, encode_key_directory, scan_key_directories};
+use crate::key_directory::{best_key_directory, scan_key_directories};
 use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot, LockboxKeySlot};
 use crate::key_wrap::{RecipientKeyPair, RecipientPublicKey};
 use crate::lockbox_id::LockboxId;
@@ -30,7 +32,7 @@ pub struct UnlockedContentKey {
 /// `ContentKey` is for callers that already manage the high-entropy secret
 /// used to derive page encryption keys.
 #[allow(clippy::large_enum_variant)]
-pub enum LockboxCreate<'a> {
+pub enum LockboxProtection<'a> {
     /// Protect the lockbox directly with a caller-provided content key.
     ///
     /// The bytes should be a high-entropy application secret. They are not a
@@ -54,7 +56,7 @@ pub enum LockboxUnlock<'a> {
     /// Unlock directly with a caller-provided content key.
     ///
     /// This must be the same high-entropy secret used with
-    /// `LockboxCreate::ContentKey`.
+    /// `LockboxProtection::ContentKey`.
     ContentKey(SecretVec),
     /// Unlock with a password key slot.
     Password(&'a SecretString),
@@ -99,15 +101,15 @@ impl Lockbox {
     /// Returns `Error::Io` if the host file cannot be created or written,
     /// `Error::SecurityLimitExceeded` if key material cannot be generated or
     /// wrapped, and storage/encoding errors from the initial commit.
-    pub fn create_file(path: &Path, protection: LockboxCreate<'_>) -> Result<Self> {
+    pub fn create_file(path: &Path, protection: LockboxProtection<'_>) -> Result<Self> {
         let mut lockbox = match protection {
-            LockboxCreate::ContentKey(key) => Self::create_path_with_secret_key_and_options(
+            LockboxProtection::ContentKey(key) => Self::create_path_with_secret_key_and_options(
                 path,
                 key,
                 LockboxId::new_random()?,
                 LockboxOptions::default(),
             )?,
-            LockboxCreate::Password(password) => {
+            LockboxProtection::Password(password) => {
                 let content_key = SecretVec::try_from_slice(&random_content_key()?)?;
                 let mut lockbox = Self::create_path_with_secret_key_and_options(
                     path,
@@ -118,7 +120,7 @@ impl Lockbox {
                 lockbox.add_password(password)?;
                 lockbox
             }
-            LockboxCreate::RecipientPublicKey(recipient) => {
+            LockboxProtection::RecipientPublicKey(recipient) => {
                 let content_key = SecretVec::try_from_slice(&random_content_key()?)?;
                 let mut lockbox = Self::create_path_with_secret_key_and_options(
                     path,
@@ -160,14 +162,11 @@ impl Lockbox {
         }
     }
 
-    /// Read the lockbox id from a lockbox file header.
-    ///
-    /// Returns `Error::Io` if the host file cannot be read and
-    /// `Error::CorruptHeader` if the header is not a valid lockbox header.
-    pub fn read_lockbox_id_path(path: &Path) -> Result<LockboxId> {
+    #[cfg(feature = "vault-bridge")]
+    pub(crate) fn read_lockbox_id(path: &Path) -> Result<LockboxId> {
         let storage = StorageBackend::file(path)?;
         let header = storage.read_at(0, crate::constants::HEADER_LEN)?;
-        crate::header::read_lockbox_id(&header)
+        crate::file_format::header::read_lockbox_id(&header)
     }
 
     #[cfg(test)]
@@ -343,8 +342,11 @@ impl Lockbox {
     /// Add a recipient public key to the lockbox and return its key id.
     ///
     /// Once a recipient's public key has been added to a lockbox, the matching
-    /// recipient keypair can be used to unlock the lockbox. Add recipients with
-    /// their public key, not their private keypair.
+    /// recipient's private keypair can be used to unlock the lockbox. Add
+    /// recipients with their public key, not their private keypair.
+    ///
+    /// To add a recipient to the box, you must be able to unlock the box with
+    /// your own key.
     ///
     /// Returns `Error::SecurityLimitExceeded` if secure key access or key
     /// wrapping fails.
@@ -399,7 +401,8 @@ impl Lockbox {
     /// Export a backup copy of the key directory.
     ///
     /// Returns storage/encoding errors if the key directory cannot be encoded.
-    pub fn export_key_directory_backup(&self) -> Result<Vec<u8>> {
+    #[cfg(feature = "vault-bridge")]
+    pub(crate) fn export_key_directory_backup(&self) -> Result<Vec<u8>> {
         encode_key_directory(
             &self.key_slots,
             self.lockbox_id,

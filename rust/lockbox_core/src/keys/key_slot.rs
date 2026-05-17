@@ -8,9 +8,10 @@ use crate::secret_vec::SecretString;
 use crate::{Error, Result};
 use std::fmt;
 
-/// Type of key slot that can unlock a lockbox content key.
+/// User-facing protection type represented by a key slot.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LockboxKeySlotKind {
+pub enum LockboxKeySlotProtection {
     /// Password-derived wrapping key.
     Password,
     /// Public-key recipient wrapping key.
@@ -18,6 +19,7 @@ pub enum LockboxKeySlotKind {
 }
 
 /// Algorithm used by a key slot to wrap the lockbox content key.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockboxKeySlotAlgorithm {
     /// Argon2id password derivation plus ChaCha20-Poly1305 key wrapping.
@@ -47,9 +49,13 @@ impl fmt::Display for LockboxKeySlotAlgorithm {
 pub struct LockboxKeySlot {
     /// Stable slot id used for deletion.
     pub id: u64,
-    /// Slot type.
-    pub kind: LockboxKeySlotKind,
+    /// User-facing protection type for this slot.
+    pub protection: LockboxKeySlotProtection,
     /// Algorithm used to wrap the lockbox content key.
+    ///
+    /// Multiple algorithms may exist for one protection type. For example, a
+    /// future release can add another recipient algorithm while still reporting
+    /// `LockboxKeySlotProtection::Recipient`.
     pub algorithm: LockboxKeySlotAlgorithm,
 }
 
@@ -77,12 +83,12 @@ impl KeySlot {
         match self {
             KeySlot::Password { id, .. } => LockboxKeySlot {
                 id: *id,
-                kind: LockboxKeySlotKind::Password,
+                protection: LockboxKeySlotProtection::Password,
                 algorithm: LockboxKeySlotAlgorithm::Argon2idChaCha20Poly1305,
             },
             KeySlot::MlKem1024 { id, .. } => LockboxKeySlot {
                 id: *id,
-                kind: LockboxKeySlotKind::Recipient,
+                protection: LockboxKeySlotProtection::Recipient,
                 algorithm: LockboxKeySlotAlgorithm::MlKem1024ChaCha20Poly1305,
             },
         }

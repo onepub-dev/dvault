@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use lockbox_core::{
-    EnvName, ExtractPolicy, ListOptions, Lockbox, LockboxCreate, LockboxPath, SecretString,
+    EnvName, ExtractPolicy, ListOptions, Lockbox, LockboxPath, LockboxProtection, SecretString,
     SecretVec,
 };
 use lockbox_secure::read_access as secure_read_access;
@@ -433,7 +433,7 @@ fn new_lockbox() -> Lockbox {
     let _ = fs::remove_file(&path);
     Lockbox::create_file(
         &path,
-        LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+        LockboxProtection::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
     )
     .unwrap()
 }

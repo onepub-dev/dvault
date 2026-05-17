@@ -1,8 +1,9 @@
 use crate::{
     CacheLimit, EnvName, EnvSensitivity, EnvValueRef, Error, ExtractPolicy, ListOptions, Lockbox,
-    LockboxCreate, LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotKind,
-    LockboxOptions, LockboxPath, LockboxUnlock, RecipientKeyPair, RecipientPublicKey,
-    RecoveryReportOptions, RecoveryScanner, Result, SecretString, WorkloadProfile,
+    LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotProtection,
+    LockboxOptions, LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair,
+    RecipientPublicKey, RecoveryReportOptions, RecoveryScanner, Result, SecretString,
+    WorkloadProfile,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -395,7 +396,7 @@ fn password_slots_unlock_the_random_content_key() {
     assert_eq!(reopened.lockbox_id(), lockbox_id);
     assert_eq!(reopened.get_file(&p("/docs/a.txt")).unwrap(), b"alpha");
     let slot = &reopened.list_key_slots()[0];
-    assert_eq!(slot.kind, LockboxKeySlotKind::Password);
+    assert_eq!(slot.protection, LockboxKeySlotProtection::Password);
     assert_eq!(
         slot.algorithm,
         LockboxKeySlotAlgorithm::Argon2idChaCha20Poly1305
@@ -522,7 +523,8 @@ fn path_backed_key_slot_removal_compacts_and_remains_file_backed() {
     let path = temp_path("path-backed-key-compaction");
     let primary_password = password("primary-password");
     let temporary_password = password("temporary-password");
-    let mut lb = Lockbox::create_file(&path, LockboxCreate::Password(&primary_password)).unwrap();
+    let mut lb =
+        Lockbox::create_file(&path, LockboxProtection::Password(&primary_password)).unwrap();
     let temporary_id = lb.add_password(&temporary_password).unwrap();
     lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
     lb.commit().unwrap();

@@ -1,6 +1,6 @@
 use lockbox_core::{
-    EnvName, EnvValueRef, ExtractPolicy, ListOptions, Lockbox, LockboxCreate, LockboxId,
-    LockboxKeySlotAlgorithm, LockboxKeySlotKind, LockboxPath, LockboxUnlock, RecipientKeyPair,
+    EnvName, EnvValueRef, ExtractPolicy, ListOptions, Lockbox, LockboxId, LockboxKeySlotAlgorithm,
+    LockboxKeySlotProtection, LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair,
     RecipientPublicKey, RecipientWrappedKey, RecoveryReportOptions, RecoveryScanner, SecretString,
     SecretVec, WorkloadProfile,
 };
@@ -26,7 +26,7 @@ fn public_api_files_listing_env_symlink_and_rename_flow() {
 
     let mut lb = Lockbox::create_file(
         &lockbox_path,
-        LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+        LockboxProtection::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
     )
     .unwrap();
     lb.add_file_with_permissions(&p("/app/config.json"), br#"{"mode":"test"}"#, 0o640, false)
@@ -157,18 +157,18 @@ fn public_api_password_and_recipient_key_management_flow() {
     let old_password = password("old-password");
     let new_password = password("new-password");
     let mut lb =
-        Lockbox::create_file(&lockbox_path, LockboxCreate::Password(&old_password)).unwrap();
+        Lockbox::create_file(&lockbox_path, LockboxProtection::Password(&old_password)).unwrap();
     let password_slot = lb.list_key_slots()[0].id;
     let recipient_slot = lb.add_recipient(&recipient.public_key()).unwrap();
     let slots = lb.list_key_slots();
     assert!(slots.iter().any(|slot| {
         slot.id == password_slot
-            && slot.kind == LockboxKeySlotKind::Password
+            && slot.protection == LockboxKeySlotProtection::Password
             && slot.algorithm == LockboxKeySlotAlgorithm::Argon2idChaCha20Poly1305
     }));
     assert!(slots.iter().any(|slot| {
         slot.id == recipient_slot
-            && slot.kind == LockboxKeySlotKind::Recipient
+            && slot.protection == LockboxKeySlotProtection::Recipient
             && slot.algorithm == LockboxKeySlotAlgorithm::MlKem1024ChaCha20Poly1305
     }));
 
@@ -201,7 +201,7 @@ fn public_api_password_and_recipient_key_management_flow() {
     let slots = reopened.list_key_slots();
     assert!(slots
         .iter()
-        .any(|slot| slot.id == new_slot && slot.kind == LockboxKeySlotKind::Password));
+        .any(|slot| slot.id == new_slot && slot.protection == LockboxKeySlotProtection::Password));
     assert!(slots.iter().all(|slot| slot.id != password_slot));
     assert!(Lockbox::open_file(&lockbox_path, LockboxUnlock::Password(&new_password)).is_ok());
 
@@ -217,7 +217,7 @@ fn public_api_recovery_scanner_reports_and_salvages_intact_files() {
 
     let mut lb = Lockbox::create_file(
         &lockbox_path,
-        LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+        LockboxProtection::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
     )
     .unwrap();
     lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
@@ -311,7 +311,7 @@ fn public_api_path_inspector_and_file_helpers_flow() {
 
     let mut lb = Lockbox::create_file(
         &lockbox_path,
-        LockboxCreate::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
+        LockboxProtection::ContentKey(SecretVec::try_from_slice(KEY).unwrap()),
     )
     .unwrap();
     assert_eq!(lb.workload_profile(), WorkloadProfile::Interactive);
@@ -390,7 +390,7 @@ fn public_api_password_recipient_open_file_flow() {
 
     let password = password("shared-password");
     let mut by_password =
-        Lockbox::create_file(&password_path, LockboxCreate::Password(&password)).unwrap();
+        Lockbox::create_file(&password_path, LockboxProtection::Password(&password)).unwrap();
     by_password
         .add_file(&p("/secret.txt"), b"password", false)
         .unwrap();
@@ -406,7 +406,7 @@ fn public_api_password_recipient_open_file_flow() {
     let recipient = RecipientKeyPair::generate().unwrap();
     let mut by_recipient = Lockbox::create_file(
         &recipient_path,
-        LockboxCreate::RecipientPublicKey(recipient.public_key()),
+        LockboxProtection::RecipientPublicKey(recipient.public_key()),
     )
     .unwrap();
     by_recipient

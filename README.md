@@ -156,25 +156,26 @@ log, or process environment controlled by other tooling.
 Use `lockbox_core` when you need the portable storage engine:
 
 ```rust
-use lockbox_core::{Lockbox, LockboxCreate, LockboxUnlock, SecretVec};
+use lockbox_core::{EnvName, Lockbox, LockboxPath, LockboxProtection, LockboxUnlock, SecretVec};
+use std::path::Path;
 
 let key = SecretVec::try_from_slice(b"correct horse battery staple")?;
 let mut lockbox = Lockbox::create_file(
-    "secrets.lbox",
-    LockboxCreate::ContentKey(key.try_clone()?),
+    Path::new("secrets.lbox"),
+    LockboxProtection::ContentKey(key.try_clone()?),
 )?;
 
-lockbox.add_file("/docs/a.txt", b"alpha")?;
-lockbox.add_file("/docs/b.txt", b"bravo")?;
-lockbox.set_env("DATABASE_URL", "postgres://localhost/app")?;
+lockbox.add_file(&LockboxPath::new("/docs/a.txt")?, b"alpha", false)?;
+lockbox.add_file(&LockboxPath::new("/docs/b.txt")?, b"bravo", false)?;
+lockbox.set_env(&EnvName::new("DATABASE_URL")?, "postgres://localhost/app")?;
 lockbox.commit()?;
 
 let reopened = Lockbox::open_file(
-    "secrets.lbox",
+    Path::new("secrets.lbox"),
     LockboxUnlock::ContentKey(key),
 )?;
-let file = reopened.get_file("/docs/a.txt")?;
-let env = reopened.get_env("DATABASE_URL")?;
+let file = reopened.get_file(&LockboxPath::new("/docs/a.txt")?)?;
+let env = reopened.get_env(&EnvName::new("DATABASE_URL")?)?;
 ```
 
 Use `lockbox_vault` for native applications that want the local vault and
