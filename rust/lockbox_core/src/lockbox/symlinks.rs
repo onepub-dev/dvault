@@ -4,8 +4,8 @@ use crate::file_format::{decode_symlink_payload, encode_symlink_payload};
 use crate::lockbox_path::LockboxPath;
 use crate::node_kind::NodeKind;
 use crate::page::{
-    encoded_object_len, uncompressed_objects_fit, PageObject, PageObjectKind,
-    DEFAULT_METADATA_PAGE_BYTES,
+    encoded_object_len, page_size_for_encoded_objects, uncompressed_objects_fit, PageObject,
+    PageObjectKind, DEFAULT_METADATA_PAGE_BYTES,
 };
 use crate::toc_entry::TocEntry;
 use crate::{Error, Result};
@@ -92,16 +92,17 @@ impl Lockbox {
     }
 
     fn write_symlink_recovery_page(&mut self, pending: Vec<PendingSymlinkObject>) -> Result<()> {
-        let page_offset = self.allocate_page_offset(DEFAULT_METADATA_PAGE_BYTES as u64)?;
         let objects = pending
             .iter()
             .map(|pending| pending.object.clone())
             .collect::<Vec<_>>();
+        let page_size = page_size_for_encoded_objects(&objects)?;
+        let page_offset = self.allocate_page_offset(page_size as u64)?;
         self.write_decoded_page_at(page_offset, self.sequence, objects)?;
         for pending in pending {
             if let Some(entry) = self.toc_entries.get_mut(pending.path.as_str()) {
                 entry.record_offset = page_offset;
-                entry.record_len = DEFAULT_METADATA_PAGE_BYTES as u64;
+                entry.record_len = page_size as u64;
                 entry.record_object_id = pending.object.id;
                 self.dirty_toc_paths.insert(entry.path.clone());
             }

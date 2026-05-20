@@ -1,3 +1,4 @@
+pub(crate) mod compression_frame_manifest;
 pub(crate) mod entry;
 pub(crate) mod env_name;
 pub(crate) mod env_sensitivity;

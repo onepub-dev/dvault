@@ -4,10 +4,12 @@ use crate::{Error, Result};
 pub(crate) const COMPRESSION_NONE: u8 = 0;
 pub(crate) const COMPRESSION_ZSTD: u8 = 1;
 const MAX_DECOMPRESSED_PAGE_BODY_BYTES: u64 = DEFAULT_MAX_PAGE_LOGICAL_BYTES as u64;
+pub(crate) const MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES: u64 = 4 * 1024 * 1024;
 const MIN_INCOMPRESSIBLE_CHECK_BYTES: usize = 64 * 1024;
 const INCOMPRESSIBLE_SAMPLE_BYTES: usize = 16 * 1024;
 const HIGH_ENTROPY_BITS_PER_BYTE: f64 = 7.80;
 const ZSTD_DEFAULT_LEVEL: i32 = 1;
+const ZSTD_MAGIC: &[u8; 4] = &[0x28, 0xb5, 0x2f, 0xfd];
 
 pub(crate) fn encode_page_body(payload: &[u8]) -> Vec<u8> {
     let (algorithm, stored) = if looks_incompressible(payload) {
@@ -66,23 +68,98 @@ fn zstd_decode(stored: &[u8]) -> Result<Vec<u8>> {
     oxiarc_zstd::decode_all(stored).map_err(|_| Error::CorruptRecord)
 }
 
-pub(crate) fn encode_file_frame(payload: &[u8]) -> (u8, Vec<u8>) {
-    (COMPRESSION_NONE, payload.to_vec())
+pub(crate) fn encode_compression_frame(payload: &[u8]) -> (u8, Vec<u8>) {
+    if looks_incompressible(payload) {
+        return (COMPRESSION_NONE, payload.to_vec());
+    }
+    let compressed = zstd_encode(payload);
+    if compressed.len() < payload.len() {
+        (COMPRESSION_ZSTD, compressed)
+    } else {
+        (COMPRESSION_NONE, payload.to_vec())
+    }
 }
 
-pub(crate) fn decode_file_frame(
+pub(crate) fn decode_compression_frame(
     algorithm: u8,
     stored: &[u8],
     expected_len: u64,
 ) -> Result<Vec<u8>> {
+    if expected_len > MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES {
+        return Err(Error::SecurityLimitExceeded(format!(
+            "compression frame expands to {expected_len} bytes"
+        )));
+    }
     let decoded = match algorithm {
         COMPRESSION_NONE => stored.to_vec(),
+        COMPRESSION_ZSTD => {
+            let declared_len = zstd_declared_content_size(stored)?.ok_or(Error::CorruptRecord)?;
+            if declared_len != expected_len {
+                return Err(Error::CorruptRecord);
+            }
+            zstd_decode(stored)?
+        }
         _ => return Err(Error::CorruptRecord),
     };
     if decoded.len() as u64 != expected_len {
         return Err(Error::CorruptRecord);
     }
     Ok(decoded)
+}
+
+fn zstd_declared_content_size(stored: &[u8]) -> Result<Option<u64>> {
+    if stored.len() < 5 || stored.get(0..4) != Some(ZSTD_MAGIC.as_slice()) {
+        return Err(Error::CorruptRecord);
+    }
+    let descriptor = stored[4];
+    let single_segment = (descriptor & 0x20) != 0;
+    let dict_id_flag = descriptor & 0x03;
+    let content_size_flag = (descriptor & 0xc0) >> 6;
+    let mut cursor = 5usize;
+    if !single_segment {
+        if cursor >= stored.len() {
+            return Err(Error::CorruptRecord);
+        }
+        cursor += 1;
+    }
+    let dict_id_bytes = match dict_id_flag {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3 => 4,
+        _ => unreachable!(),
+    };
+    if stored.len().saturating_sub(cursor) < dict_id_bytes {
+        return Err(Error::CorruptRecord);
+    }
+    cursor += dict_id_bytes;
+    if !single_segment && content_size_flag == 0 {
+        return Ok(None);
+    }
+    let size_bytes = match content_size_flag {
+        0 => 1,
+        1 => 2,
+        2 => 4,
+        3 => 8,
+        _ => unreachable!(),
+    };
+    if stored.len().saturating_sub(cursor) < size_bytes {
+        return Err(Error::CorruptRecord);
+    }
+    let size = match size_bytes {
+        1 => u64::from(stored[cursor]),
+        2 => {
+            u64::from(u16::from_le_bytes(
+                stored[cursor..cursor + 2].try_into().unwrap(),
+            )) + 256
+        }
+        4 => u64::from(u32::from_le_bytes(
+            stored[cursor..cursor + 4].try_into().unwrap(),
+        )),
+        8 => u64::from_le_bytes(stored[cursor..cursor + 8].try_into().unwrap()),
+        _ => unreachable!(),
+    };
+    Ok(Some(size))
 }
 
 pub(crate) fn looks_incompressible(payload: &[u8]) -> bool {
@@ -189,6 +266,29 @@ mod tests {
 
         assert_eq!(body[8], COMPRESSION_NONE);
         assert_eq!(decode_page_body(&body).unwrap(), payload);
+    }
+
+    #[test]
+    fn compression_frame_rejects_declared_bomb_before_allocating() {
+        assert!(matches!(
+            decode_compression_frame(
+                COMPRESSION_NONE,
+                &[],
+                MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES + 1
+            ),
+            Err(Error::SecurityLimitExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn zstd_compression_frame_rejects_content_size_mismatch_before_decode() {
+        let payload = vec![b'x'; 4096];
+        let (_, stored) = encode_compression_frame(&payload);
+
+        assert!(matches!(
+            decode_compression_frame(COMPRESSION_ZSTD, &stored, payload.len() as u64 + 1),
+            Err(Error::CorruptRecord)
+        ));
     }
 
     fn fill_randomish(buf: &mut [u8]) {

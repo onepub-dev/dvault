@@ -10,7 +10,7 @@ use crate::free_index::{
 };
 use crate::host_path::HostPath;
 use crate::key_directory::encode_key_directory;
-use crate::page::{page_size_for_objects, PageObject, PageObjectKind};
+use crate::page::{page_size_for_encoded_objects, PageObject, PageObjectKind};
 use crate::storage::{Storage, StorageBackend};
 use crate::{Error, LockboxOptions, Result};
 #[cfg(test)]
@@ -211,8 +211,9 @@ impl Lockbox {
             )?;
             let object =
                 PageObject::new(PageObjectKind::KeyDirectory, self.sequence, key_directory);
-            let page_offset = self
-                .allocate_page_offset(page_size_for_objects(std::slice::from_ref(&object)) as u64)?;
+            let page_offset = self.allocate_page_offset(page_size_for_encoded_objects(
+                std::slice::from_ref(&object),
+            )? as u64)?;
             self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
             *offset = page_offset;
         }
@@ -227,12 +228,29 @@ impl Lockbox {
 
     fn zero_key_directory_page(&mut self, offset: u64) -> Result<()> {
         if offset != 0 {
+            let page_len = self.page_len_at(offset)?;
             self.zero_page_and_free(crate::free_slot::FreeSlot {
                 offset,
-                len: crate::page::DEFAULT_METADATA_PAGE_BYTES as u64,
+                len: page_len,
             })?;
         }
         Ok(())
+    }
+
+    fn page_len_at(&self, offset: u64) -> Result<u64> {
+        let header = self.storage.read_at(offset, crate::page::PAGE_HEADER_LEN)?;
+        if header.get(0..8) != Some(crate::page::PAGE_MAGIC.as_slice()) {
+            return Err(Error::CorruptRecord);
+        }
+        let header_len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+        let stored_body_len = u32::from_le_bytes(header[44..48].try_into().unwrap()) as usize;
+        let stored_len = header_len
+            .checked_add(stored_body_len)
+            .ok_or(Error::CorruptRecord)?;
+        Ok(
+            crate::page::page_size_for_stored_len(stored_len, crate::page::DEFAULT_DATA_PAGE_BYTES)?
+                as u64,
+        )
     }
 
     fn commit_toc_btree(&mut self) -> Result<u64> {
@@ -474,8 +492,9 @@ impl Lockbox {
 
     fn append_toc_page(&mut self, kind: PageObjectKind, payload: Vec<u8>) -> Result<u64> {
         let object = PageObject::new(kind, self.sequence, payload);
-        let page_offset =
-            self.allocate_page_offset(page_size_for_objects(std::slice::from_ref(&object)) as u64)?;
+        let page_offset = self.allocate_page_offset(page_size_for_encoded_objects(
+            std::slice::from_ref(&object),
+        )? as u64)?;
         self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
         Ok(page_offset)
     }
@@ -556,8 +575,6 @@ struct CommitRollback {
     pending_small_files:
         std::collections::BTreeMap<crate::LockboxPath, crate::file_chunk::PendingFileChunk>,
     pending_small_file_bytes: usize,
-    bulk_small_file_packer:
-        crate::page_object_packer::PageObjectPacker<crate::file_chunk::PackedSmallFile>,
     pending_symlinks: std::collections::BTreeMap<crate::LockboxPath, crate::LockboxPath>,
     pending_redactions: std::collections::BTreeMap<u64, super::PendingRedaction>,
     redacted_free_slots: Vec<crate::free_slot::FreeSlot>,
@@ -589,7 +606,6 @@ impl CommitRollback {
             record_ref_counts: lockbox.record_ref_counts.clone(),
             pending_small_files: lockbox.pending_small_files.clone(),
             pending_small_file_bytes: lockbox.pending_small_file_bytes,
-            bulk_small_file_packer: lockbox.bulk_small_file_packer.clone(),
             pending_symlinks: lockbox.pending_symlinks.clone(),
             pending_redactions: lockbox.pending_redactions.clone(),
             redacted_free_slots: lockbox.redacted_free_slots.clone(),
@@ -620,7 +636,6 @@ impl CommitRollback {
         lockbox.record_ref_counts = self.record_ref_counts;
         lockbox.pending_small_files = self.pending_small_files;
         lockbox.pending_small_file_bytes = self.pending_small_file_bytes;
-        lockbox.bulk_small_file_packer = self.bulk_small_file_packer;
         lockbox.pending_symlinks = self.pending_symlinks;
         lockbox.pending_redactions = self.pending_redactions;
         lockbox.redacted_free_slots = self.redacted_free_slots;

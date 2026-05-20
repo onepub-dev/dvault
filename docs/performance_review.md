@@ -58,24 +58,32 @@ The cache policy is set above the page cache, not inferred inside it:
 - `Interactive`: default for normal API use, existing-vault updates, deletes,
   renames, env changes, and mixed read/write workloads. Dirty decoded pages stay
   resident until commit flushes them.
-- `BulkImport`: used by the CLI when an `add` creates a new lockbox. Newly
-  appended file-data pages are marked discard-after-flush and flushed promptly,
-  so a large initial import does not hold all written pages in memory.
-- `ReadMostly`: reserved for caller-selected read-heavy use. It currently uses
-  the default retention policy and exists so read cache tuning can be added
-  without changing public API shape.
-- `ExtractMany`: reserved for repeated extraction/range-read workloads. It
-  currently uses the default retention policy.
+- `BulkImport`: used by the CLI when an `add` creates a new lockbox or imports
+  a directory. Newly appended file-data pages are marked discard-after-flush and
+  flushed promptly, so a large import does not hold all written pages in memory.
+  Small files are grouped into larger compression frames than the interactive
+  profile so archive-style imports can exploit adjacent small-file redundancy.
+- `ReadMostly`: caller-selected read-heavy use. Decoded compression frames may
+  be retained in a bounded cache so repeated slices from the same frame avoid
+  reassembly, digest verification, and decompression.
+- `ExtractMany`: repeated extraction/range-read workloads. It uses the same
+  decoded compression-frame cache as `ReadMostly` for bulk restore/export
+  flows.
 
 Only file-data pages use discard-after-flush in `BulkImport`. TOC pages, env
 tree pages, symlink metadata, free-index pages, key directories, redactions, and
 commit roots remain on the normal commit path. That keeps COW and redaction
 semantics simple while addressing the real memory spike in one-shot imports.
-Small files are still packed into shared 8 MiB data pages, but the bulk path
-uses a long-lived `PageObjectPacker` and flushes before adding an object that
-would overflow the current packed page. This bounds source-byte/object staging
-to roughly one page instead of the whole import and avoids half-empty spill
-pages.
+Small files are still packed into shared data pages. The bulk path flushes
+staged source bytes at the page-sized streaming threshold, not at the
+compression-frame target, because each flush owns a page writer. Flushing too
+early creates dense compression frames but sparse physical pages.
+
+Metadata pages are sized from their encoded stored body. This matters for TOC
+leaves: their uncompressed object stream can be close to the 128 KiB metadata
+cap while the compressed encrypted body is only a few KiB. Sizing from the
+encoded length avoids a large physical padding floor without changing the
+logical TOC grouping rules.
 
 ## Required Next Changes
 

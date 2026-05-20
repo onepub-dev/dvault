@@ -84,6 +84,7 @@ fn small_files() -> Result<(), Box<dyn std::error::Error>> {
         listed,
         logical_bytes: total_bytes,
         lockbox_bytes: bench.lockbox_bytes()?,
+        page_waste: bench.page_waste()?,
         add,
         commit,
         list,
@@ -137,6 +138,7 @@ fn large_file() -> Result<(), Box<dyn std::error::Error>> {
         listed: 1,
         logical_bytes: bytes as u64,
         lockbox_bytes: bench.lockbox_bytes()?,
+        page_waste: bench.page_waste()?,
         add,
         commit,
         list: Duration::ZERO,
@@ -208,6 +210,7 @@ fn append_delete() -> Result<(), Box<dyn std::error::Error>> {
         listed,
         logical_bytes: ((initial_files + appended_files) * file_size) as u64,
         lockbox_bytes: bench.lockbox_bytes()?,
+        page_waste: bench.page_waste()?,
         add,
         commit,
         list,
@@ -265,6 +268,7 @@ fn metadata_operations() -> Result<(), Box<dyn std::error::Error>> {
         listed,
         logical_bytes: large_bytes as u64,
         lockbox_bytes: bench.lockbox_bytes()?,
+        page_waste: bench.page_waste()?,
         add: rename,
         commit,
         list: list_env,
@@ -358,6 +362,29 @@ impl BenchLockbox {
     fn lockbox_bytes(&self) -> Result<u64, Box<dyn std::error::Error>> {
         Ok(self.lockbox.inspector().storage_len()?)
     }
+
+    fn page_waste(&self) -> Result<PageWaste, Box<dyn std::error::Error>> {
+        let mut waste = PageWaste::default();
+        for page in self.lockbox.inspector().inspect_pages()? {
+            waste.pages += 1;
+            waste.page_bytes += u64::from(page.page_size);
+            waste.unused_bytes += u64::from(page.unused_bytes);
+            let is_file_data = page
+                .objects
+                .iter()
+                .any(|object| object.kind == "file-data" || object.kind == "packed-file-data");
+            if is_file_data {
+                waste.file_data_pages += 1;
+                waste.file_data_page_bytes += u64::from(page.page_size);
+                waste.file_data_unused_bytes += u64::from(page.unused_bytes);
+            } else {
+                waste.metadata_pages += 1;
+                waste.metadata_page_bytes += u64::from(page.page_size);
+                waste.metadata_unused_bytes += u64::from(page.unused_bytes);
+            }
+        }
+        Ok(waste)
+    }
 }
 
 fn perf_scratch_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -432,11 +459,25 @@ struct Report {
     listed: usize,
     logical_bytes: u64,
     lockbox_bytes: u64,
+    page_waste: PageWaste,
     add: Duration,
     commit: Duration,
     list: Duration,
     extract: Duration,
     read_range: Duration,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PageWaste {
+    pages: usize,
+    file_data_pages: usize,
+    metadata_pages: usize,
+    page_bytes: u64,
+    file_data_page_bytes: u64,
+    metadata_page_bytes: u64,
+    unused_bytes: u64,
+    file_data_unused_bytes: u64,
+    metadata_unused_bytes: u64,
 }
 
 fn print_report(report: Report) {
@@ -446,6 +487,36 @@ fn print_report(report: Report) {
     println!("listed: {}", report.listed);
     println!("logical bytes: {}", report.logical_bytes);
     println!("lockbox bytes: {}", report.lockbox_bytes);
+    println!("pages: {}", report.page_waste.pages);
+    println!("file data pages: {}", report.page_waste.file_data_pages);
+    println!("metadata pages: {}", report.page_waste.metadata_pages);
+    println!("unused page bytes: {}", report.page_waste.unused_bytes);
+    println!(
+        "unused page ratio: {:.3}",
+        ratio(report.page_waste.unused_bytes, report.page_waste.page_bytes)
+    );
+    println!(
+        "unused file data page bytes: {}",
+        report.page_waste.file_data_unused_bytes
+    );
+    println!(
+        "unused file data page ratio: {:.3}",
+        ratio(
+            report.page_waste.file_data_unused_bytes,
+            report.page_waste.file_data_page_bytes,
+        )
+    );
+    println!(
+        "unused metadata page bytes: {}",
+        report.page_waste.metadata_unused_bytes
+    );
+    println!(
+        "unused metadata page ratio: {:.3}",
+        ratio(
+            report.page_waste.metadata_unused_bytes,
+            report.page_waste.metadata_page_bytes,
+        )
+    );
     println!("add: {:?}", report.add);
     println!("commit: {:?}", report.commit);
     println!("list: {:?}", report.list);
@@ -456,5 +527,13 @@ fn print_report(report: Report) {
             "lockbox/logical ratio: {:.3}",
             report.lockbox_bytes as f64 / report.logical_bytes as f64
         );
+    }
+}
+
+fn ratio(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
     }
 }

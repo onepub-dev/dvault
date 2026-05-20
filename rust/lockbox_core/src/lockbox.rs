@@ -2,10 +2,11 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::commit_root::decode_commit_root;
+use crate::compression_frame_manifest::CompressionFrameSlice;
 use crate::constants::HEADER_LEN;
 use crate::env_btree::{EnvLeaf, EnvTreeNode, EnvValue};
 use crate::fast_hash::FastBuildHasher;
-use crate::file_chunk::{PackedSmallFile, PendingFileChunk};
+use crate::file_chunk::PendingFileChunk;
 use crate::file_format::{
     decode_toc_node, read_header, write_header, TocInternal, TocLeaf, TocNode, TocTreeNode,
 };
@@ -19,11 +20,10 @@ use crate::key_slot::KeySlot;
 use crate::lockbox_id::LockboxId;
 use crate::lockbox_path::LockboxPath;
 use crate::page::{
-    page_size_for_objects, DecodedPage, PageObject, PageObjectKind, DEFAULT_METADATA_PAGE_BYTES,
-    DEFAULT_PAGE_BYTES, PAGE_MAGIC,
+    page_size_for_encoded_objects, page_size_for_objects, physical_page_size_from_page_slice,
+    DecodedPage, PageObject, PageObjectKind, DEFAULT_METADATA_PAGE_BYTES, PAGE_MAGIC,
 };
 use crate::page_cache::{PageCache, PageReadKey, PageSecurity, PageWritePolicy};
-use crate::page_object_packer::PageObjectPacker;
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::secret_vec::SecretVec;
 use crate::storage::{Storage, StorageBackend};
@@ -56,6 +56,28 @@ pub struct LockboxInspector<'a> {
     lockbox: &'a Lockbox,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct CompressionFrameCache {
+    pub(crate) entries: BTreeMap<u64, CachedCompressionFrame>,
+    pub(crate) used_bytes: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct CachedCompressionFrame {
+    pub(crate) compression: u8,
+    pub(crate) compression_frame_len: u64,
+    pub(crate) compressed_len: u64,
+    pub(crate) compression_frame_digest: [u8; 32],
+    pub(crate) slices: Vec<CompressionFrameSlice>,
+    pub(crate) data: Vec<u8>,
+}
+
+impl Drop for CachedCompressionFrame {
+    fn drop(&mut self) {
+        self.data.zeroize();
+    }
+}
+
 /// Open encrypted lockbox container.
 ///
 /// A `Lockbox` owns the encrypted storage backend plus the decrypted metadata
@@ -86,6 +108,7 @@ pub struct Lockbox {
     env_leaves: Vec<EnvLeaf>,
     dirty_env: bool,
     page_manager: RefCell<PageCache>,
+    compression_frame_cache: RefCell<CompressionFrameCache>,
     workload_profile: WorkloadProfile,
     free_space: FreeSpace,
     record_ref_counts: std::collections::HashMap<u64, usize, FastBuildHasher>,
@@ -93,7 +116,6 @@ pub struct Lockbox {
     redacted_free_slots: Vec<FreeSlot>,
     pending_small_files: BTreeMap<LockboxPath, PendingFileChunk>,
     pending_small_file_bytes: usize,
-    bulk_small_file_packer: PageObjectPacker<PackedSmallFile>,
     pending_symlinks: BTreeMap<LockboxPath, LockboxPath>,
     needs_packing: bool,
 }
@@ -123,6 +145,7 @@ impl Lockbox {
             env_leaves: self.env_leaves.clone(),
             dirty_env: self.dirty_env,
             page_manager: RefCell::new(self.page_manager.borrow().clone()),
+            compression_frame_cache: RefCell::new(CompressionFrameCache::default()),
             workload_profile: self.workload_profile,
             free_space: self.free_space.clone(),
             record_ref_counts: self.record_ref_counts.clone(),
@@ -130,7 +153,6 @@ impl Lockbox {
             redacted_free_slots: self.redacted_free_slots.clone(),
             pending_small_files: self.pending_small_files.clone(),
             pending_small_file_bytes: self.pending_small_file_bytes,
-            bulk_small_file_packer: self.bulk_small_file_packer.clone(),
             pending_symlinks: self.pending_symlinks.clone(),
             needs_packing: self.needs_packing,
         })
@@ -196,6 +218,7 @@ impl Lockbox {
             env_leaves: Vec::new(),
             dirty_env: false,
             page_manager: RefCell::new(PageCache::new(options.cache_limit)),
+            compression_frame_cache: RefCell::new(CompressionFrameCache::default()),
             workload_profile: options.workload_profile,
             free_space: FreeSpace::default(),
             record_ref_counts: std::collections::HashMap::with_hasher(FastBuildHasher::default()),
@@ -203,7 +226,6 @@ impl Lockbox {
             redacted_free_slots: Vec::new(),
             pending_small_files: BTreeMap::new(),
             pending_small_file_bytes: 0,
-            bulk_small_file_packer: PageObjectPacker::new(DEFAULT_PAGE_BYTES),
             pending_symlinks: BTreeMap::new(),
             needs_packing: false,
         }
@@ -279,6 +301,7 @@ impl Lockbox {
             env_leaves: Vec::new(),
             dirty_env: false,
             page_manager: RefCell::new(PageCache::new(options.cache_limit)),
+            compression_frame_cache: RefCell::new(CompressionFrameCache::default()),
             workload_profile: options.workload_profile,
             free_space: FreeSpace::default(),
             record_ref_counts: std::collections::HashMap::with_hasher(FastBuildHasher::default()),
@@ -286,7 +309,6 @@ impl Lockbox {
             redacted_free_slots: Vec::new(),
             pending_small_files: BTreeMap::new(),
             pending_small_file_bytes: 0,
-            bulk_small_file_packer: PageObjectPacker::new(DEFAULT_PAGE_BYTES),
             pending_symlinks: BTreeMap::new(),
             needs_packing: false,
         };
@@ -511,7 +533,7 @@ impl Lockbox {
         objects: Vec<PageObject>,
         policy: PageWritePolicy,
     ) -> Result<()> {
-        let page_size = page_size_for_objects(&objects);
+        let page_size = page_size_for_encoded_objects(&objects)?;
         self.page_manager
             .borrow_mut()
             .stage_decoded_page_with_policy(
@@ -583,6 +605,7 @@ impl Lockbox {
     }
 
     pub(crate) fn free_entry_slots(&mut self, entry: TocEntry) -> Result<()> {
+        self.rewrite_shared_compression_frames_before_removal(&entry)?;
         for record in self.entry_record_refs(&entry)? {
             self.schedule_page_object_redaction(record.offset, record.len, record.object_id);
         }
@@ -754,11 +777,11 @@ impl Lockbox {
                 }
             } else {
                 for chunk in &mut entry.chunks {
-                    for fragment in &mut chunk.fragments {
-                        if fragment.page_offset == old_offset
-                            && kept_object_ids.contains(&fragment.object_id)
+                    for segment in &mut chunk.segments {
+                        if segment.page_offset == old_offset
+                            && kept_object_ids.contains(&segment.object_id)
                         {
-                            fragment.page_offset = new_offset;
+                            segment.page_offset = new_offset;
                             changed = true;
                         }
                     }
@@ -794,10 +817,10 @@ impl Lockbox {
             .chunks
             .iter()
             .flat_map(|chunk| {
-                chunk.fragments.iter().map(|fragment| RecordRef {
-                    offset: fragment.page_offset,
-                    len: fragment.page_len,
-                    object_id: fragment.object_id,
+                chunk.segments.iter().map(|segment| RecordRef {
+                    offset: segment.page_offset,
+                    len: segment.page_len,
+                    object_id: segment.object_id,
                 })
             })
             .collect())
@@ -894,9 +917,17 @@ impl Lockbox {
         while offset + crate::page::PAGE_HEADER_LEN as u64 <= len {
             let magic = self.storage.read_at(offset, 8)?;
             if magic.as_slice() == PAGE_MAGIC {
-                if offset + DEFAULT_METADATA_PAGE_BYTES as u64 > len {
+                let Ok(header) = self.storage.read_at(offset, crate::page::PAGE_HEADER_LEN) else {
+                    break;
+                };
+                let stored_body_len = u32::from_le_bytes(header[44..48].try_into().unwrap()) as u64;
+                let stored_len = crate::page::PAGE_HEADER_LEN as u64 + stored_body_len;
+                if offset + stored_len > len {
                     break;
                 }
+                let page_bytes = self.storage.read_at(offset, stored_len as usize)?;
+                let page_size = physical_page_size_from_page_slice(&page_bytes)
+                    .unwrap_or(DEFAULT_METADATA_PAGE_BYTES);
                 if let Ok(commit_root) = self.read_commit_root_at(offset) {
                     if best.as_ref().is_none_or(
                         |(_, existing): &(u64, crate::commit_root::CommitRoot)| {
@@ -905,7 +936,7 @@ impl Lockbox {
                     ) {
                         best = Some((offset, commit_root));
                     }
-                    offset += DEFAULT_METADATA_PAGE_BYTES as u64;
+                    offset += page_size as u64;
                     continue;
                 }
             }
@@ -1023,9 +1054,9 @@ fn entry_record_slots(entry: &TocEntry) -> Vec<(u64, u64)> {
         .iter()
         .flat_map(|chunk| {
             chunk
-                .fragments
+                .segments
                 .iter()
-                .map(|fragment| (fragment.page_offset, fragment.page_len))
+                .map(|segment| (segment.page_offset, segment.page_len))
         })
         .collect()
 }

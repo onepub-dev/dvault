@@ -3,15 +3,18 @@ use std::path::Path;
 
 use super::Lockbox;
 use crate::constants::DEFAULT_MAX_FILE_BYTES;
+use crate::crypto::strong_checksum;
 use crate::file_format::{
-    decode_index_record, decode_index_records, decode_symlink_payload, decode_toc_node, read_header,
+    decode_compression_frame_segment_payload_view, decode_index_records, decode_symlink_payload,
+    decode_toc_node, read_header,
 };
 use crate::lockbox_id::LockboxId;
 use crate::node_kind::NodeKind;
 use crate::page_scanner::PageScanner;
-use crate::record::RecordKind;
+use crate::record::{DecodedRecord, RecordKind};
 use crate::toc_entry::TocEntry;
 use crate::{Error, LockboxEntry, LockboxPath, RecoveryReport, Result};
+use zeroize::Zeroizing;
 
 /// Scans damaged lockbox storage and reports or salvages recoverable content.
 ///
@@ -54,6 +57,7 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
     let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);
     let scanner = PageScanner::new(&bytes, lockbox_id, &key);
     let scan = scanner.scan_records();
+    let scanned_segments = collect_scanned_file_segments(&scan.records);
     let mut toc_entries = BTreeMap::new();
     let mut corrupt_records = scan.corrupt_records;
     let mut toc_recovered = false;
@@ -72,7 +76,7 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
     }
 
     if toc_entries.is_empty() {
-        for record in scan.records {
+        for record in &scan.records {
             match decode_index_records(&record) {
                 Ok(entries) => {
                     for entry in entries {
@@ -83,6 +87,7 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
             }
         }
     }
+    attach_scanned_file_segments(&mut toc_entries, &scanned_segments);
 
     let mut intact_files = Vec::new();
     let mut intact_file_count = 0;
@@ -123,6 +128,7 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
     let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);
     let scanner = PageScanner::new(&bytes, lockbox_id, &key_bytes);
     let scan = scanner.scan_records();
+    let scanned_segments = collect_scanned_file_segments(&scan.records);
     let mut recovered = Lockbox::create_with_secret_key_and_options(
         crate::SecretVec::try_from_slice(&key_bytes)?,
         lockbox_id,
@@ -130,11 +136,14 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
     );
     let mut latest_paths = BTreeMap::new();
 
-    for record in scan.records {
-        if let Ok(Some(entry)) = decode_index_record(&record) {
-            apply_scanned_entry(&mut latest_paths, entry);
+    for record in &scan.records {
+        if let Ok(entries) = decode_index_records(&record) {
+            for entry in entries {
+                apply_scanned_entry(&mut latest_paths, entry);
+            }
         }
     }
+    attach_scanned_file_segments(&mut latest_paths, &scanned_segments);
 
     for entry in latest_paths.values() {
         if entry.deleted {
@@ -225,7 +234,14 @@ fn read_page_file_bytes(
     for chunk in chunks {
         if chunk.compressed_len > crate::constants::DEFAULT_MAX_PAGE_LOGICAL_BYTES as u64 {
             return Err(Error::SecurityLimitExceeded(
-                "compressed file frame exceeds safety limit".to_string(),
+                "compressed compression-frame exceeds safety limit".to_string(),
+            ));
+        }
+        if chunk.compression_frame_len
+            > crate::compression::MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES
+        {
+            return Err(Error::SecurityLimitExceeded(
+                "compression-frame exceeds safety limit".to_string(),
             ));
         }
         if chunk.file_offset != out.len() as u64 {
@@ -233,23 +249,34 @@ fn read_page_file_bytes(
         }
         let compressed_len =
             usize::try_from(chunk.compressed_len).map_err(|_| Error::CorruptRecord)?;
-        let mut stored = vec![0u8; compressed_len];
-        for fragment in &chunk.fragments {
-            let decoded = scanner.file_fragment_at(fragment.page_offset, fragment.object_id)?;
-            if decoded.path != chunk.stored_path
-                || (decoded.total_len != 0 && decoded.total_len != expected_len)
-                || decoded.file_offset != chunk.file_offset
-                || decoded.len != chunk.len
+        let mut stored = Zeroizing::new(vec![0u8; compressed_len]);
+        for segment in &chunk.segments {
+            let record = scanner.record_object_at(segment.page_offset, segment.object_id)?;
+            let decoded = decode_compression_frame_segment_payload_view(&record.payload)?;
+            let manifest_slice_missing = decoded.manifest.as_ref().is_some_and(|manifest| {
+                manifest
+                    .slice_for(
+                        &chunk.stored_path,
+                        chunk.file_offset,
+                        chunk.compression_frame_offset,
+                        chunk.len,
+                    )
+                    .filter(|slice| slice.total_len == 0 || slice.total_len == expected_len)
+                    .is_none()
+            });
+            if decoded.compression_frame_id != chunk.compression_frame_id
+                || decoded.compression_frame_len != chunk.compression_frame_len
                 || decoded.compressed_len != chunk.compressed_len
                 || decoded.compression != chunk.compression
-                || decoded.frame_id != chunk.frame_id
-                || decoded.fragment_offset != fragment.fragment_offset
-                || decoded.data.len() as u64 != fragment.fragment_len
+                || decoded.compression_frame_digest != chunk.compression_frame_digest
+                || manifest_slice_missing
+                || decoded.segment_offset != segment.segment_offset
+                || decoded.data.len() as u64 != segment.segment_len
             {
                 return Err(Error::CorruptRecord);
             }
             let start =
-                usize::try_from(fragment.fragment_offset).map_err(|_| Error::CorruptRecord)?;
+                usize::try_from(segment.segment_offset).map_err(|_| Error::CorruptRecord)?;
             let end = start
                 .checked_add(decoded.data.len())
                 .ok_or(Error::CorruptRecord)?;
@@ -258,8 +285,22 @@ fn read_page_file_bytes(
             }
             stored[start..end].copy_from_slice(&decoded.data);
         }
-        let decoded = crate::compression::decode_file_frame(chunk.compression, &stored, chunk.len)?;
-        out.extend_from_slice(&decoded);
+        if strong_checksum(stored.as_slice()) != chunk.compression_frame_digest {
+            return Err(Error::CorruptRecord);
+        }
+        let decoded = Zeroizing::new(crate::compression::decode_compression_frame(
+            chunk.compression,
+            stored.as_slice(),
+            chunk.compression_frame_len,
+        )?);
+        let start =
+            usize::try_from(chunk.compression_frame_offset).map_err(|_| Error::CorruptRecord)?;
+        let len = usize::try_from(chunk.len).map_err(|_| Error::CorruptRecord)?;
+        let end = start.checked_add(len).ok_or(Error::CorruptRecord)?;
+        if end > decoded.len() {
+            return Err(Error::CorruptRecord);
+        }
+        out.extend_from_slice(&decoded[start..end]);
         if out.len() as u64 > expected_len {
             return Err(Error::CorruptRecord);
         }
@@ -285,6 +326,82 @@ fn recover_symlink_target(scanner: &PageScanner<'_>, entry: &TocEntry) -> Result
     Ok(target)
 }
 
+#[derive(Debug, Clone)]
+struct ScannedCompressionFrameSegment {
+    compression_frame_id: u64,
+    compression_frame_len: u64,
+    compressed_len: u64,
+    compression: u8,
+    compression_frame_digest: [u8; 32],
+    segment: crate::file_chunk::CompressionFrameSegment,
+}
+
+fn collect_scanned_file_segments(
+    records: &[DecodedRecord],
+) -> BTreeMap<u64, Vec<ScannedCompressionFrameSegment>> {
+    let mut segments: BTreeMap<u64, Vec<ScannedCompressionFrameSegment>> = BTreeMap::new();
+    for record in records {
+        if record.header.kind != RecordKind::FilePage {
+            continue;
+        }
+        let Ok(decoded) = decode_compression_frame_segment_payload_view(&record.payload) else {
+            continue;
+        };
+        segments
+            .entry(decoded.compression_frame_id)
+            .or_default()
+            .push(ScannedCompressionFrameSegment {
+                compression_frame_id: decoded.compression_frame_id,
+                compression_frame_len: decoded.compression_frame_len,
+                compressed_len: decoded.compressed_len,
+                compression: decoded.compression,
+                compression_frame_digest: decoded.compression_frame_digest,
+                segment: crate::file_chunk::CompressionFrameSegment {
+                    page_offset: record.offset,
+                    page_len: record.header.total_len,
+                    object_id: record.object_id,
+                    segment_offset: decoded.segment_offset,
+                    segment_len: decoded.data.len() as u64,
+                },
+            });
+    }
+    segments
+}
+
+fn attach_scanned_file_segments(
+    toc_entries: &mut BTreeMap<LockboxPath, TocEntry>,
+    scanned_segments: &BTreeMap<u64, Vec<ScannedCompressionFrameSegment>>,
+) {
+    for entry in toc_entries.values_mut() {
+        if entry.deleted || entry.node_kind != NodeKind::File {
+            continue;
+        }
+        for chunk in &mut entry.chunks {
+            let Some(frame_segments) = scanned_segments.get(&chunk.compression_frame_id) else {
+                continue;
+            };
+            for scanned in frame_segments {
+                if scanned.compression_frame_id != chunk.compression_frame_id
+                    || scanned.compression_frame_len != chunk.compression_frame_len
+                    || scanned.compressed_len != chunk.compressed_len
+                    || scanned.compression != chunk.compression
+                    || scanned.compression_frame_digest != chunk.compression_frame_digest
+                {
+                    continue;
+                }
+                if !chunk.segments.iter().any(|existing| {
+                    existing.page_offset == scanned.segment.page_offset
+                        && existing.object_id == scanned.segment.object_id
+                        && existing.segment_offset == scanned.segment.segment_offset
+                }) {
+                    chunk.segments.push(scanned.segment.clone());
+                }
+            }
+            chunk.segments.sort_by_key(|segment| segment.segment_offset);
+        }
+    }
+}
+
 fn apply_scanned_entry(toc_entries: &mut BTreeMap<LockboxPath, TocEntry>, mut entry: TocEntry) {
     if entry.deleted || entry.node_kind != NodeKind::File {
         toc_entries.insert(entry.path.clone(), entry);
@@ -303,9 +420,32 @@ fn apply_scanned_entry(toc_entries: &mut BTreeMap<LockboxPath, TocEntry>, mut en
             existing.len = existing.len.max(entry.len);
             existing.record_offset = existing.record_offset.min(entry.record_offset);
             existing.record_len = existing.record_len.max(entry.record_len);
-            existing.chunks.extend(entry.chunks.clone());
+            for chunk in &entry.chunks {
+                merge_recovered_chunk(existing, chunk.clone());
+            }
         })
         .or_insert(entry);
+}
+
+fn merge_recovered_chunk(entry: &mut TocEntry, chunk: crate::file_chunk::FileChunk) {
+    if let Some(existing) = entry.chunks.iter_mut().find(|existing| {
+        existing.compression_frame_id == chunk.compression_frame_id
+            && existing.file_offset == chunk.file_offset
+            && existing.compression_frame_offset == chunk.compression_frame_offset
+            && existing.len == chunk.len
+    }) {
+        for segment in chunk.segments {
+            if !existing.segments.iter().any(|existing_segment| {
+                existing_segment.page_offset == segment.page_offset
+                    && existing_segment.object_id == segment.object_id
+                    && existing_segment.segment_offset == segment.segment_offset
+            }) {
+                existing.segments.push(segment);
+            }
+        }
+    } else {
+        entry.chunks.push(chunk);
+    }
 }
 
 fn recovered_len_from_chunks(entry: &TocEntry) -> Result<u64> {

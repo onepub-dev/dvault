@@ -1,10 +1,8 @@
 use crate::commit_root::{decode_commit_root, CommitRoot};
-use crate::file_chunk::DecodedFileChunk;
-use crate::file_format::decode_file_fragment_payload;
 use crate::lockbox_id::LockboxId;
 use crate::page::{
-    decode_page, page_decode_slice, page_size_for_objects, scan_page_records, PageObjectKind,
-    PAGE_MAGIC,
+    decode_page, page_decode_slice, physical_page_size_from_page_slice, scan_page_records,
+    PageObjectKind, PAGE_MAGIC,
 };
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::scan::Scan;
@@ -59,15 +57,6 @@ impl<'a> PageScanner<'a> {
         toc_object.with_payload(|payload| payload.to_vec())
     }
 
-    pub(crate) fn file_fragment_at(&self, offset: u64, object_id: u64) -> Result<DecodedFileChunk> {
-        let page = self.page_at(offset).ok_or(Error::Truncated)?;
-        let decoded = decode_page(page, self.lockbox_id, self.key)?;
-        let Some(object) = decoded.objects.iter().find(|object| object.id == object_id) else {
-            return Err(Error::CorruptRecord);
-        };
-        object.with_payload(decode_file_fragment_payload)?
-    }
-
     pub(crate) fn record_at(&self, offset: u64) -> Result<DecodedRecord> {
         let page = self.page_at(offset).ok_or(Error::Truncated)?;
         let decoded = decode_page(page, self.lockbox_id, self.key)?;
@@ -79,7 +68,7 @@ impl<'a> PageScanner<'a> {
             header: RecordHeader {
                 kind,
                 sequence: decoded.sequence,
-                total_len: page_size_for_objects(&decoded.objects) as u64,
+                total_len: physical_page_size_from_page_slice(page)? as u64,
             },
             offset,
             object_id: object.id,
@@ -98,7 +87,7 @@ impl<'a> PageScanner<'a> {
             header: RecordHeader {
                 kind,
                 sequence: decoded.sequence,
-                total_len: page_size_for_objects(&decoded.objects) as u64,
+                total_len: physical_page_size_from_page_slice(page)? as u64,
             },
             offset,
             object_id: object.id,

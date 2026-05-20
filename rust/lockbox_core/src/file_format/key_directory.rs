@@ -1,7 +1,10 @@
 use crate::key_slot::KeySlot;
 use crate::key_wrap::RecipientWrappedKey;
 use crate::lockbox_id::LockboxId;
-use crate::page::{decode_page, page_decode_slice, DecodedPage, PageObjectKind, PAGE_HEADER_LEN};
+use crate::page::{
+    decode_page, page_decode_slice, physical_page_size_from_page_slice, DecodedPage,
+    PageObjectKind, PAGE_HEADER_LEN,
+};
 use crate::page_cache::{PageCache, PageReadKey, PageSecurity};
 use crate::storage::Storage;
 use crate::{CacheLimit, Error, Result};
@@ -89,7 +92,9 @@ pub(crate) fn scan_key_directories(
     while offset + PAGE_HEADER_LEN <= bytes.len() {
         if bytes.get(offset..offset + 8) == Some(crate::page::PAGE_MAGIC.as_slice()) {
             if let Ok(decoded) = read_key_directory(bytes, offset as u64, expected_lockbox_id) {
-                let page_size = crate::page::DEFAULT_METADATA_PAGE_BYTES;
+                let page_size = page_decode_slice(bytes, offset)
+                    .and_then(|page| physical_page_size_from_page_slice(page).ok())
+                    .unwrap_or(crate::page::DEFAULT_METADATA_PAGE_BYTES);
                 found.push(decoded);
                 offset = offset.saturating_add(page_size);
                 continue;

@@ -11,8 +11,8 @@ use std::io::Cursor;
 const KEY: &[u8] = b"correct horse battery staple";
 const HEADER_LEN: usize = 96;
 const HEADER_CHECKSUM_START: usize = 64;
-const METADATA_PAGE_BYTES: usize = 128 * 1024;
 const PAGE_BYTES: usize = 8 * 1024 * 1024;
+const PAGE_QUANTUM_BYTES: usize = 1024;
 
 fn p(path: impl AsRef<str>) -> LockboxPath {
     LockboxPath::new(path).unwrap()
@@ -138,13 +138,27 @@ fn add_file_stages_small_disk_files_until_commit() {
 }
 
 #[test]
-fn small_env_pages_are_padded_to_minimum_size() {
+fn small_env_pages_use_variable_page_quantum() {
     let mut lb = Lockbox::create(KEY);
     let before = lb.to_bytes().len();
 
     lb.set_env(&env("TOKEN"), "x").unwrap();
 
     lb.commit().unwrap();
+    let env_page = lb
+        .inspector()
+        .inspect_pages()
+        .unwrap()
+        .into_iter()
+        .find(|page| {
+            page.objects
+                .iter()
+                .any(|object| object.kind == "env-leaf" && object.payload_len > 0)
+        })
+        .unwrap();
+    assert!(env_page.page_size as usize >= PAGE_QUANTUM_BYTES);
+    assert_eq!(env_page.page_size as usize % PAGE_QUANTUM_BYTES, 0);
+    assert!(env_page.unused_bytes < env_page.page_size);
     assert!(lb.inspector().inspect_pages().unwrap().iter().any(|page| {
         page.objects
             .iter()
@@ -152,7 +166,7 @@ fn small_env_pages_are_padded_to_minimum_size() {
     }));
     let after = lb.to_bytes().len();
 
-    assert!(after >= before + 2 * METADATA_PAGE_BYTES);
+    assert!(after > before);
     assert_eq!(lb.get_env(&env("TOKEN")).unwrap().as_deref(), Some("x"));
 }
 
@@ -614,7 +628,7 @@ fn compressible_large_file_uses_fewer_pages_than_incompressible_large_file() {
     let incompressible_len = incompressible_box.to_bytes().len();
     assert!(
         compressible_len + PAGE_BYTES <= incompressible_len,
-        "compressible vault should save at least one fixed page: {compressible_len} vs {incompressible_len}"
+        "compressible vault should save space: {compressible_len} vs {incompressible_len}"
     );
     assert_eq!(
         compressible_box.get_file(&p("/compressible.bin")).unwrap(),
@@ -709,19 +723,27 @@ fn page_offsets(bytes: &[u8]) -> Vec<usize> {
     while index + 8 <= bytes.len() {
         if bytes.get(index..index + 8) == Some(b"LBX2PAG\0".as_slice()) {
             offsets.push(index);
-            let next_metadata = index.saturating_add(METADATA_PAGE_BYTES);
-            if next_metadata + 8 <= bytes.len()
-                && bytes.get(next_metadata..next_metadata + 8) == Some(b"LBX2PAG\0".as_slice())
-            {
-                index = next_metadata;
+            if let Some(page_size) = page_size_at(bytes, index) {
+                index = index.saturating_add(page_size);
             } else {
-                index = index.saturating_add(PAGE_BYTES);
+                index += 1;
             }
         } else {
             index += 1;
         }
     }
     offsets
+}
+
+fn page_size_at(bytes: &[u8], offset: usize) -> Option<usize> {
+    if offset + 48 > bytes.len() {
+        return None;
+    }
+    let header_len = u32::from_le_bytes(bytes[offset + 12..offset + 16].try_into().ok()?) as usize;
+    let stored_body_len =
+        u32::from_le_bytes(bytes[offset + 44..offset + 48].try_into().ok()?) as usize;
+    let stored_len = header_len.checked_add(stored_body_len)?;
+    Some(stored_len.checked_add(PAGE_QUANTUM_BYTES - 1)? / PAGE_QUANTUM_BYTES * PAGE_QUANTUM_BYTES)
 }
 
 #[test]
@@ -747,7 +769,15 @@ fn toc_round_trips_when_toc_payload_exceeds_minimum_page_body() {
         .unwrap();
 
     assert_eq!(entries.len(), 220);
-    assert!(reopened.to_bytes().len() > PAGE_BYTES);
+    assert!(reopened
+        .inspector()
+        .inspect_pages()
+        .unwrap()
+        .iter()
+        .any(
+            |page| page.objects.iter().any(|object| object.kind == "toc-leaf")
+                && page.page_size as usize > PAGE_QUANTUM_BYTES
+        ));
     assert_eq!(
         reopened
             .get_file(&p(format!(
@@ -1030,7 +1060,7 @@ fn bulk_import_drains_small_file_staging_before_commit() {
 }
 
 #[test]
-fn bulk_small_file_packer_keeps_non_tail_pages_dense() {
+fn bulk_small_file_frames_keep_non_tail_pages_dense() {
     let data = vec![0xabu8; 25 * 1024];
     let mut lb = Lockbox::create_with_options(
         KEY,
@@ -1053,15 +1083,59 @@ fn bulk_small_file_packer_keeps_non_tail_pages_dense() {
         .into_iter()
         .filter(|page| page.objects.iter().any(|object| object.kind == "file-data"))
         .collect::<Vec<_>>();
-    assert_eq!(file_pages.len(), 3);
+    assert!(!file_pages.is_empty());
+    assert!(
+        file_pages.len() <= 3,
+        "bulk small-file frames spilled into too many file pages: {}",
+        file_pages.len()
+    );
     for page in file_pages.iter().take(file_pages.len() - 1) {
         assert!(
-            page.object_count >= 300,
-            "non-tail file page at offset {} only has {} objects",
+            page.object_count >= 2,
+            "non-tail file page at offset {} only has {} frame objects",
             page.offset,
             page.object_count
         );
     }
+}
+
+#[test]
+fn extract_many_caches_decoded_compression_frames() {
+    let mut lb = Lockbox::create_with_options(
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            workload_profile: WorkloadProfile::BulkImport,
+        },
+    );
+    lb.add_file(&p("/cache/a.txt"), b"alpha", false).unwrap();
+    lb.add_file(&p("/cache/b.txt"), b"bravo", false).unwrap();
+    lb.commit().unwrap();
+
+    let reopened = Lockbox::open_with_options(
+        lb.to_bytes(),
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            workload_profile: WorkloadProfile::ExtractMany,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        reopened.decoded_compression_frame_cache_entries_for_tests(),
+        0
+    );
+    assert_eq!(reopened.get_file(&p("/cache/a.txt")).unwrap(), b"alpha");
+    assert_eq!(
+        reopened.decoded_compression_frame_cache_entries_for_tests(),
+        1
+    );
+    assert_eq!(reopened.get_file(&p("/cache/b.txt")).unwrap(), b"bravo");
+    assert_eq!(
+        reopened.decoded_compression_frame_cache_entries_for_tests(),
+        1
+    );
 }
 
 #[test]
@@ -2089,6 +2163,30 @@ fn many_files_round_trip_and_recover_after_toc_loss() {
     damaged[header_toc_root_offset + 55] ^= 0x55;
     let report = RecoveryScanner::scan_bytes(damaged, KEY);
     assert_eq!(report.intact_file_count, 100);
+}
+
+#[test]
+fn large_file_recovery_reassembles_segments_after_toc_loss() {
+    let mut payload = vec![0u8; 9 * 1024 * 1024];
+    fill_randomish(&mut payload);
+    let mut lb = Lockbox::create(KEY);
+    lb.add_file_from_reader(&p("/large/recover.bin"), Cursor::new(&payload), false)
+        .unwrap();
+    lb.commit().unwrap();
+
+    let mut damaged = lb.to_bytes();
+    let header_toc_root_offset = u64::from_le_bytes(damaged[16..24].try_into().unwrap()) as usize;
+    damaged[header_toc_root_offset + 55] ^= 0x55;
+
+    let report = RecoveryScanner::scan_bytes(damaged.clone(), KEY);
+    assert_eq!(report.intact_file_count, 1);
+    assert_eq!(report.partial_files, 0);
+
+    let salvaged = RecoveryScanner::salvage_bytes(damaged, KEY).unwrap();
+    assert_eq!(
+        salvaged.get_file(&p("/large/recover.bin")).unwrap(),
+        payload
+    );
 }
 
 #[test]

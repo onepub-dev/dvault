@@ -94,12 +94,13 @@ unlock metadata and must not contain private file metadata.
 
 ## Pages
 
-Every page has a fixed physical size for its page class. Metadata pages are
-128 KiB. File-data pages are 8 MiB. Implementations may read and write whole
-pages for native storage, but page headers also expose the stored body length
-so readers can authenticate an intact page without requiring trailing padding.
-Browser/WASM clients may fetch page ranges over HTTP using the TOC offsets, but
-decryption still authenticates a whole page body.
+Every page has a variable physical size rounded to a 1 KiB quantum. Metadata
+pages may grow up to 128 KiB. File-data pages may grow up to 8 MiB. Writers
+choose the smallest physical size that fits the encoded page body so typical
+pages are at least 95% full unless the page is extremely small. Page headers
+expose the stored body length so readers can authenticate an intact page without
+requiring trailing padding. Browser/WASM clients may fetch page ranges over HTTP
+using the TOC offsets, but decryption still authenticates a whole page body.
 
 ```text
 offset  size  field
@@ -172,7 +173,9 @@ offset  size  field
 
 Compression is chosen by the core per page body:
 
-- default writes try zstd with the normal profile
+- metadata pages try zstd with the normal profile
+- file-data pages store the object stream uncompressed because file bytes are
+  already compressed at the compression-frame boundary
 - if compression is larger or not useful, the body is stored uncompressed
 - compaction may use a higher-ratio internal zstd profile
 - the chosen algorithm and profile are stored inside encrypted metadata
@@ -181,46 +184,72 @@ The public API should not expose many compression modes. Normal callers get the
 default policy. Maintenance commands such as compaction may choose the archival
 profile internally.
 
-## Framed File Extents
+## Compression-Framed File Extents
 
 The production file-data layout is page-packed framed extents, not one file
-object per physical page. A fixed 8 MiB file-data page is a container.
-Its encrypted body may contain:
+object per physical page. A file-data page is a variable-size container capped
+at 8 MiB. Its encrypted body may contain:
 
 - many complete small files
 - many chunks from one or more files
-- one fragment of a large file frame
-- a mix of complete chunks and fragments, as long as the page body fits
+- one segment of a large compression frame
+- a mix of complete chunks and segments, as long as the page body fits
 
-Large files are split into independent bounded frames rather than one whole-file
-record. Frame payloads are not compressed independently. File-data compression is
-owned by the page body layer, so the page object stream is the compression unit
-for file-data pages. TOC chunk entries identify the logical file offset, logical
-length, stored frame length, compression algorithm, frame id, and ordered
-physical page fragments needed to reassemble that frame. For the current format,
-the frame compression algorithm is `0` and the stored frame length equals the
-logical frame length. Each physical fragment reference contains the page offset,
-fixed page length, encrypted object id, stored frame offset, and fragment
-length.
+File bytes are grouped into independent bounded compression frames. A
+compression frame can hold one large-file extent or many small files. The core
+builds the uncompressed compression-frame payload by concatenating file slices,
+records a compact compression-frame manifest, compresses that compression frame
+once, and then splits the compressed bytes into one or more page segments.
+File-data pages do not apply a second page-body compression layer. Decoders
+reject compression frames whose declared decompressed length exceeds the format
+safety limit, currently 4 MiB, before attempting decompression.
 
-This gives browser and web-service clients fast random access at frame
-granularity:
+The compression-frame manifest is a schema-specific binary structure, not a generic
+compressed blob. It uses varints for numeric fields and stores:
+
+- compression-frame id
+- compression algorithm
+- uncompressed compression-frame length
+- compressed compression-frame length
+- SHA-256 compression-frame digest over the compressed bytes
+- one slice record per file extent: path, permissions, optional total file
+  length, file offset, compression-frame offset, and slice length
+
+Each file-data segment stores compact compression-frame identity metadata
+followed by the segment's compressed bytes. The first segment in a compression
+frame also stores the compression-frame manifest, encoded through the same
+compression selector used for file frames when that makes it smaller. The
+manifest therefore travels with the compression-frame data once and can double
+as the recovery index if the TOC is damaged, without repeating paths on every
+segment. TOC chunk entries keep the normal read index: logical file offset,
+slice length, compression-frame offset, compression-frame length, compression
+algorithm, compression-frame id, compression-frame digest, and ordered physical
+page segments needed to reassemble the compressed compression-frame. Each
+physical segment reference contains the page offset, physical page length,
+encrypted object id, stored compression-frame offset, and segment length.
+
+This gives browser and web-service clients fast random access at
+compression-frame granularity:
 
 1. fetch the TOC pages
 2. decrypt the TOC
-3. locate the frame or frames for the requested file/range
-4. request only the physical pages containing those frame fragments
-5. decrypt and page-decompress those pages, then copy the requested frame bytes
+3. locate the compression frame or compression frames for the requested file/range
+4. request only the physical pages containing those compression-frame segments
+5. decrypt those pages, reassemble the compressed compression-frame, verify its
+   digest, decompress the compression frame, then copy the requested slice bytes
 
-Recovery does not depend solely on the TOC. File fragment metadata is inside
-encrypted page bodies and includes path, permissions, optional final file length,
-logical frame offset, frame length, compression algorithm, frame id, stored
-frame length, stored fragment offset, and fragment length. Streaming writes
-may store `0` for the final file length because the final length is not known
-when early frames are written; the TOC is authoritative when available, and
-recovery can still infer a best-effort length from intact frames.
+Recovery does not depend solely on the TOC. File segment metadata is inside
+encrypted page bodies and includes compression-frame identity, segment offset,
+and segment length. Recovery scans intact encrypted pages, finds the
+manifest-bearing segment for each compression frame, attaches the remaining
+segments by frame id and digest, verifies complete segment coverage, checks the
+compression-frame digest, decompresses the compression frame, and then recovers
+the named slices from the manifest. Streaming writes may store `0` for the
+final file length because the final length is not known when early compression
+frames are written; the TOC is authoritative when available, and recovery can
+still infer a best-effort length from intact compression frames.
 
-Paths remain private because both TOC entries and fragment metadata are inside
+Paths remain private because both TOC entries and segment metadata are inside
 encrypted page bodies. They are exposed only after the caller has
 unlocked the content key.
 
@@ -229,12 +258,20 @@ unlocked the content key.
 Encryption policy, clear-text page checksums, dirty tracking, and physical page
 writes are owned by the page cache. Higher layers construct or consume decoded
 page objects and are otherwise oblivious to whether the page is encrypted or
-clear-text. On read, the cache loads fixed page bytes from storage, validates
+clear-text. On read, the cache loads the stored page body from storage, validates
 the page header checksum, authenticates encrypted pages or verifies clear-text
 page checksums, decodes the page body once, then caches the decoded page. On
-write, callers submit decoded page objects; the cache encodes, compresses,
-encrypts or checksums according to page policy, writes one fixed page to
-storage, and stores the decoded page in cache.
+write, callers submit decoded page objects; the cache encodes, optionally
+compresses metadata page bodies, sizes metadata pages from the encoded stored
+length rather than the uncompressed object-stream length, encrypts or checksums
+according to page policy, writes one physical page to storage, and stores the
+decoded page in cache.
+
+Decoded compression frames are cached above the page cache only for read-heavy
+workload profiles. That cache stores full plaintext compression-frame payloads
+so adjacent file slices from the same frame do not repeatedly reassemble and
+decompress the same bytes. It is bounded, is not part of the file format, and
+zeroizes cached plaintext when entries are evicted or the lockbox handle drops.
 
 Raw page encode/decode helpers are format primitives. Production read/write
 paths should route through the cache boundary. Direct raw decoding is reserved
@@ -279,7 +316,8 @@ offset  size  field
 
 Object ids are stable references used by TOC entries and indexes. A logical file
 may reference one or more file-data objects. Multiple small logical files may be
-packed into one file-pack object.
+packed into one compression frame, and that compression frame may be split across
+multiple file-data objects.
 
 Symlinks are current TOC entries that reference symlink metadata objects. The current
 TOC stores the symlink node kind plus the metadata page offset, object length,
@@ -294,7 +332,7 @@ Object kinds:
 2       TOC leaf node
 3       TOC internal node
 4       file data
-5       packed file data
+5       reserved legacy packed file data; not emitted by the current format
 6       symlink
 7       reserved legacy env set; not emitted by the current format
 8       reserved legacy env delete; not emitted by the current format
@@ -562,6 +600,11 @@ discard-after-flush pages so large initial imports do not keep every written
 data page resident. Metadata pages, redaction writes, TOC nodes, env tree nodes,
 free-index pages, key-directory pages, and commit roots remain on the normal
 commit-time path.
+
+The `BulkImport` profile also uses a larger small-file compression-frame target
+than `Interactive`, but it still flushes staged source bytes at the page-sized
+streaming threshold. The compression-frame target controls compression context;
+the flush threshold controls physical page density.
 
 Copy-on-write happens at commit time. This allows the same dirty page to absorb
 multiple logical mutations before the library allocates and writes replacement

@@ -1,27 +1,158 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
 use super::Lockbox;
-use crate::compression::{decode_file_frame, encode_file_frame};
+use crate::compression::{
+    decode_compression_frame, encode_compression_frame, MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES,
+};
+use crate::compression_frame_manifest::{CompressionFrameManifest, CompressionFrameSlice};
 use crate::constants::{
     DEFAULT_FILE_PERMISSIONS, DEFAULT_MAX_PAGE_BODY_BYTES, DEFAULT_MAX_PAGE_LOGICAL_BYTES,
 };
-use crate::file_chunk::{FileChunk, FileFragment, PackedSmallFile, PendingFileChunk};
-use crate::file_format::{decode_file_fragment_payload_view, encode_file_fragment_payload};
+use crate::crypto::strong_checksum;
+use crate::file_chunk::{CompressionFrameSegment, FileChunk, PendingFileChunk};
+use crate::file_format::{
+    decode_compression_frame_segment_payload_view, encode_compression_frame_segment_payload,
+};
 use crate::lockbox_path::LockboxPath;
 use crate::node_kind::NodeKind;
-use crate::page::{PageObject, PageObjectKind, DEFAULT_PAGE_BYTES};
-use crate::page_object_packer::{PackedPageObject, PageObjectPacker};
+use crate::page::{page_size_for_encoded_objects, PageObject, PageObjectKind, DEFAULT_PAGE_BYTES};
+use crate::page_object_packer::PageObjectPacker;
 use crate::security::validate_permissions;
 use crate::toc_entry::TocEntry;
-use crate::{Error, Result};
+use crate::{Error, Result, WorkloadProfile};
+use zeroize::{Zeroize, Zeroizing};
 
 const SMALL_FILE_PACKING_LIMIT: usize = 1024 * 1024;
-const FILE_FRAME_BYTES: usize = 1020 * 1024;
-const MAX_FRAGMENT_BYTES: usize = DEFAULT_MAX_PAGE_BODY_BYTES - 64 * 1024;
+const SMALL_FILE_COMPRESSION_FRAME_BYTES: usize = 4 * 1024;
+const BULK_IMPORT_SMALL_FILE_COMPRESSION_FRAME_BYTES: usize = 1024 * 1024;
+const FILE_COMPRESSION_FRAME_BYTES: usize = 1020 * 1024;
+const MAX_SEGMENT_BYTES: usize = DEFAULT_MAX_PAGE_BODY_BYTES - 64 * 1024;
+const DECODED_COMPRESSION_FRAME_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 impl Lockbox {
+    pub(crate) fn rewrite_shared_compression_frames_before_removal(
+        &mut self,
+        entry: &TocEntry,
+    ) -> Result<()> {
+        if entry.deleted || entry.node_kind != NodeKind::File || entry.chunks.is_empty() {
+            return Ok(());
+        }
+        let removed_compression_frames = entry
+            .chunks
+            .iter()
+            .map(|chunk| chunk.compression_frame_id)
+            .collect::<BTreeSet<_>>();
+        let mut shared = BTreeSet::new();
+        for other in self.toc_entries.values() {
+            if other.deleted || other.path == entry.path || other.node_kind != NodeKind::File {
+                continue;
+            }
+            if other
+                .chunks
+                .iter()
+                .any(|chunk| removed_compression_frames.contains(&chunk.compression_frame_id))
+            {
+                for chunk in &other.chunks {
+                    if removed_compression_frames.contains(&chunk.compression_frame_id) {
+                        shared.insert(chunk.compression_frame_id);
+                    }
+                }
+            }
+        }
+        if shared.is_empty() {
+            return Ok(());
+        }
+
+        let mut groups: BTreeMap<u64, Vec<SharedCompressionFrameSurvivor>> = BTreeMap::new();
+        for other in self.toc_entries.values() {
+            if other.deleted || other.path == entry.path || other.node_kind != NodeKind::File {
+                continue;
+            }
+            for chunk in &other.chunks {
+                if shared.contains(&chunk.compression_frame_id) {
+                    let data = self.read_file_chunk_compression_frame(other.len, chunk)?;
+                    groups.entry(chunk.compression_frame_id).or_default().push(
+                        SharedCompressionFrameSurvivor {
+                            path: other.path.clone(),
+                            permissions: other.permissions,
+                            total_len: other.len,
+                            file_offset: chunk.file_offset,
+                            data,
+                        },
+                    );
+                }
+            }
+        }
+
+        let mut replacement_indices: Vec<(LockboxPath, u64, usize)> = Vec::new();
+        let mut replacements: Vec<(LockboxPath, u64, FileChunk)> = Vec::new();
+        {
+            let mut writer = FilePageWriter::new(self);
+            let mut written = Vec::new();
+            for (old_compression_frame_id, survivors) in &groups {
+                let writes = survivors
+                    .iter()
+                    .map(|survivor| CompressionFrameWrite {
+                        path: &survivor.path,
+                        permissions: survivor.permissions,
+                        total_len: survivor.total_len,
+                        file_offset: survivor.file_offset,
+                        data: &survivor.data,
+                    })
+                    .collect::<Vec<_>>();
+                let indices = writer.write_compression_frame_bundle(&writes, &mut written)?;
+                for (survivor, chunk_index) in survivors.iter().zip(indices) {
+                    replacement_indices.push((
+                        survivor.path.clone(),
+                        *old_compression_frame_id,
+                        chunk_index,
+                    ));
+                }
+            }
+            writer.finish(&mut written)?;
+            replacements.extend(replacement_indices.into_iter().map(
+                |(path, old_compression_frame_id, chunk_index)| {
+                    (path, old_compression_frame_id, written[chunk_index].clone())
+                },
+            ));
+        }
+
+        let mut by_path: BTreeMap<LockboxPath, Vec<(u64, FileChunk)>> = BTreeMap::new();
+        for (path, old_compression_frame_id, chunk) in replacements {
+            by_path
+                .entry(path)
+                .or_default()
+                .push((old_compression_frame_id, chunk));
+        }
+        let mut dirty = Vec::new();
+        for (path, chunks) in by_path {
+            if let Some(live) = self.toc_entries.get_mut(path.as_str()) {
+                let replaced_compression_frames = chunks
+                    .iter()
+                    .map(|(old_compression_frame_id, _)| *old_compression_frame_id)
+                    .collect::<BTreeSet<_>>();
+                live.chunks.retain(|chunk| {
+                    !replaced_compression_frames.contains(&chunk.compression_frame_id)
+                });
+                live.chunks
+                    .extend(chunks.into_iter().map(|(_, chunk)| chunk));
+                live.chunks.sort_by_key(|chunk| chunk.file_offset);
+                if let Some(first) = live.chunks.first().and_then(|chunk| chunk.segments.first()) {
+                    live.record_offset = first.page_offset;
+                    live.record_len = first.page_len;
+                    live.record_object_id = first.object_id;
+                }
+                dirty.push(live.path.clone());
+            }
+        }
+        self.mark_toc_dirty_paths(dirty.iter());
+        self.rebuild_record_ref_counts();
+        Ok(())
+    }
+
     pub(crate) fn validate_replace_intent(&self, path: &LockboxPath, replace: bool) -> Result<()> {
         let exists = self.exists(path);
         match (replace, exists) {
@@ -155,13 +286,13 @@ impl Lockbox {
         let mut chunks = Vec::new();
         let mut file_offset = 0u64;
         let mut writer = FilePageWriter::new(self);
-        let mut buffer = vec![0; FILE_FRAME_BYTES];
+        let mut buffer = vec![0; FILE_COMPRESSION_FRAME_BYTES];
         loop {
             let read = read_next_chunk(&mut reader, &mut buffer)?;
             if read == 0 {
                 if file_offset == 0 {
-                    writer.write_frame(
-                        FileFrameWrite {
+                    writer.write_compression_frame(
+                        CompressionFrameWrite {
                             path: &path,
                             permissions,
                             total_len: 0,
@@ -173,8 +304,8 @@ impl Lockbox {
                 }
                 break;
             }
-            writer.write_frame(
-                FileFrameWrite {
+            writer.write_compression_frame(
+                CompressionFrameWrite {
                     path: &path,
                     permissions,
                     total_len: 0,
@@ -192,14 +323,18 @@ impl Lockbox {
             len: file_offset,
             record_offset: chunks
                 .first()
-                .and_then(|chunk| chunk.fragments.first())
-                .map(|fragment| fragment.page_offset)
+                .and_then(|chunk| chunk.segments.first())
+                .map(|segment| segment.page_offset)
                 .unwrap_or(0),
-            record_len: DEFAULT_PAGE_BYTES as u64,
+            record_len: chunks
+                .first()
+                .and_then(|chunk| chunk.segments.first())
+                .map(|segment| segment.page_len)
+                .unwrap_or(0),
             record_object_id: chunks
                 .first()
-                .and_then(|chunk| chunk.fragments.first())
-                .map(|fragment| fragment.object_id)
+                .and_then(|chunk| chunk.segments.first())
+                .map(|segment| segment.object_id)
                 .unwrap_or(0),
             deleted: false,
             node_kind: NodeKind::File,
@@ -256,7 +391,7 @@ impl Lockbox {
             if chunk.file_offset != written {
                 return Err(Error::CorruptRecord);
             }
-            let decoded_chunk = self.read_file_chunk_frame(entry.len, &chunk)?;
+            let decoded_chunk = self.read_file_chunk_compression_frame(entry.len, &chunk)?;
             writer
                 .write_all(&decoded_chunk)
                 .map_err(|err| Error::Io(err.to_string()))?;
@@ -352,7 +487,7 @@ impl Lockbox {
                 continue;
             }
 
-            let decoded_chunk = self.read_file_chunk_frame(entry.len, &chunk)?;
+            let decoded_chunk = self.read_file_chunk_compression_frame(entry.len, &chunk)?;
 
             let copy_start = offset.max(chunk_start) - chunk_start;
             let copy_end = wanted_end.min(chunk_end) - chunk_start;
@@ -361,36 +496,63 @@ impl Lockbox {
         Ok(out)
     }
 
-    pub(crate) fn read_file_chunk_frame(
+    pub(crate) fn read_file_chunk_compression_frame(
         &self,
         expected_total_len: u64,
         chunk: &FileChunk,
     ) -> Result<Vec<u8>> {
+        if let Some(cached) = self.read_cached_compression_frame_slice(expected_total_len, chunk)? {
+            return Ok(cached);
+        }
         if chunk.compressed_len > DEFAULT_MAX_PAGE_LOGICAL_BYTES as u64 {
             return Err(Error::SecurityLimitExceeded(
-                "compressed file frame exceeds safety limit".to_string(),
+                "compressed compression-frame exceeds safety limit".to_string(),
+            ));
+        }
+        if chunk.compression_frame_len > MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES {
+            return Err(Error::SecurityLimitExceeded(
+                "compression-frame exceeds safety limit".to_string(),
             ));
         }
         let compressed_len =
             usize::try_from(chunk.compressed_len).map_err(|_| Error::CorruptRecord)?;
-        let mut stored = vec![0u8; compressed_len];
-        for fragment in &chunk.fragments {
-            self.with_page_object(fragment.page_offset, fragment.object_id, |object| {
+        let mut stored = Zeroizing::new(vec![0u8; compressed_len]);
+        let mut cache_slices = None;
+        for segment in &chunk.segments {
+            self.with_page_object(segment.page_offset, segment.object_id, |object| {
                 object.with_payload(|payload| {
-                    let decoded = decode_file_fragment_payload_view(payload)?;
-                    if decoded.path != chunk.stored_path
-                        || (decoded.total_len != 0 && decoded.total_len != expected_total_len)
-                        || decoded.frame_id != chunk.frame_id
-                        || decoded.file_offset != chunk.file_offset
-                        || decoded.len != chunk.len
+                    let decoded = decode_compression_frame_segment_payload_view(payload)?;
+                    if let Some(manifest) = decoded.manifest.as_ref() {
+                        if cache_slices.is_none() {
+                            cache_slices = Some(manifest.slices.clone());
+                        }
+                    }
+                    let manifest_slice_missing =
+                        decoded.manifest.as_ref().is_some_and(|manifest| {
+                            manifest
+                                .slice_for(
+                                    &chunk.stored_path,
+                                    chunk.file_offset,
+                                    chunk.compression_frame_offset,
+                                    chunk.len,
+                                )
+                                .filter(|slice| {
+                                    slice.total_len == 0 || slice.total_len == expected_total_len
+                                })
+                                .is_none()
+                        });
+                    if decoded.compression_frame_id != chunk.compression_frame_id
+                        || decoded.compression_frame_len != chunk.compression_frame_len
                         || decoded.compressed_len != chunk.compressed_len
                         || decoded.compression != chunk.compression
-                        || decoded.fragment_offset != fragment.fragment_offset
-                        || decoded.data.len() as u64 != fragment.fragment_len
+                        || decoded.compression_frame_digest != chunk.compression_frame_digest
+                        || manifest_slice_missing
+                        || decoded.segment_offset != segment.segment_offset
+                        || decoded.data.len() as u64 != segment.segment_len
                     {
                         return Err(Error::CorruptRecord);
                     }
-                    let start = usize::try_from(fragment.fragment_offset)
+                    let start = usize::try_from(segment.segment_offset)
                         .map_err(|_| Error::CorruptRecord)?;
                     let end = start
                         .checked_add(decoded.data.len())
@@ -403,7 +565,28 @@ impl Lockbox {
                 })?
             })?;
         }
-        decode_file_frame(chunk.compression, &stored, chunk.len)
+        if strong_checksum(stored.as_slice()) != chunk.compression_frame_digest {
+            return Err(Error::CorruptRecord);
+        }
+        let decoded = Zeroizing::new(decode_compression_frame(
+            chunk.compression,
+            stored.as_slice(),
+            chunk.compression_frame_len,
+        )?);
+        let start =
+            usize::try_from(chunk.compression_frame_offset).map_err(|_| Error::CorruptRecord)?;
+        let len = usize::try_from(chunk.len).map_err(|_| Error::CorruptRecord)?;
+        let end = start.checked_add(len).ok_or(Error::CorruptRecord)?;
+        if end > decoded.len() {
+            return Err(Error::CorruptRecord);
+        }
+        let out = decoded[start..end].to_vec();
+        self.cache_decoded_compression_frame(
+            chunk,
+            cache_slices.unwrap_or_default(),
+            decoded.as_slice(),
+        );
+        Ok(out)
     }
 
     fn stage_small_file(
@@ -416,9 +599,6 @@ impl Lockbox {
         let path = path.file_path()?;
         let permissions = validate_permissions(permissions)?;
         self.validate_replace_intent(&path, replace)?;
-        if self.should_discard_file_pages_after_flush() {
-            return self.stage_bulk_small_file(path, data, permissions, replace);
-        }
         if let Some(old) = self.toc_entries.get(path.as_str()).cloned() {
             self.free_entry_slots(old)?;
         }
@@ -429,7 +609,6 @@ impl Lockbox {
                 path: path.clone(),
                 permissions,
                 total_len: data.len() as u64,
-                file_offset: 0,
                 data: Arc::from(data),
             },
         );
@@ -448,83 +627,11 @@ impl Lockbox {
             },
         );
         self.mark_toc_dirty(&path);
-        Ok(())
-    }
-
-    fn stage_bulk_small_file(
-        &mut self,
-        path: LockboxPath,
-        data: &[u8],
-        permissions: u32,
-        replace: bool,
-    ) -> Result<()> {
-        self.validate_replace_intent(&path, replace)?;
-        if self.toc_entries.contains_key(path.as_str()) {
-            self.flush_bulk_small_file_packer()?;
-            if let Some(old) = self.toc_entries.get(path.as_str()).cloned() {
-                self.free_entry_slots(old)?;
-            }
+        if self.should_discard_file_pages_after_flush()
+            && self.pending_small_file_bytes >= MAX_SEGMENT_BYTES
+        {
+            self.flush_pending_small_files()?;
         }
-
-        let pending = PendingFileChunk {
-            path: path.clone(),
-            permissions,
-            total_len: data.len() as u64,
-            file_offset: 0,
-            data: Arc::from(data),
-        };
-        let (compression, stored) = encode_file_frame(data);
-        self.sequence += 1;
-        let frame_id = self.sequence;
-        self.sequence += 1;
-        let object_id = self.sequence;
-        let object = PageObject::new(
-            PageObjectKind::FileData,
-            object_id,
-            encode_file_fragment_payload(
-                &PendingFileChunk {
-                    path: path.clone(),
-                    permissions,
-                    total_len: data.len() as u64,
-                    file_offset: 0,
-                    data: Arc::from(stored.as_slice()),
-                },
-                compression,
-                frame_id,
-                data.len() as u64,
-                stored.len() as u64,
-                0,
-            ),
-        );
-        let context = PackedSmallFile {
-            path: path.clone(),
-            permissions,
-            total_len: data.len() as u64,
-            len: data.len() as u64,
-            compressed_len: stored.len() as u64,
-            compression,
-            frame_id,
-            object_id,
-            fragment_len: stored.len() as u64,
-        };
-        self.push_bulk_small_file_object(object, context)?;
-
-        self.insert_pending_small_file(path.clone(), pending);
-        self.toc_entries.insert(
-            path.clone(),
-            TocEntry {
-                path: path.clone(),
-                len: data.len() as u64,
-                record_offset: 0,
-                record_len: 0,
-                record_object_id: 0,
-                deleted: false,
-                node_kind: NodeKind::File,
-                permissions,
-                chunks: Vec::new(),
-            },
-        );
-        self.mark_toc_dirty(&path);
         Ok(())
     }
 
@@ -555,47 +662,74 @@ impl Lockbox {
     }
 
     pub(crate) fn flush_pending_small_files(&mut self) -> Result<()> {
-        if self.should_discard_file_pages_after_flush() {
-            return self.flush_bulk_small_file_packer();
-        }
         if self.pending_small_files.is_empty() {
             return Ok(());
         }
 
         let pending = std::mem::take(&mut self.pending_small_files);
         self.pending_small_file_bytes = 0;
+        let compression_frame_target = self.small_file_compression_frame_target();
         let mut writer = FilePageWriter::new(self);
         let mut all_chunks = Vec::new();
         let mut updates = Vec::new();
         let mut dirty_paths = Vec::new();
-        for chunk in pending.into_values() {
-            let start = all_chunks.len();
-            writer.write_frame(
-                FileFrameWrite {
-                    path: &chunk.path,
-                    permissions: chunk.permissions,
-                    total_len: chunk.total_len,
-                    file_offset: 0,
-                    data: &chunk.data,
-                },
-                &mut all_chunks,
-            )?;
-            updates.push((chunk.path, chunk.permissions, chunk.total_len, start));
+        let pending = pending.into_values().collect::<Vec<_>>();
+        let mut batch = Vec::new();
+        let mut batch_bytes = 0usize;
+        for chunk in &pending {
+            if !batch.is_empty()
+                && batch_bytes.saturating_add(chunk.data.len()) > compression_frame_target
+            {
+                let indices = writer.write_compression_frame_bundle(&batch, &mut all_chunks)?;
+                for (frame, chunk_index) in batch.iter().zip(indices) {
+                    updates.push((
+                        (*frame.path).clone(),
+                        frame.permissions,
+                        frame.total_len,
+                        chunk_index,
+                    ));
+                }
+                batch.clear();
+                batch_bytes = 0;
+            }
+            batch_bytes = batch_bytes.saturating_add(chunk.data.len());
+            batch.push(CompressionFrameWrite {
+                path: &chunk.path,
+                permissions: chunk.permissions,
+                total_len: chunk.total_len,
+                file_offset: 0,
+                data: &chunk.data,
+            });
+        }
+        if !batch.is_empty() {
+            let indices = writer.write_compression_frame_bundle(&batch, &mut all_chunks)?;
+            for (frame, chunk_index) in batch.iter().zip(indices) {
+                updates.push((
+                    (*frame.path).clone(),
+                    frame.permissions,
+                    frame.total_len,
+                    chunk_index,
+                ));
+            }
         }
         writer.finish(&mut all_chunks)?;
-        for (path, permissions, total_len, start) in updates {
-            let chunks = all_chunks[start..start + 1].to_vec();
+        for (path, permissions, total_len, chunk_index) in updates {
+            let chunks = vec![all_chunks[chunk_index].clone()];
             if let Some(entry) = writer.lockbox.toc_entries.get_mut(path.as_str()) {
                 entry.record_offset = chunks
                     .first()
-                    .and_then(|chunk| chunk.fragments.first())
-                    .map(|fragment| fragment.page_offset)
+                    .and_then(|chunk| chunk.segments.first())
+                    .map(|segment| segment.page_offset)
                     .unwrap_or(0);
-                entry.record_len = DEFAULT_PAGE_BYTES as u64;
+                entry.record_len = chunks
+                    .first()
+                    .and_then(|chunk| chunk.segments.first())
+                    .map(|segment| segment.page_len)
+                    .unwrap_or(0);
                 entry.record_object_id = chunks
                     .first()
-                    .and_then(|chunk| chunk.fragments.first())
-                    .map(|fragment| fragment.object_id)
+                    .and_then(|chunk| chunk.segments.first())
+                    .map(|segment| segment.object_id)
                     .unwrap_or(0);
                 entry.len = total_len;
                 entry.permissions = permissions;
@@ -610,84 +744,7 @@ impl Lockbox {
     }
 
     pub(crate) fn flush_bulk_small_file_packer(&mut self) -> Result<()> {
-        let mut packer = std::mem::take(&mut self.bulk_small_file_packer);
-        let result = if packer.is_empty() {
-            Ok(())
-        } else {
-            self.write_bulk_small_file_page(packer.pending())?;
-            packer.clear();
-            Ok(())
-        };
-        self.bulk_small_file_packer = packer;
-        result
-    }
-
-    fn push_bulk_small_file_object(
-        &mut self,
-        object: PageObject,
-        context: PackedSmallFile,
-    ) -> Result<()> {
-        let mut packer = std::mem::take(&mut self.bulk_small_file_packer);
-        let result = (|| {
-            let encoded_len = packer.encoded_object_len(&object)?;
-            if !packer.is_empty() && !packer.fits_encoded_len(encoded_len)? {
-                self.write_bulk_small_file_page(packer.pending())?;
-                packer.clear();
-            }
-            packer.push_encoded(object, context, encoded_len)
-        })();
-        self.bulk_small_file_packer = packer;
-        result
-    }
-
-    fn write_bulk_small_file_page(
-        &mut self,
-        pending: &[PackedPageObject<PackedSmallFile>],
-    ) -> Result<()> {
-        if pending.is_empty() {
-            return Ok(());
-        }
-        let page_offset = self.allocate_page_offset(DEFAULT_PAGE_BYTES as u64)?;
-        let objects = pending
-            .iter()
-            .map(|pending| pending.object.clone())
-            .collect::<Vec<_>>();
-        self.write_insert_only_page_at(page_offset, self.sequence, objects)?;
-        self.flush_discardable_pages()?;
-
-        let mut dirty_paths = Vec::new();
-        for pending in pending {
-            let packed = &pending.context;
-            let chunks = vec![FileChunk {
-                stored_path: packed.path.clone(),
-                file_offset: 0,
-                len: packed.len,
-                compressed_len: packed.compressed_len,
-                compression: packed.compression,
-                frame_id: packed.frame_id,
-                fragments: vec![FileFragment {
-                    page_offset,
-                    page_len: DEFAULT_PAGE_BYTES as u64,
-                    object_id: packed.object_id,
-                    fragment_offset: 0,
-                    fragment_len: packed.fragment_len,
-                }],
-            }];
-            self.remove_pending_small_file(&packed.path);
-            if let Some(entry) = self.toc_entries.get_mut(packed.path.as_str()) {
-                entry.record_offset = page_offset;
-                entry.record_len = DEFAULT_PAGE_BYTES as u64;
-                entry.record_object_id = packed.object_id;
-                entry.len = packed.total_len;
-                entry.permissions = packed.permissions;
-                entry.chunks = chunks;
-                dirty_paths.push(entry.path.clone());
-                let entry = entry.clone();
-                self.add_entry_record_refs(&entry);
-            }
-        }
-        self.mark_toc_dirty_paths(dirty_paths.iter());
-        Ok(())
+        self.flush_pending_small_files()
     }
 
     pub(crate) fn pack_small_file_pages(&mut self) -> Result<()> {
@@ -708,39 +765,68 @@ impl Lockbox {
             self.free_entry_slots(old.clone())?;
         }
 
+        let compression_frame_target = self.small_file_compression_frame_target();
         let mut writer = FilePageWriter::new(self);
         let mut all_chunks = Vec::new();
         let mut updates = Vec::new();
         let mut dirty_paths = Vec::new();
-        for (path, permissions, data, _) in candidates {
-            let start = all_chunks.len();
+        let mut batch = Vec::new();
+        let mut batch_bytes = 0usize;
+        for (path, permissions, data, _) in &candidates {
+            if !batch.is_empty()
+                && batch_bytes.saturating_add(data.len()) > compression_frame_target
+            {
+                let indices = writer.write_compression_frame_bundle(&batch, &mut all_chunks)?;
+                for (frame, chunk_index) in batch.iter().zip(indices) {
+                    updates.push((
+                        (*frame.path).clone(),
+                        frame.permissions,
+                        frame.total_len,
+                        chunk_index,
+                    ));
+                }
+                batch.clear();
+                batch_bytes = 0;
+            }
             let len = data.len() as u64;
-            writer.write_frame(
-                FileFrameWrite {
-                    path: &path,
-                    permissions,
-                    total_len: len,
-                    file_offset: 0,
-                    data: &data,
-                },
-                &mut all_chunks,
-            )?;
-            updates.push((path, permissions, len, start));
+            batch_bytes = batch_bytes.saturating_add(data.len());
+            batch.push(CompressionFrameWrite {
+                path,
+                permissions: *permissions,
+                total_len: len,
+                file_offset: 0,
+                data,
+            });
+        }
+        if !batch.is_empty() {
+            let indices = writer.write_compression_frame_bundle(&batch, &mut all_chunks)?;
+            for (frame, chunk_index) in batch.iter().zip(indices) {
+                updates.push((
+                    (*frame.path).clone(),
+                    frame.permissions,
+                    frame.total_len,
+                    chunk_index,
+                ));
+            }
         }
         writer.finish(&mut all_chunks)?;
-        for (path, permissions, len, start) in updates {
-            let chunks = all_chunks[start..start + 1].to_vec();
+        for (path, permissions, len, chunk_index) in updates {
+            let chunks = vec![all_chunks[chunk_index].clone()];
             if let Some(entry) = writer.lockbox.toc_entries.get_mut(path.as_str()) {
                 entry.record_offset = chunks
                     .first()
-                    .and_then(|chunk| chunk.fragments.first())
-                    .map(|fragment| fragment.page_offset)
+                    .and_then(|chunk| chunk.segments.first())
+                    .map(|segment| segment.page_offset)
                     .unwrap_or(0);
-                entry.record_len = DEFAULT_PAGE_BYTES as u64;
+                entry.record_len = chunks
+                    .first()
+                    .and_then(|chunk| chunk.segments.first())
+                    .map(|segment| segment.page_len)
+                    .unwrap_or(0);
                 entry.record_object_id = chunks
                     .first()
-                    .and_then(|chunk| chunk.fragments.first())
-                    .map(|fragment| fragment.object_id)
+                    .and_then(|chunk| chunk.segments.first())
+                    .map(|segment| segment.object_id)
                     .unwrap_or(0);
                 entry.len = len;
                 entry.permissions = permissions;
@@ -752,6 +838,99 @@ impl Lockbox {
         }
         writer.lockbox.mark_toc_dirty_paths(dirty_paths.iter());
         Ok(())
+    }
+
+    fn small_file_compression_frame_target(&self) -> usize {
+        match self.workload_profile {
+            WorkloadProfile::BulkImport => BULK_IMPORT_SMALL_FILE_COMPRESSION_FRAME_BYTES,
+            _ => SMALL_FILE_COMPRESSION_FRAME_BYTES,
+        }
+    }
+
+    fn decoded_compression_frame_cache_limit(&self) -> usize {
+        match self.workload_profile {
+            WorkloadProfile::ReadMostly | WorkloadProfile::ExtractMany => {
+                DECODED_COMPRESSION_FRAME_CACHE_BYTES
+            }
+            _ => 0,
+        }
+    }
+
+    fn read_cached_compression_frame_slice(
+        &self,
+        expected_total_len: u64,
+        chunk: &FileChunk,
+    ) -> Result<Option<Vec<u8>>> {
+        let cache = self.compression_frame_cache.borrow();
+        let Some(entry) = cache.entries.get(&chunk.compression_frame_id) else {
+            return Ok(None);
+        };
+        if entry.compression != chunk.compression
+            || entry.compression_frame_len != chunk.compression_frame_len
+            || entry.compressed_len != chunk.compressed_len
+            || entry.compression_frame_digest != chunk.compression_frame_digest
+        {
+            return Err(Error::CorruptRecord);
+        }
+        let has_slice = entry.slices.iter().any(|slice| {
+            slice.path == chunk.stored_path
+                && slice.file_offset == chunk.file_offset
+                && slice.compression_frame_offset == chunk.compression_frame_offset
+                && slice.len == chunk.len
+                && (slice.total_len == 0 || slice.total_len == expected_total_len)
+        });
+        if !has_slice {
+            return Err(Error::CorruptRecord);
+        }
+        let start =
+            usize::try_from(chunk.compression_frame_offset).map_err(|_| Error::CorruptRecord)?;
+        let len = usize::try_from(chunk.len).map_err(|_| Error::CorruptRecord)?;
+        let end = start.checked_add(len).ok_or(Error::CorruptRecord)?;
+        if end > entry.data.len() {
+            return Err(Error::CorruptRecord);
+        }
+        Ok(Some(entry.data[start..end].to_vec()))
+    }
+
+    fn cache_decoded_compression_frame(
+        &self,
+        chunk: &FileChunk,
+        slices: Vec<CompressionFrameSlice>,
+        decoded: &[u8],
+    ) {
+        let limit = self.decoded_compression_frame_cache_limit();
+        if limit == 0 || decoded.len() > limit {
+            return;
+        }
+        let mut cache = self.compression_frame_cache.borrow_mut();
+        if let Some(old) = cache.entries.remove(&chunk.compression_frame_id) {
+            cache.used_bytes = cache.used_bytes.saturating_sub(old.data.len());
+        }
+        while cache.used_bytes.saturating_add(decoded.len()) > limit {
+            let Some(key) = cache.entries.keys().next().copied() else {
+                break;
+            };
+            if let Some(old) = cache.entries.remove(&key) {
+                cache.used_bytes = cache.used_bytes.saturating_sub(old.data.len());
+            }
+        }
+        cache.entries.insert(
+            chunk.compression_frame_id,
+            super::CachedCompressionFrame {
+                compression: chunk.compression,
+                compression_frame_len: chunk.compression_frame_len,
+                compressed_len: chunk.compressed_len,
+                compression_frame_digest: chunk.compression_frame_digest,
+                slices,
+                data: decoded.to_vec(),
+            },
+        );
+        cache.used_bytes = cache.used_bytes.saturating_add(decoded.len());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn decoded_compression_frame_cache_entries_for_tests(&self) -> usize {
+        self.compression_frame_cache.borrow().entries.len()
     }
 }
 
@@ -770,19 +949,33 @@ fn read_next_chunk(reader: &mut impl Read, buffer: &mut [u8]) -> Result<usize> {
 }
 
 #[derive(Debug, Clone)]
-struct PendingFragment {
-    chunk_index: usize,
-    fragment_offset: u64,
-    fragment_len: u64,
+struct PendingSegment {
+    chunk_indices: Vec<usize>,
+    segment_offset: u64,
+    segment_len: u64,
 }
 
 struct FilePageWriter<'a> {
     lockbox: &'a mut Lockbox,
-    packer: PageObjectPacker<PendingFragment>,
+    packer: PageObjectPacker<PendingSegment>,
+}
+
+struct SharedCompressionFrameSurvivor {
+    path: LockboxPath,
+    permissions: u32,
+    total_len: u64,
+    file_offset: u64,
+    data: Vec<u8>,
+}
+
+impl Drop for SharedCompressionFrameSurvivor {
+    fn drop(&mut self) {
+        self.data.zeroize();
+    }
 }
 
 #[derive(Clone, Copy)]
-struct FileFrameWrite<'a> {
+struct CompressionFrameWrite<'a> {
     path: &'a LockboxPath,
     permissions: u32,
     total_len: u64,
@@ -798,102 +991,103 @@ impl<'a> FilePageWriter<'a> {
         }
     }
 
-    fn write_frame(
+    fn write_compression_frame(
         &mut self,
-        frame: FileFrameWrite<'_>,
+        frame: CompressionFrameWrite<'_>,
         chunks: &mut Vec<FileChunk>,
     ) -> Result<()> {
-        let (compression, stored) = encode_file_frame(frame.data);
+        self.write_compression_frame_bundle(&[frame], chunks)
+            .map(|_| ())
+    }
+
+    fn write_compression_frame_bundle(
+        &mut self,
+        frames: &[CompressionFrameWrite<'_>],
+        chunks: &mut Vec<FileChunk>,
+    ) -> Result<Vec<usize>> {
         self.lockbox.sequence += 1;
-        let frame_id = self.lockbox.sequence;
-        let chunk_index = chunks.len();
-        chunks.push(FileChunk {
-            stored_path: frame.path.clone(),
-            file_offset: frame.file_offset,
-            len: frame.data.len() as u64,
-            compressed_len: stored.len() as u64,
+        let compression_frame_id = self.lockbox.sequence;
+        let mut compression_frame_payload = Vec::new();
+        let mut slices = Vec::with_capacity(frames.len());
+        let mut chunk_indices = Vec::with_capacity(frames.len());
+        for frame in frames {
+            let compression_frame_offset = compression_frame_payload.len() as u64;
+            compression_frame_payload.extend_from_slice(frame.data);
+            slices.push(CompressionFrameSlice {
+                path: frame.path.clone(),
+                permissions: frame.permissions,
+                total_len: frame.total_len,
+                file_offset: frame.file_offset,
+                compression_frame_offset,
+                len: frame.data.len() as u64,
+            });
+        }
+        let compression_frame_len = compression_frame_payload.len() as u64;
+        let (compression, stored) = encode_compression_frame(&compression_frame_payload);
+        let stored = Zeroizing::new(stored);
+        compression_frame_payload.zeroize();
+        let compression_frame_digest = strong_checksum(stored.as_slice());
+        let manifest = CompressionFrameManifest {
+            compression_frame_id,
             compression,
-            frame_id,
-            fragments: Vec::new(),
-        });
+            compression_frame_len,
+            compressed_len: stored.len() as u64,
+            compression_frame_digest,
+            slices,
+        };
+        for slice in &manifest.slices {
+            let chunk_index = chunks.len();
+            chunks.push(FileChunk {
+                stored_path: slice.path.clone(),
+                file_offset: slice.file_offset,
+                len: slice.len,
+                compression_frame_offset: slice.compression_frame_offset,
+                compression_frame_len: manifest.compression_frame_len,
+                compressed_len: manifest.compressed_len,
+                compression,
+                compression_frame_id,
+                compression_frame_digest,
+                segments: Vec::new(),
+            });
+            chunk_indices.push(chunk_index);
+        }
 
         if stored.is_empty() {
-            self.add_fragment(
-                frame.path,
-                frame.permissions,
-                frame.total_len,
-                frame.file_offset,
-                frame.data.len() as u64,
-                compression,
-                frame_id,
-                0,
-                stored.len() as u64,
-                chunk_index,
-                &[],
-                chunks,
-            )?;
-            return Ok(());
+            self.add_segment(&manifest, 0, &chunk_indices, &[], chunks)?;
+            return Ok(chunk_indices);
         }
 
         let mut offset = 0usize;
         while offset < stored.len() {
-            let end = (offset + MAX_FRAGMENT_BYTES).min(stored.len());
-            self.add_fragment(
-                frame.path,
-                frame.permissions,
-                frame.total_len,
-                frame.file_offset,
-                frame.data.len() as u64,
-                compression,
-                frame_id,
+            let end = (offset + MAX_SEGMENT_BYTES).min(stored.len());
+            self.add_segment(
+                &manifest,
                 offset as u64,
-                stored.len() as u64,
-                chunk_index,
+                &chunk_indices,
                 &stored[offset..end],
                 chunks,
             )?;
             offset = end;
         }
-        Ok(())
+        Ok(chunk_indices)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn add_fragment(
+    fn add_segment(
         &mut self,
-        path: &LockboxPath,
-        permissions: u32,
-        total_len: u64,
-        file_offset: u64,
-        frame_len: u64,
-        compression: u8,
-        frame_id: u64,
-        fragment_offset: u64,
-        compressed_len: u64,
-        chunk_index: usize,
-        fragment: &[u8],
+        manifest: &CompressionFrameManifest,
+        segment_offset: u64,
+        chunk_indices: &[usize],
+        segment: &[u8],
         chunks: &mut [FileChunk],
     ) -> Result<()> {
         self.lockbox.sequence += 1;
         let object_id = self.lockbox.sequence;
-        let payload = encode_file_fragment_payload(
-            &PendingFileChunk {
-                path: path.clone(),
-                permissions,
-                total_len,
-                file_offset,
-                data: Arc::from(fragment),
-            },
-            compression,
-            frame_id,
-            frame_len,
-            compressed_len,
-            fragment_offset,
-        );
+        let payload = encode_compression_frame_segment_payload(manifest, segment_offset, segment)?;
         let object = PageObject::new(PageObjectKind::FileData, object_id, payload);
-        let context = PendingFragment {
-            chunk_index,
-            fragment_offset,
-            fragment_len: fragment.len() as u64,
+        let context = PendingSegment {
+            chunk_indices: chunk_indices.to_vec(),
+            segment_offset,
+            segment_len: segment.len() as u64,
         };
 
         let encoded_len = self.packer.encoded_object_len(&object)?;
@@ -902,7 +1096,7 @@ impl<'a> FilePageWriter<'a> {
         }
         if !self.fits_with(encoded_len)? {
             return Err(Error::SecurityLimitExceeded(
-                "file fragment does not fit in a page".to_string(),
+                "file segment does not fit in a page".to_string(),
             ));
         }
         self.packer.push_encoded(object, context, encoded_len)?;
@@ -921,14 +1115,13 @@ impl<'a> FilePageWriter<'a> {
         if self.packer.is_empty() {
             return Ok(());
         }
-        let page_offset = self
-            .lockbox
-            .allocate_page_offset(DEFAULT_PAGE_BYTES as u64)?;
         let pending = self.packer.pending().to_vec();
         let objects = pending
             .iter()
             .map(|pending| pending.object.clone())
             .collect::<Vec<_>>();
+        let page_size = page_size_for_encoded_objects(&objects)?;
+        let page_offset = self.lockbox.allocate_page_offset(page_size as u64)?;
         if self.lockbox.should_discard_file_pages_after_flush() {
             self.lockbox
                 .write_insert_only_page_at(page_offset, self.lockbox.sequence, objects)?;
@@ -938,14 +1131,16 @@ impl<'a> FilePageWriter<'a> {
                 .write_decoded_page_at(page_offset, self.lockbox.sequence, objects)?;
         }
         for pending in pending {
-            if let Some(chunk) = chunks.get_mut(pending.context.chunk_index) {
-                chunk.fragments.push(FileFragment {
-                    page_offset,
-                    page_len: DEFAULT_PAGE_BYTES as u64,
-                    object_id: pending.object.id,
-                    fragment_offset: pending.context.fragment_offset,
-                    fragment_len: pending.context.fragment_len,
-                });
+            for chunk_index in pending.context.chunk_indices {
+                if let Some(chunk) = chunks.get_mut(chunk_index) {
+                    chunk.segments.push(CompressionFrameSegment {
+                        page_offset,
+                        page_len: page_size as u64,
+                        object_id: pending.object.id,
+                        segment_offset: pending.context.segment_offset,
+                        segment_len: pending.context.segment_len,
+                    });
+                }
             }
         }
         self.packer.clear();

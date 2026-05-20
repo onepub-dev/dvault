@@ -3,8 +3,8 @@ use crate::fast_hash::FastBuildHasher;
 use crate::lockbox_id::LockboxId;
 use crate::page::{
     decode_page, decode_single_object_page_secure, encode_page, encode_single_object_page_secure,
-    DecodedPage, PageObject, PageObjectKind, SecureSingleObjectPage, DEFAULT_METADATA_PAGE_BYTES,
-    PAGE_HEADER_LEN, PAGE_MAGIC,
+    page_size_for_stored_len, DecodedPage, PageObject, PageObjectKind, SecureSingleObjectPage,
+    DEFAULT_DATA_PAGE_BYTES, DEFAULT_METADATA_PAGE_BYTES, PAGE_HEADER_LEN, PAGE_MAGIC,
 };
 use crate::secret_vec::SecureVec;
 use crate::storage::Storage;
@@ -153,7 +153,8 @@ impl PageCache {
             }
             _ => return Err(Error::CorruptRecord),
         };
-        Ok((page, read_len as u64))
+        let weight = page_size_for_stored_len(read_len, DEFAULT_DATA_PAGE_BYTES)? as u64;
+        Ok((page, weight))
     }
 
     pub(crate) fn stage_decoded_page_with_policy(

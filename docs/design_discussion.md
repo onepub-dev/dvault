@@ -17,7 +17,7 @@ encoding, COW redaction, and dirty-page publication.
 
 Useful shape:
 
-- Build file frames and metadata objects on worker tasks.
+- Build compression frames and metadata objects on worker tasks.
 - Send ready page objects to one page-cache writer.
 - Keep header publication single-threaded and last.
 - Keep recovery and compaction using the same page-cache write APIs.
@@ -209,7 +209,9 @@ passwords use `SecretString::try_from_env` rather than first allocating a Rust
 Current protections:
 
 - Page-body decode checks declared decompressed page size before allocation.
-- File-frame decode verifies decoded length equals TOC length.
+- Compression-frame decode rejects declared oversized frames, validates zstd's
+  declared content size before decode, and verifies decoded length equals the
+  manifest/TOC length.
 - Extraction policies enforce max single-file bytes, total bytes, and file
   count.
 - TOC and TOC decoders reject impossible counts, malformed paths,
@@ -221,9 +223,6 @@ Current protections:
 
 Remaining risks to test or harden:
 
-- Zstd file-frame decompression does not currently pre-limit allocation before
-  `decode_all`; it validates after decode. The expected length is known, so a
-  bounded decoder or preflight limit should be added.
 - Recovery scans over arbitrary damaged bytes can be CPU-heavy. Add scan byte
   limits, progress callbacks, or user-confirmed recovery mode for huge inputs.
 - Object/page counts should continue to be bounded before allocation at every
@@ -239,8 +238,6 @@ Remaining risks to test or harden:
 
 Additional tests to add:
 
-- Malformed zstd file frame with a tiny expected length and huge compressed
-  expansion must fail without large allocation.
 - Lockbox with many bogus page magic sequences must not cause unbounded
   recovery CPU or memory.
 - Key directory with many wrong password slots must stay under a configured

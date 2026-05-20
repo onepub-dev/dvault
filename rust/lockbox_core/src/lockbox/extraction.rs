@@ -329,7 +329,7 @@ impl Lockbox {
             if chunk.file_offset != written {
                 return Err(Error::CorruptRecord);
             }
-            let decoded = self.read_file_chunk_frame(entry.len, &chunk)?;
+            let decoded = self.read_file_chunk_compression_frame(entry.len, &chunk)?;
             writer
                 .write_all(&decoded)
                 .map_err(|err| Error::Io(err.to_string()))?;

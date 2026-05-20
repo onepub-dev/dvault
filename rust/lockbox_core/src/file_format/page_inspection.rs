@@ -7,8 +7,12 @@ pub struct PageInspection {
     pub page_id: u64,
     /// Monotonic sequence value used to order records.
     pub sequence: u64,
+    /// Fixed physical page size in bytes.
+    pub page_size: u32,
     /// Encrypted body length recorded in the page header.
     pub encrypted_body_len: u32,
+    /// Physical page bytes not occupied by the fixed header or stored body.
+    pub unused_bytes: u32,
     /// Number of decoded objects in the page.
     pub object_count: usize,
     /// Decoded object summaries.

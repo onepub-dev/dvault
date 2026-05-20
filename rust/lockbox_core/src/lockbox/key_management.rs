@@ -633,7 +633,7 @@ impl Read for FileEntryReader<'_> {
             self.next_chunk += 1;
             let decoded = self
                 .lockbox
-                .read_file_chunk_frame(self.entry.len, chunk)
+                .read_file_chunk_compression_frame(self.entry.len, chunk)
                 .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
             self.current = Cursor::new(decoded);
         }

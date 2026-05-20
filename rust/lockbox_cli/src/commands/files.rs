@@ -9,26 +9,29 @@ pub(crate) fn add(args: &[String], access: &Access) -> CliResult<()> {
     let source = require_arg(args, 1, "source")?;
     let path = require_arg(args, 2, "lockbox path")?;
     let creates_lockbox = !Path::new(lockbox_path).exists();
+    let source_path = Path::new(source);
     let mut lb = open_or_create(lockbox_path, access)?;
-    if creates_lockbox {
+    if creates_lockbox || source_path.is_dir() {
         lb.set_workload_profile(WorkloadProfile::BulkImport);
     }
-    add_source_path(&mut lb, Path::new(source), path)?;
+    add_source_path(&mut lb, source_path, path)?;
     lb.commit()?;
     Ok(())
 }
 
 pub(crate) fn extract(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let lb = open_existing(lockbox_path, access)?;
+    let mut lb = open_existing(lockbox_path, access)?;
     if args.get(1).map(String::as_str) == Some("--to") {
         let dest = require_arg(args, 2, "destination")?;
         let policy = extract_policy_from_args(&args[3..]);
+        lb.set_workload_profile(WorkloadProfile::ExtractMany);
         lb.extract_to_directory(Path::new(dest), &policy)?;
     } else {
         let path = LockboxPath::new(require_arg(args, 1, "lockbox path")?)?;
         let dest = require_arg(args, 2, "destination")?;
         let replace = args.iter().skip(3).any(|arg| arg == "--overwrite");
+        lb.set_workload_profile(WorkloadProfile::ReadMostly);
         lb.extract_file_to(&path, Path::new(dest), replace)?;
     }
     Ok(())

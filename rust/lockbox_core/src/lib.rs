@@ -34,8 +34,9 @@ pub(crate) use file_format::{
 };
 pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_vec};
 pub(crate) use model::{
-    entry, env_name, env_sensitivity, extract_policy, file_chunk, list_options, lockbox_id,
-    node_kind, page_object_packer, record, recovery_report, recovery_report_options,
+    compression_frame_manifest, entry, env_name, env_sensitivity, extract_policy, file_chunk,
+    list_options, lockbox_id, node_kind, page_object_packer, record, recovery_report,
+    recovery_report_options,
 };
 pub(crate) use paths::{host_path, lockbox_path};
 pub(crate) use storage::{cache_options, free_index, free_slot, memory_pressure, page_cache};

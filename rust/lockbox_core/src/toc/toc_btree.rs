@@ -3,7 +3,10 @@ use crate::page_tree::{
     decode_page_tree_children, encode_page_tree_children, group_by_encoded_size,
     page_tree_child_encoded_len, PageTreeChild,
 };
-use crate::toc_codec::{decode_toc_entries, encode_toc_entries};
+use crate::toc_codec::{
+    decode_toc_entries, encode_toc_entries, encoded_toc_count_len, encoded_toc_entries_len,
+    encoded_toc_entry_len,
+};
 use crate::toc_entry::TocEntry;
 use crate::{Error, LockboxPath, Result};
 
@@ -12,7 +15,6 @@ const TOC_LEAF: u8 = 1;
 const TOC_INTERNAL: u8 = 2;
 pub(crate) const TOC_MIN_FILL_PERCENT: usize = 30;
 const TOC_NODE_PREFIX_BYTES: usize = 2;
-const ENTRY_COUNT_BYTES: usize = 4;
 
 #[derive(Debug)]
 pub(crate) enum TocNode {
@@ -113,7 +115,40 @@ pub(crate) fn encode_toc_internal(children: &[TocChild]) -> Result<Vec<u8>> {
 }
 
 pub(crate) fn toc_leaf_groups(entries: &[TocEntry]) -> Result<Vec<&[TocEntry]>> {
-    group_by_encoded_size(entries, leaf_base_len(), toc_entry_encoded_len, "TOC entry")
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut groups = Vec::new();
+    let mut start = 0usize;
+    let mut payload_len = 0usize;
+    for (index, entry) in entries.iter().enumerate() {
+        let group_count = index - start;
+        let previous_path = if group_count == 0 {
+            None
+        } else {
+            Some(entries[index - 1].path.as_str())
+        };
+        let entry_len = encoded_toc_entry_len(entry, previous_path, group_count);
+        let single_len = leaf_base_len() + encoded_toc_count_len(1) + entry_len;
+        if single_len > DEFAULT_METADATA_MAX_PAGE_BODY_BYTES {
+            return Err(Error::SecurityLimitExceeded(
+                "TOC entry exceeds maximum page size".to_string(),
+            ));
+        }
+
+        let candidate_len =
+            leaf_base_len() + encoded_toc_count_len(group_count + 1) + payload_len + entry_len;
+        if group_count > 0 && candidate_len > DEFAULT_METADATA_MAX_PAGE_BODY_BYTES {
+            groups.push(&entries[start..index]);
+            start = index;
+            payload_len = encoded_toc_entry_len(entry, None, 0);
+        } else {
+            payload_len += entry_len;
+        }
+    }
+    groups.push(&entries[start..]);
+    Ok(groups)
 }
 
 pub(crate) fn toc_child_groups(children: &[TocChild]) -> Result<Vec<&[TocChild]>> {
@@ -130,39 +165,15 @@ pub(crate) fn toc_leaf_fill_percent(entries: &[TocEntry]) -> usize {
 }
 
 pub(crate) fn encoded_leaf_len(entries: &[TocEntry]) -> usize {
-    leaf_base_len() + entries.iter().map(toc_entry_encoded_len).sum::<usize>()
+    leaf_base_len() + encoded_toc_entries_len(entries)
 }
 
 fn leaf_base_len() -> usize {
-    TOC_NODE_PREFIX_BYTES + ENTRY_COUNT_BYTES
+    TOC_NODE_PREFIX_BYTES
 }
 
 fn internal_base_len() -> usize {
     TOC_NODE_PREFIX_BYTES + 4
-}
-
-fn toc_entry_encoded_len(entry: &TocEntry) -> usize {
-    2 + entry.path.len()
-        + 8
-        + 8
-        + 8
-        + 8
-        + 1
-        + 1
-        + 4
-        + 4
-        + entry
-            .chunks
-            .iter()
-            .map(|chunk| {
-                let stored_path_len = if chunk.stored_path == entry.path.as_str() {
-                    0
-                } else {
-                    chunk.stored_path.len()
-                };
-                2 + stored_path_len + 40 + chunk.fragments.len() * 40
-            })
-            .sum::<usize>()
 }
 
 fn toc_child_encoded_len(child: &TocChild) -> usize {
