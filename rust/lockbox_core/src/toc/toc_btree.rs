@@ -4,8 +4,7 @@ use crate::page_tree::{
     page_tree_child_encoded_len, PageTreeChild,
 };
 use crate::toc_codec::{
-    decode_toc_entries, encode_toc_entries, encoded_toc_count_len, encoded_toc_entries_len,
-    encoded_toc_entry_len,
+    decode_toc_entries, encode_toc_entries, encoded_toc_entries_len, TocEntriesLenEstimator,
 };
 use crate::toc_entry::TocEntry;
 use crate::{Error, LockboxPath, Result};
@@ -121,30 +120,22 @@ pub(crate) fn toc_leaf_groups(entries: &[TocEntry]) -> Result<Vec<&[TocEntry]>> 
 
     let mut groups = Vec::new();
     let mut start = 0usize;
-    let mut payload_len = 0usize;
+    let mut group_len = TocEntriesLenEstimator::new();
     for (index, entry) in entries.iter().enumerate() {
-        let group_count = index - start;
-        let previous_path = if group_count == 0 {
-            None
-        } else {
-            Some(entries[index - 1].path.as_str())
-        };
-        let entry_len = encoded_toc_entry_len(entry, previous_path, group_count);
-        let single_len = leaf_base_len() + encoded_toc_count_len(1) + entry_len;
+        let single_len = leaf_base_len() + encoded_toc_entries_len(std::slice::from_ref(entry));
         if single_len > DEFAULT_METADATA_MAX_PAGE_BODY_BYTES {
             return Err(Error::SecurityLimitExceeded(
                 "TOC entry exceeds maximum page size".to_string(),
             ));
         }
 
-        let candidate_len =
-            leaf_base_len() + encoded_toc_count_len(group_count + 1) + payload_len + entry_len;
-        if group_count > 0 && candidate_len > DEFAULT_METADATA_MAX_PAGE_BODY_BYTES {
+        group_len.push(entry);
+        let candidate_len = leaf_base_len() + group_len.encoded_len();
+        if group_len.count() > 1 && candidate_len > DEFAULT_METADATA_MAX_PAGE_BODY_BYTES {
             groups.push(&entries[start..index]);
             start = index;
-            payload_len = encoded_toc_entry_len(entry, None, 0);
-        } else {
-            payload_len += entry_len;
+            group_len.clear();
+            group_len.push(entry);
         }
     }
     groups.push(&entries[start..]);

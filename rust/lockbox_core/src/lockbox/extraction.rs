@@ -4,6 +4,7 @@ use crate::lockbox_path::{canonicalize_stored_path, validate_symlink_paths as va
 use crate::node_kind::NodeKind;
 use crate::toc_entry::TocEntry;
 use crate::{Error, ExtractPolicy, Result};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -128,20 +129,20 @@ impl Lockbox {
             .unwrap_or(1)
             .clamp(1, 4)
             .min(file_entries.len().max(1));
-        let chunk_size = file_entries.len().div_ceil(workers);
+        let worker_jobs = group_parallel_extraction_jobs(file_entries, workers);
 
         let parallel_result = std::thread::scope(|scope| {
             let mut handles = Vec::new();
-            for chunk in file_entries.chunks(chunk_size) {
+            for job in worker_jobs {
                 let worker = self.try_clone()?;
                 handles.push(scope.spawn(move || {
-                    for (path_id, entry) in chunk {
+                    for (path_id, entry) in job {
                         let out_path = checked_destination(destination, &entry.path)?;
                         worker.extract_file_entry_to_path(
                             entry,
                             &out_path,
                             policy,
-                            *path_id as u64,
+                            path_id as u64,
                         )?;
                     }
                     Ok(())
@@ -341,6 +342,36 @@ impl Lockbox {
         }
         Ok(())
     }
+}
+
+fn group_parallel_extraction_jobs<'a>(
+    file_entries: Vec<(usize, &'a TocEntry)>,
+    workers: usize,
+) -> Vec<Vec<(usize, &'a TocEntry)>> {
+    let mut frame_groups: BTreeMap<u64, Vec<(usize, &'a TocEntry)>> = BTreeMap::new();
+    for (path_id, entry) in file_entries {
+        let frame_id = entry
+            .chunks
+            .first()
+            .map(|chunk| chunk.compression_frame_id)
+            .unwrap_or(u64::MAX);
+        frame_groups
+            .entry(frame_id)
+            .or_default()
+            .push((path_id, entry));
+    }
+
+    let mut jobs = vec![Vec::new(); workers];
+    for (_, group) in frame_groups {
+        let target = jobs
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, job)| job.len())
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        jobs[target].extend(group);
+    }
+    jobs.into_iter().filter(|job| !job.is_empty()).collect()
 }
 
 fn checked_destination(root: &Path, lockbox_path: &str) -> Result<PathBuf> {

@@ -8,14 +8,15 @@ pub(crate) const MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES: u64 = 4 * 1024 * 1024
 const MIN_INCOMPRESSIBLE_CHECK_BYTES: usize = 64 * 1024;
 const INCOMPRESSIBLE_SAMPLE_BYTES: usize = 16 * 1024;
 const HIGH_ENTROPY_BITS_PER_BYTE: f64 = 7.80;
-const ZSTD_DEFAULT_LEVEL: i32 = 1;
+pub(crate) const ZSTD_DEFAULT_LEVEL: i32 = 1;
+pub(crate) const ZSTD_BULK_IMPORT_LEVEL: i32 = 3;
 const ZSTD_MAGIC: &[u8; 4] = &[0x28, 0xb5, 0x2f, 0xfd];
 
 pub(crate) fn encode_page_body(payload: &[u8]) -> Vec<u8> {
     let (algorithm, stored) = if looks_incompressible(payload) {
         (COMPRESSION_NONE, payload.to_vec())
     } else {
-        let compressed = zstd_encode(payload);
+        let compressed = zstd_encode(payload, ZSTD_DEFAULT_LEVEL);
         if compressed.len() < payload.len() {
             (COMPRESSION_ZSTD, compressed)
         } else {
@@ -59,8 +60,8 @@ pub(crate) fn decode_page_body(body: &[u8]) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
-fn zstd_encode(payload: &[u8]) -> Vec<u8> {
-    oxiarc_zstd::encode_all(payload, ZSTD_DEFAULT_LEVEL)
+fn zstd_encode(payload: &[u8], level: i32) -> Vec<u8> {
+    oxiarc_zstd::encode_all(payload, level)
         .expect("zstd compression should not fail for an in-memory buffer")
 }
 
@@ -69,10 +70,14 @@ fn zstd_decode(stored: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub(crate) fn encode_compression_frame(payload: &[u8]) -> (u8, Vec<u8>) {
+    encode_compression_frame_with_level(payload, ZSTD_DEFAULT_LEVEL)
+}
+
+pub(crate) fn encode_compression_frame_with_level(payload: &[u8], level: i32) -> (u8, Vec<u8>) {
     if looks_incompressible(payload) {
         return (COMPRESSION_NONE, payload.to_vec());
     }
-    let compressed = zstd_encode(payload);
+    let compressed = zstd_encode(payload, level);
     if compressed.len() < payload.len() {
         (COMPRESSION_ZSTD, compressed)
     } else {

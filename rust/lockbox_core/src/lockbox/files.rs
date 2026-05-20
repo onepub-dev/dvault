@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use super::Lockbox;
 use crate::compression::{
-    decode_compression_frame, encode_compression_frame, MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES,
+    decode_compression_frame, encode_compression_frame_with_level,
+    MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES, ZSTD_BULK_IMPORT_LEVEL, ZSTD_DEFAULT_LEVEL,
 };
 use crate::compression_frame_manifest::{CompressionFrameManifest, CompressionFrameSlice};
 use crate::constants::{
@@ -27,8 +28,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 const SMALL_FILE_PACKING_LIMIT: usize = 1024 * 1024;
 const SMALL_FILE_COMPRESSION_FRAME_BYTES: usize = 4 * 1024;
-const BULK_IMPORT_SMALL_FILE_COMPRESSION_FRAME_BYTES: usize = 1024 * 1024;
-const FILE_COMPRESSION_FRAME_BYTES: usize = 1020 * 1024;
+const BULK_IMPORT_SMALL_FILE_COMPRESSION_FRAME_BYTES: usize = 2 * 1024 * 1024;
+const FILE_COMPRESSION_FRAME_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SEGMENT_BYTES: usize = DEFAULT_MAX_PAGE_BODY_BYTES - 64 * 1024;
 const DECODED_COMPRESSION_FRAME_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -847,6 +848,13 @@ impl Lockbox {
         }
     }
 
+    fn compression_frame_zstd_level(&self) -> i32 {
+        match self.workload_profile {
+            WorkloadProfile::BulkImport => ZSTD_BULK_IMPORT_LEVEL,
+            _ => ZSTD_DEFAULT_LEVEL,
+        }
+    }
+
     fn decoded_compression_frame_cache_limit(&self) -> usize {
         match self.workload_profile {
             WorkloadProfile::ReadMostly | WorkloadProfile::ExtractMany => {
@@ -1023,7 +1031,10 @@ impl<'a> FilePageWriter<'a> {
             });
         }
         let compression_frame_len = compression_frame_payload.len() as u64;
-        let (compression, stored) = encode_compression_frame(&compression_frame_payload);
+        let (compression, stored) = encode_compression_frame_with_level(
+            &compression_frame_payload,
+            self.lockbox.compression_frame_zstd_level(),
+        );
         let stored = Zeroizing::new(stored);
         compression_frame_payload.zeroize();
         let compression_frame_digest = strong_checksum(stored.as_slice());

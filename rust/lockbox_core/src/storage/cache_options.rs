@@ -40,9 +40,10 @@ impl Default for LockboxOptions {
 /// This value is a tuning hint, not a security setting. It does not change the
 /// lockbox file format or the data returned by any API. The current
 /// implementation uses the profile to decide how aggressively to retain staged
-/// file pages during writes and whether decoded compression frames may be
-/// retained during repeated read/extract workloads; decoded-page cache capacity
-/// is still controlled by `LockboxOptions::cache_limit`.
+/// file pages during writes, which compression-frame target and zstd level to
+/// use for bulk imports, and whether decoded compression frames may be retained
+/// during repeated read/extract workloads; decoded-page cache capacity is still
+/// controlled by `LockboxOptions::cache_limit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkloadProfile {
     /// Balanced defaults for interactive CLI/API use.
@@ -61,7 +62,8 @@ pub enum WorkloadProfile {
     /// they are flushed. Pending staged data may also be flushed before delete,
     /// rename, or symlink operations that touch the same path. This reduces peak
     /// memory while still allowing archive-style imports to gain compression
-    /// from adjacent small files.
+    /// from adjacent small files. Compression frames use a stronger zstd level
+    /// than interactive writes.
     BulkImport,
     /// Favor repeated reads from an existing lockbox.
     ///

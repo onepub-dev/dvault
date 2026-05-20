@@ -19,8 +19,13 @@ pub(crate) fn encode_toc(
 
 pub(crate) fn encode_toc_entries<'a>(entries: impl IntoIterator<Item = &'a TocEntry>) -> Vec<u8> {
     let entries = entries.into_iter().collect::<Vec<_>>();
+    let descriptors = frame_descriptors(&entries);
     let mut out = Vec::new();
     put_varint(entries.len() as u64, &mut out);
+    put_varint(descriptors.len() as u64, &mut out);
+    for descriptor in &descriptors {
+        encode_frame_descriptor(descriptor, &mut out);
+    }
     let mut previous_path = "";
     for (index, entry) in entries.iter().enumerate() {
         let default_permissions = default_permissions(entry.node_kind);
@@ -56,19 +61,9 @@ pub(crate) fn encode_toc_entries<'a>(entries: impl IntoIterator<Item = &'a TocEn
             put_varint(chunk.file_offset, &mut out);
             put_varint(chunk.len, &mut out);
             put_varint(chunk.compression_frame_offset, &mut out);
-            put_varint(chunk.compression_frame_len, &mut out);
-            put_varint(chunk.compressed_len, &mut out);
-            out.push(chunk.compression);
-            put_varint(chunk.compression_frame_id, &mut out);
-            out.extend_from_slice(&chunk.compression_frame_digest);
-            put_varint(chunk.segments.len() as u64, &mut out);
-            for segment in &chunk.segments {
-                put_varint(segment.page_offset, &mut out);
-                put_varint(segment.page_len, &mut out);
-                put_varint(segment.object_id, &mut out);
-                put_varint(segment.segment_offset, &mut out);
-                put_varint(segment.segment_len, &mut out);
-            }
+            let descriptor_index =
+                frame_descriptor_index(&descriptors, chunk).expect("descriptor exists");
+            put_varint(descriptor_index as u64, &mut out);
         }
         previous_path = entry.path.as_str();
     }
@@ -76,28 +71,95 @@ pub(crate) fn encode_toc_entries<'a>(entries: impl IntoIterator<Item = &'a TocEn
 }
 
 pub(crate) fn encoded_toc_entries_len(entries: &[TocEntry]) -> usize {
+    let descriptors = frame_descriptors(&entries.iter().collect::<Vec<_>>());
     encoded_toc_count_len(entries.len())
-        + entries
+        + encoded_toc_count_len(descriptors.len())
+        + descriptors
             .iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                let previous_path = index
-                    .checked_sub(1)
-                    .and_then(|previous| entries.get(previous))
-                    .map(|entry| entry.path.as_str());
-                encoded_toc_entry_len(entry, previous_path, index)
-            })
+            .map(encoded_descriptor_len)
             .sum::<usize>()
+        + encoded_entries_with_descriptors_len(entries, &descriptors)
 }
 
 pub(crate) fn encoded_toc_count_len(count: usize) -> usize {
     varint_len(count as u64)
 }
 
-pub(crate) fn encoded_toc_entry_len(
+#[derive(Debug, Default)]
+pub(crate) struct TocEntriesLenEstimator {
+    count: usize,
+    descriptors: Vec<FrameDescriptor>,
+    descriptor_len: usize,
+    entries_len: usize,
+    previous_path: String,
+}
+
+impl TocEntriesLenEstimator {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn count(&self) -> usize {
+        self.count
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.count = 0;
+        self.descriptors.clear();
+        self.descriptor_len = 0;
+        self.entries_len = 0;
+        self.previous_path.clear();
+    }
+
+    pub(crate) fn push(&mut self, entry: &TocEntry) {
+        for chunk in &entry.chunks {
+            if frame_descriptor_index(&self.descriptors, chunk).is_none() {
+                let descriptor = FrameDescriptor::from_chunk(chunk);
+                self.descriptor_len += encoded_descriptor_len(&descriptor);
+                self.descriptors.push(descriptor);
+            }
+        }
+        self.entries_len += encoded_toc_entry_len(
+            entry,
+            Some(&self.previous_path),
+            self.count,
+            &self.descriptors,
+        );
+        self.previous_path.clear();
+        self.previous_path.push_str(entry.path.as_str());
+        self.count += 1;
+    }
+
+    pub(crate) fn encoded_len(&self) -> usize {
+        encoded_toc_count_len(self.count)
+            + encoded_toc_count_len(self.descriptors.len())
+            + self.descriptor_len
+            + self.entries_len
+    }
+}
+
+fn encoded_entries_with_descriptors_len(
+    entries: &[TocEntry],
+    descriptors: &[FrameDescriptor],
+) -> usize {
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let previous_path = index
+                .checked_sub(1)
+                .and_then(|previous| entries.get(previous))
+                .map(|entry| entry.path.as_str());
+            encoded_toc_entry_len(entry, previous_path, index, descriptors)
+        })
+        .sum::<usize>()
+}
+
+fn encoded_toc_entry_len(
     entry: &TocEntry,
     previous_path: Option<&str>,
     index: usize,
+    descriptors: &[FrameDescriptor],
 ) -> usize {
     let default_permissions = default_permissions(entry.node_kind);
     1 + encoded_path_len(entry.path.as_str(), previous_path.unwrap_or(""), index)
@@ -114,7 +176,7 @@ pub(crate) fn encoded_toc_entry_len(
         + entry
             .chunks
             .iter()
-            .map(|chunk| encoded_chunk_len(entry, chunk))
+            .map(|chunk| encoded_chunk_len(entry, chunk, descriptors))
             .sum::<usize>()
 }
 
@@ -134,6 +196,15 @@ pub(crate) fn decode_toc_entries(payload: &[u8]) -> Result<Vec<TocEntry>> {
         usize::try_from(take_varint(payload, &mut offset)?).map_err(|_| Error::CorruptRecord)?;
     if count > payload.len().saturating_sub(offset) {
         return Err(Error::CorruptRecord);
+    }
+    let descriptor_count =
+        usize::try_from(take_varint(payload, &mut offset)?).map_err(|_| Error::CorruptRecord)?;
+    if descriptor_count > payload.len().saturating_sub(offset) {
+        return Err(Error::CorruptRecord);
+    }
+    let mut descriptors = Vec::with_capacity(descriptor_count);
+    for _ in 0..descriptor_count {
+        descriptors.push(decode_frame_descriptor(payload, &mut offset)?);
     }
 
     let mut entries = Vec::with_capacity(count);
@@ -191,51 +262,22 @@ pub(crate) fn decode_toc_entries(payload: &[u8]) -> Result<Vec<TocEntry>> {
             let file_offset = take_varint(payload, &mut offset)?;
             let chunk_len = take_varint(payload, &mut offset)?;
             let compression_frame_offset = take_varint(payload, &mut offset)?;
-            let compression_frame_len = take_varint(payload, &mut offset)?;
-            let compressed_len = take_varint(payload, &mut offset)?;
-            if offset >= payload.len() {
-                return Err(Error::CorruptRecord);
-            }
-            let compression = payload[offset];
-            offset += 1;
-            let compression_frame_id = take_varint(payload, &mut offset)?;
-            if offset + 32 > payload.len() {
-                return Err(Error::CorruptRecord);
-            }
-            let mut compression_frame_digest = [0u8; 32];
-            compression_frame_digest.copy_from_slice(&payload[offset..offset + 32]);
-            offset += 32;
-            let segment_count = usize::try_from(take_varint(payload, &mut offset)?)
+            let descriptor_index = usize::try_from(take_varint(payload, &mut offset)?)
                 .map_err(|_| Error::CorruptRecord)?;
-            if segment_count > payload.len().saturating_sub(offset) {
-                return Err(Error::CorruptRecord);
-            }
-            let mut segments = Vec::with_capacity(segment_count);
-            for _ in 0..segment_count {
-                let page_offset = take_varint(payload, &mut offset)?;
-                let page_len = take_varint(payload, &mut offset)?;
-                let object_id = take_varint(payload, &mut offset)?;
-                let segment_offset = take_varint(payload, &mut offset)?;
-                let segment_len = take_varint(payload, &mut offset)?;
-                segments.push(CompressionFrameSegment {
-                    page_offset,
-                    page_len,
-                    object_id,
-                    segment_offset,
-                    segment_len,
-                });
-            }
+            let descriptor = descriptors
+                .get(descriptor_index)
+                .ok_or(Error::CorruptRecord)?;
             chunks.push(FileChunk {
                 stored_path,
                 file_offset,
                 len: chunk_len,
                 compression_frame_offset,
-                compression_frame_len,
-                compressed_len,
-                compression,
-                compression_frame_id,
-                compression_frame_digest,
-                segments,
+                compression_frame_len: descriptor.compression_frame_len,
+                compressed_len: descriptor.compressed_len,
+                compression: descriptor.compression,
+                compression_frame_id: descriptor.compression_frame_id,
+                compression_frame_digest: descriptor.compression_frame_digest,
+                segments: descriptor.segments.clone(),
             });
         }
         match node_kind {
@@ -322,7 +364,133 @@ fn encoded_path_len(path: &str, previous_path: &str, index: usize) -> usize {
     varint_len(prefix_len as u64) + varint_len(suffix_len as u64) + suffix_len
 }
 
-fn encoded_chunk_len(entry: &TocEntry, chunk: &FileChunk) -> usize {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrameDescriptor {
+    compression_frame_id: u64,
+    compression: u8,
+    compression_frame_len: u64,
+    compressed_len: u64,
+    compression_frame_digest: [u8; 32],
+    segments: Vec<CompressionFrameSegment>,
+}
+
+impl FrameDescriptor {
+    fn from_chunk(chunk: &FileChunk) -> Self {
+        Self {
+            compression_frame_id: chunk.compression_frame_id,
+            compression: chunk.compression,
+            compression_frame_len: chunk.compression_frame_len,
+            compressed_len: chunk.compressed_len,
+            compression_frame_digest: chunk.compression_frame_digest,
+            segments: chunk.segments.clone(),
+        }
+    }
+
+    fn matches_chunk(&self, chunk: &FileChunk) -> bool {
+        self.compression_frame_id == chunk.compression_frame_id
+            && self.compression == chunk.compression
+            && self.compression_frame_len == chunk.compression_frame_len
+            && self.compressed_len == chunk.compressed_len
+            && self.compression_frame_digest == chunk.compression_frame_digest
+            && self.segments == chunk.segments
+    }
+}
+
+fn frame_descriptors(entries: &[&TocEntry]) -> Vec<FrameDescriptor> {
+    let mut descriptors = Vec::new();
+    for entry in entries {
+        for chunk in &entry.chunks {
+            if frame_descriptor_index(&descriptors, chunk).is_none() {
+                descriptors.push(FrameDescriptor::from_chunk(chunk));
+            }
+        }
+    }
+    descriptors
+}
+
+fn frame_descriptor_index(descriptors: &[FrameDescriptor], chunk: &FileChunk) -> Option<usize> {
+    descriptors
+        .iter()
+        .position(|descriptor| descriptor.matches_chunk(chunk))
+}
+
+fn encode_frame_descriptor(descriptor: &FrameDescriptor, out: &mut Vec<u8>) {
+    put_varint(descriptor.compression_frame_id, out);
+    put_varint(descriptor.compression as u64, out);
+    put_varint(descriptor.compression_frame_len, out);
+    put_varint(descriptor.compressed_len, out);
+    out.extend_from_slice(&descriptor.compression_frame_digest);
+    put_varint(descriptor.segments.len() as u64, out);
+    for segment in &descriptor.segments {
+        put_varint(segment.page_offset, out);
+        put_varint(segment.page_len, out);
+        put_varint(segment.object_id, out);
+        put_varint(segment.segment_offset, out);
+        put_varint(segment.segment_len, out);
+    }
+}
+
+fn decode_frame_descriptor(payload: &[u8], offset: &mut usize) -> Result<FrameDescriptor> {
+    let compression_frame_id = take_varint(payload, offset)?;
+    let compression =
+        u8::try_from(take_varint(payload, offset)?).map_err(|_| Error::CorruptRecord)?;
+    let compression_frame_len = take_varint(payload, offset)?;
+    let compressed_len = take_varint(payload, offset)?;
+    if *offset + 32 > payload.len() {
+        return Err(Error::CorruptRecord);
+    }
+    let mut compression_frame_digest = [0u8; 32];
+    compression_frame_digest.copy_from_slice(&payload[*offset..*offset + 32]);
+    *offset += 32;
+    let segment_count =
+        usize::try_from(take_varint(payload, offset)?).map_err(|_| Error::CorruptRecord)?;
+    if segment_count > payload.len().saturating_sub(*offset) {
+        return Err(Error::CorruptRecord);
+    }
+    let mut segments = Vec::with_capacity(segment_count);
+    for _ in 0..segment_count {
+        let page_offset = take_varint(payload, offset)?;
+        let page_len = take_varint(payload, offset)?;
+        let object_id = take_varint(payload, offset)?;
+        let segment_offset = take_varint(payload, offset)?;
+        let segment_len = take_varint(payload, offset)?;
+        segments.push(CompressionFrameSegment {
+            page_offset,
+            page_len,
+            object_id,
+            segment_offset,
+            segment_len,
+        });
+    }
+    Ok(FrameDescriptor {
+        compression_frame_id,
+        compression,
+        compression_frame_len,
+        compressed_len,
+        compression_frame_digest,
+        segments,
+    })
+}
+
+fn encoded_descriptor_len(descriptor: &FrameDescriptor) -> usize {
+    varint_len(descriptor.compression_frame_id)
+        + varint_len(descriptor.compression as u64)
+        + varint_len(descriptor.compression_frame_len)
+        + varint_len(descriptor.compressed_len)
+        + 32
+        + varint_len(descriptor.segments.len() as u64)
+        + descriptor
+            .segments
+            .iter()
+            .map(encoded_segment_len)
+            .sum::<usize>()
+}
+
+fn encoded_chunk_len(
+    entry: &TocEntry,
+    chunk: &FileChunk,
+    descriptors: &[FrameDescriptor],
+) -> usize {
     let stored_path_len = if chunk.stored_path == entry.path.as_str() {
         0
     } else {
@@ -333,17 +501,7 @@ fn encoded_chunk_len(entry: &TocEntry, chunk: &FileChunk) -> usize {
         + varint_len(chunk.file_offset)
         + varint_len(chunk.len)
         + varint_len(chunk.compression_frame_offset)
-        + varint_len(chunk.compression_frame_len)
-        + varint_len(chunk.compressed_len)
-        + 1
-        + varint_len(chunk.compression_frame_id)
-        + 32
-        + varint_len(chunk.segments.len() as u64)
-        + chunk
-            .segments
-            .iter()
-            .map(encoded_segment_len)
-            .sum::<usize>()
+        + varint_len(frame_descriptor_index(descriptors, chunk).expect("descriptor exists") as u64)
 }
 
 fn encoded_segment_len(segment: &CompressionFrameSegment) -> usize {
@@ -524,6 +682,64 @@ mod tests {
         assert_eq!(decoded[1].path, entries[1].path);
     }
 
+    #[test]
+    fn toc_entries_share_frame_descriptors_across_chunks() {
+        let entries = (0..4)
+            .map(|i| TocEntry {
+                path: LockboxPath::new(format!("/tree/file-{i}.bin")).unwrap(),
+                len: 128,
+                record_offset: 4096,
+                record_len: 4096,
+                record_object_id: 10,
+                deleted: false,
+                node_kind: NodeKind::File,
+                permissions: DEFAULT_FILE_PERMISSIONS,
+                chunks: vec![shared_frame_chunk(i)],
+            })
+            .collect::<Vec<_>>();
+
+        let payload = encode_toc_entries(entries.iter());
+        assert_eq!(payload.len(), encoded_toc_entries_len(&entries));
+        let decoded = decode_toc_entries(&payload).unwrap();
+
+        assert_eq!(decoded.len(), entries.len());
+        for (decoded, expected) in decoded.iter().zip(entries.iter()) {
+            assert_eq!(decoded.path, expected.path);
+            assert_eq!(decoded.len, expected.len);
+            assert_eq!(decoded.chunks, expected.chunks);
+        }
+        assert!(
+            payload.len()
+                < entries
+                    .iter()
+                    .map(|entry| 64 + entry.path.len())
+                    .sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn toc_decode_rejects_invalid_frame_descriptor_index() {
+        let entry = TocEntry {
+            path: LockboxPath::new("/tree/file.bin").unwrap(),
+            len: 128,
+            record_offset: 4096,
+            record_len: 4096,
+            record_object_id: 10,
+            deleted: false,
+            node_kind: NodeKind::File,
+            permissions: DEFAULT_FILE_PERMISSIONS,
+            chunks: vec![shared_frame_chunk(0)],
+        };
+        let mut payload = encode_toc_entries([&entry]);
+        let last = payload.last_mut().unwrap();
+        *last = last.saturating_add(1);
+
+        assert!(matches!(
+            decode_toc_entries(&payload),
+            Err(Error::CorruptRecord)
+        ));
+    }
+
     fn encoded_symlink_entry(
         path: &str,
         record_offset: u64,
@@ -541,5 +757,26 @@ mod tests {
             permissions: DEFAULT_SYMLINK_PERMISSIONS,
             chunks: Vec::new(),
         }])
+    }
+
+    fn shared_frame_chunk(index: u64) -> FileChunk {
+        FileChunk {
+            stored_path: LockboxPath::new(format!("/tree/file-{index}.bin")).unwrap(),
+            file_offset: 0,
+            len: 128,
+            compression_frame_offset: index * 128,
+            compression_frame_len: 512,
+            compressed_len: 42,
+            compression: 1,
+            compression_frame_id: 7,
+            compression_frame_digest: [9; 32],
+            segments: vec![CompressionFrameSegment {
+                page_offset: 4096,
+                page_len: 4096,
+                object_id: 10,
+                segment_offset: 0,
+                segment_len: 42,
+            }],
+        }
     }
 }

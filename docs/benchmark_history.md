@@ -5,6 +5,79 @@ dependency, or implementation changes. Keep each entry self-contained: include
 the change being measured, the command, environment, baseline source, and
 observed result table.
 
+## 2026-05-21 - Compression Research Stack: TOC Descriptors, 2 MiB Frames, Bulk zstd-3
+
+Description: measured and applied the next compression research stack on top of
+commit `12bdd2d Compact compression frame metadata`. The accepted changes are
+shared per-TOC-leaf compression-frame descriptors, 2 MiB bulk small-file frames,
+2 MiB large-file frames, zstd level 3 for `BulkImport` compression frames only,
+and parallel directory extraction grouped by compression frame.
+
+Commands:
+
+```bash
+cd rust
+cargo test --workspace
+
+cd ..
+# Lockbox-only fixture loop using the archive comparison fixtures:
+# rust/target/archive-comparison/fixtures/{repeated-small,text-tree,...}
+# and rust/target/release/lockbox add/create.
+```
+
+Environment:
+
+- Host: local Linux workstation
+- Rust: workspace default toolchain for this checkout
+- Baseline source: commit `12bdd2d`
+- Fixture output: `rust/target/research-comparison/*`
+
+Lockbox-only fixture results:
+
+| Stack | repeated-small | text-tree | mixed-tree | high-entropy | dvault-source |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Baseline `12bdd2d` | 128,096 | 3,496,032 | 17,042,528 | 67,140,704 | 350,304 |
+| Shared TOC descriptors | 110,688 | 3,495,008 | 17,041,504 | 67,140,704 | 350,304 |
+| + 2 MiB bulk frames | 97,376 | 3,490,912 | 17,037,408 | 67,131,488 | 350,304 |
+| + BulkImport zstd level 3 | 97,376 | 2,929,760 | 17,037,408 | 67,131,488 | 304,224 |
+
+Final add-time/RSS reading for the combined stack:
+
+| Fixture | Bytes | Add seconds | Max RSS KiB |
+| --- | ---: | ---: | ---: |
+| repeated-small | 97,376 | 0.38 | 20,960 |
+| text-tree | 2,929,760 | 0.48 | 21,932 |
+| mixed-tree | 17,037,408 | 0.28 | 71,196 |
+| high-entropy | 67,131,488 | 0.67 | 77,020 |
+| dvault-source | 304,224 | 0.04 | 8,236 |
+
+Large-file perf after changing the large-file frame target to 2 MiB:
+
+| Pattern | Logical bytes | Lockbox bytes | Add | Extract | 1 MiB range read |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| zero | 104,857,600 | 15,456 | 162.3ms | 190.0ms | 2.50ms |
+| randomish | 104,857,600 | 104,881,248 | 449.1ms | 431.3ms | 7.00ms |
+
+Repeated-small directory extraction of the final artifact:
+
+| Variant | Runs | Extract seconds | Max RSS KiB |
+| --- | ---: | --- | --- |
+| Before frame-grouped parallel extraction | 3 | 0.14-0.15 | 192,576-195,088 |
+| After frame-grouped parallel extraction | 3 | 0.11 | 145,196-145,412 |
+
+Conclusion:
+
+- Shared TOC descriptors are the best metadata win: repeated-small drops 13.6%
+  before any frame-size or compression-level change.
+- 2 MiB bulk frames stack cleanly with descriptors, bringing repeated-small to
+  97,376 bytes.
+- zstd level 3 should remain scoped to `BulkImport`; it materially improves
+  text/source size but costs some CPU.
+- 2 MiB large-file frames are the best default tested so far. They improve the
+  large-file balance without moving to whole-file compression frames.
+- Frame-grouped parallel extraction is a speed/RSS win and does not change the
+  file format.
+
 ## 2026-05-20 - TOC Varints, Path Suffixes, and Compressed Manifests
 
 Description: continued the `experiment/compression-group-manifest` branch after
