@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use super::Lockbox;
 use crate::compression::{
-    decode_compression_frame, encode_compression_frame_with_level,
+    decode_compression_frame, encode_compression_frame_with_level, COMPRESSION_NONE,
     MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES, ZSTD_BULK_IMPORT_LEVEL, ZSTD_DEFAULT_LEVEL,
 };
 use crate::compression_frame_manifest::{CompressionFrameManifest, CompressionFrameSlice};
@@ -569,24 +569,34 @@ impl Lockbox {
         if strong_checksum(stored.as_slice()) != chunk.compression_frame_digest {
             return Err(Error::CorruptRecord);
         }
+        let start =
+            usize::try_from(chunk.compression_frame_offset).map_err(|_| Error::CorruptRecord)?;
+        let len = usize::try_from(chunk.len).map_err(|_| Error::CorruptRecord)?;
+        let end = start.checked_add(len).ok_or(Error::CorruptRecord)?;
+        if end > usize::try_from(chunk.compression_frame_len).map_err(|_| Error::CorruptRecord)? {
+            return Err(Error::CorruptRecord);
+        }
+        if chunk.compression == COMPRESSION_NONE {
+            if end > stored.len() {
+                return Err(Error::CorruptRecord);
+            }
+            let out = stored[start..end].to_vec();
+            let decoded = std::mem::take(&mut *stored);
+            self.cache_decoded_compression_frame_owned(
+                chunk,
+                cache_slices.unwrap_or_default(),
+                decoded,
+            );
+            return Ok(out);
+        }
+
         let decoded = Zeroizing::new(decode_compression_frame(
             chunk.compression,
             stored.as_slice(),
             chunk.compression_frame_len,
         )?);
-        let start =
-            usize::try_from(chunk.compression_frame_offset).map_err(|_| Error::CorruptRecord)?;
-        let len = usize::try_from(chunk.len).map_err(|_| Error::CorruptRecord)?;
-        let end = start.checked_add(len).ok_or(Error::CorruptRecord)?;
-        if end > decoded.len() {
-            return Err(Error::CorruptRecord);
-        }
         let out = decoded[start..end].to_vec();
-        self.cache_decoded_compression_frame(
-            chunk,
-            cache_slices.unwrap_or_default(),
-            decoded.as_slice(),
-        );
+        self.cache_decoded_compression_frame(chunk, cache_slices.unwrap_or_default(), &decoded);
         Ok(out)
     }
 
@@ -906,15 +916,42 @@ impl Lockbox {
         slices: Vec<CompressionFrameSlice>,
         decoded: &[u8],
     ) {
-        let limit = self.decoded_compression_frame_cache_limit();
-        if limit == 0 || decoded.len() > limit {
+        if !self.should_cache_decoded_compression_frame(decoded.len()) {
             return;
         }
+        self.insert_decoded_compression_frame(chunk, slices, decoded.to_vec());
+    }
+
+    fn cache_decoded_compression_frame_owned(
+        &self,
+        chunk: &FileChunk,
+        slices: Vec<CompressionFrameSlice>,
+        decoded: Vec<u8>,
+    ) {
+        if !self.should_cache_decoded_compression_frame(decoded.len()) {
+            return;
+        }
+        self.insert_decoded_compression_frame(chunk, slices, decoded);
+    }
+
+    fn should_cache_decoded_compression_frame(&self, decoded_len: usize) -> bool {
+        let limit = self.decoded_compression_frame_cache_limit();
+        limit > 0 && decoded_len <= limit
+    }
+
+    fn insert_decoded_compression_frame(
+        &self,
+        chunk: &FileChunk,
+        slices: Vec<CompressionFrameSlice>,
+        decoded: Vec<u8>,
+    ) {
+        let decoded_len = decoded.len();
+        let limit = self.decoded_compression_frame_cache_limit();
         let mut cache = self.compression_frame_cache.borrow_mut();
         if let Some(old) = cache.entries.remove(&chunk.compression_frame_id) {
             cache.used_bytes = cache.used_bytes.saturating_sub(old.data.len());
         }
-        while cache.used_bytes.saturating_add(decoded.len()) > limit {
+        while cache.used_bytes.saturating_add(decoded_len) > limit {
             let Some(key) = cache.entries.keys().next().copied() else {
                 break;
             };
@@ -930,10 +967,10 @@ impl Lockbox {
                 compressed_len: chunk.compressed_len,
                 compression_frame_digest: chunk.compression_frame_digest,
                 slices,
-                data: decoded.to_vec(),
+                data: decoded,
             },
         );
-        cache.used_bytes = cache.used_bytes.saturating_add(decoded.len());
+        cache.used_bytes = cache.used_bytes.saturating_add(decoded_len);
     }
 
     #[cfg(test)]

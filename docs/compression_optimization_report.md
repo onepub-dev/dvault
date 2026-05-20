@@ -25,11 +25,15 @@ Recommendation after this pass:
 3. Keep 2 MiB large-file compression frames.
 4. Keep zstd level 3 only for `BulkImport` compression frames.
 5. Keep frame-grouped parallel directory extraction.
-6. Do not implement segment delta-varints yet; current frames almost always
+6. Keep the uncompressed-frame direct-slice read fast path.
+7. Do not implement segment delta-varints yet; current frames almost always
    have one physical segment, so descriptor-to-descriptor deltas are the only
    plausible remaining delta variant.
-7. Keep dedupe, dictionaries, semi-solid grouping, and multi-threading as
+8. Keep dedupe, dictionaries, semi-solid grouping, and multi-threading as
    separate research tracks with their own measurements.
+9. Stop single-threaded format-tuning for now. The remaining measured size
+   candidates either produced no artifact change or traded too much range-read
+   performance for tiny size wins.
 
 ## Baseline Results
 
@@ -110,6 +114,35 @@ bulk small-file frames, 2 MiB large-file frames, and zstd level 3 for
 Outcome: compared with the `12bdd2d` baseline, the final stack improves
 repeated-small by 24.0%, text-tree by 16.2%, and dvault-source by 13.2%, while
 keeping high-entropy effectively unchanged.
+
+### Follow-Up Exhaustion Sweep
+
+The next sweep used commit `afaf754` as the baseline and searched for further
+single-threaded size/speed wins.
+
+| Candidate | Decision | Result |
+| --- | --- | --- |
+| TOC descriptor-to-descriptor delta varints | Reject | No fixture byte change |
+| Bulk zstd level 2 | Reject | Loses text/source size wins |
+| Bulk zstd level 4 | Reject | Text-tree regresses by about 93 KiB vs level 3 |
+| Bulk zstd level 5 | Reject | Text-tree regresses by about 89 KiB vs level 3 and is slower |
+| 3 MiB bulk frames | Reject | No meaningful size win over 2 MiB |
+| 4 MiB bulk frames | Reject | About 2 KiB total fixture win with higher RSS |
+| 3 MiB large-file frames | Reject | Tiny size win, worse zero-file add/extract and worse range reads |
+| 4 MiB large-file frames | Reject as default | Tiny zero-file size win, worse range reads and randomish size |
+| Uncompressed-frame direct slice and owned cache insert | Keep | Improves incompressible read/extract speed |
+
+Accepted speed result:
+
+| Workload | Before | After |
+| --- | ---: | ---: |
+| 100 MiB randomish 1 MiB range read | 7.00ms | 5.93ms |
+| 100 MiB randomish extract | 431.3ms | 373.2ms |
+| High-entropy directory extract | 0.53-0.55s | 0.51s |
+
+Conclusion: no further low-risk single-threaded size gains were found. The
+remaining high-potential ideas are larger design tracks: dictionaries,
+semi-solid groups, dedupe, and multi-threaded import.
 
 ### Shared TOC Descriptor Estimate
 
@@ -328,8 +361,12 @@ Measured outcome:
 - Descriptor-to-descriptor deltas may still be useful because frame ids, page
   offsets, and object ids often move monotonically across descriptors, but that
   is a separate format change from segment deltas.
-- Conclusion: do not implement H2 now. Revisit only as a descriptor-table delta
-  experiment after the current format changes settle.
+- Descriptor-to-descriptor deltas were implemented as a prototype after H1 and
+  measured against the fixture set. Every fixture had the same final artifact
+  size as the `afaf754` baseline.
+- Conclusion: reject H2 for now. The compressed/padded TOC pages absorb the
+  small descriptor-table encoding change, so it does not justify extra format
+  complexity.
 
 ## H3: Bulk Small-File Frame Size Sweep
 

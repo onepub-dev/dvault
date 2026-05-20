@@ -5,6 +5,81 @@ dependency, or implementation changes. Keep each entry self-contained: include
 the change being measured, the command, environment, baseline source, and
 observed result table.
 
+## 2026-05-21 - Follow-Up Compression Performance Sweep
+
+Description: continued from commit `afaf754 Optimize compression frame metadata
+and extraction`, treating additional size/speed improvement as the goal. Tested
+descriptor-table deltas, nearby zstd bulk levels, larger bounded frame sizes,
+and a single-threaded uncompressed-frame read fast path.
+
+Commands:
+
+```bash
+cd rust
+cargo test -p lockbox_core toc_codec -- --nocapture
+cargo test -p lockbox_core extract_many_caches_decoded_compression_frames -- --nocapture
+cargo test -p lockbox_core range_reads_only_return_requested_large_file_slice -- --nocapture
+
+# Lockbox-only fixture loops using:
+# rust/target/archive-comparison/fixtures/{repeated-small,text-tree,...}
+# and rust/target/release/lockbox add/create.
+#
+# Large-file perf:
+# LOCKBOX_PERF_SCENARIO=large LOCKBOX_PERF_LARGE_BYTES=104857600 \
+# LOCKBOX_PERF_PATTERN={zero,randomish} cargo run --release \
+# -p lockbox_core --example perf
+```
+
+Outcome summary:
+
+| Candidate | Decision | Reason |
+| --- | --- | --- |
+| TOC descriptor-to-descriptor delta varints | Reject | No fixture byte changes after compressed TOC pages |
+| Bulk zstd level 2 | Reject | Faster, but loses text/source size wins |
+| Bulk zstd level 4 | Reject | Text-tree regresses by about 93 KiB vs level 3 |
+| Bulk zstd level 5 | Reject | Text-tree regresses by about 89 KiB vs level 3 and is slower |
+| 3 MiB bulk small-file frames | Reject | No meaningful size improvement vs 2 MiB |
+| 4 MiB bulk small-file frames | Reject | Only about 2 KiB total fixture improvement with higher RSS |
+| 3 MiB large-file frames | Reject | Tiny size win, worse zero-file add/extract and worse range reads |
+| 4 MiB large-file frames | Reject as default | Tiny zero-file size win, worse range reads and randomish size |
+| Uncompressed-frame direct slice and owned cache insert | Keep | Improves randomish range/extract and high-entropy extraction |
+
+Selected measurements:
+
+| Experiment | repeated-small | text-tree | mixed-tree | high-entropy | dvault-source |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Baseline `afaf754` | 97,376 | 2,929,760 | 17,037,408 | 67,131,488 | 304,224 |
+| Descriptor deltas | 97,376 | 2,929,760 | 17,037,408 | 67,131,488 | 304,224 |
+| zstd level 2 | 97,376 | 3,490,912 | 17,037,408 | 67,131,488 | 350,304 |
+| zstd level 4 | 97,376 | 3,022,944 | 17,017,952 | 67,131,488 | 299,104 |
+| zstd level 5 | 97,376 | 3,018,848 | 17,017,952 | 67,131,488 | 298,080 |
+| 3 MiB bulk frames | 97,376 | 2,929,760 | 17,037,408 | 67,130,464 | 304,224 |
+| 4 MiB bulk frames | 97,376 | 2,928,736 | 17,037,408 | 67,130,464 | 304,224 |
+
+Large-frame sweep after `afaf754`:
+
+| Frame target | Pattern | Lockbox bytes | Add | Extract | 1 MiB range read |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 2 MiB baseline | zero | 15,456 | 162.3ms | 190.0ms | 2.50ms |
+| 3 MiB | zero | 13,408 | 232.6ms | 273.3ms | 4.98ms |
+| 4 MiB | zero | 12,384 | 166.1ms | 193.2ms | 5.98ms |
+| 2 MiB baseline | randomish | 104,881,248 | 449.1ms | 431.3ms | 7.00ms |
+| 3 MiB | randomish | 104,880,224 | 448.1ms | 357.8ms | 8.52ms |
+| 4 MiB | randomish | 104,888,416 | 454.6ms | 326.8ms | 9.64ms |
+
+Accepted fast-path measurements:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 100 MiB randomish large-file range read | 7.00ms | 5.93ms |
+| 100 MiB randomish large-file extract | 431.3ms | 373.2ms |
+| High-entropy directory extract, 3 runs | 0.53-0.55s, ~140.6-140.9 MiB RSS | 0.51s, ~139.7-139.8 MiB RSS |
+
+Conclusion: after this sweep, no additional size changes are worth taking
+without a larger design change. The only accepted follow-up is the
+uncompressed-frame read fast path, which improves speed without changing the
+format.
+
 ## 2026-05-21 - Compression Research Stack: TOC Descriptors, 2 MiB Frames, Bulk zstd-3
 
 Description: measured and applied the next compression research stack on top of
