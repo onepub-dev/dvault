@@ -979,6 +979,28 @@ provided the produced zstd frames remain decodable by the supported reader
 stack and the pure-Rust/WASM story remains clear. `repeated-small` should keep
 the current encoder path because it is already smaller there.
 
+Native encoder prototype outcome:
+
+The first implementation keeps the bounded compression-frame model but adds an
+opt-in `native-zstd-encoder` feature. The feature writes a distinct compression
+algorithm id because the current pure-Rust decoder does not decode libzstd
+frames. Default builds therefore fail closed with an explicit unsupported
+native-zstd message if they encounter a native-compressed frame.
+
+| Fixture | Default bytes | Native-zstd bytes | Delta | Default add | Native add |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| repeated-small | 97,376 | 84,064 | +13,312 | 0.32s | 0.35s |
+| text-tree | 2,929,760 | 2,094,176 | +835,584 | 0.43s | 0.15s |
+| mixed-tree | 17,037,408 | 16,866,400 | +171,008 | 0.26s | 0.22s |
+| high-entropy | 67,131,488 | 67,131,488 | 0 | 0.63s | 0.64s |
+| dvault-source | 304,224 | 236,640 | +67,584 | 0.04s | 0.01s |
+
+Conclusion: keep the native encoder as an opt-in profile. It is the first
+prototype in this research pass that materially closes the GPG/zstd gap without
+changing frame size, TOC semantics, recovery manifests, or dedupe behavior. Do
+not make it default until the project accepts the native dependency and
+feature-gated artifact compatibility story.
+
 ### H17: Solid Or Semi-Solid Archive Groups
 
 External basis:
@@ -1061,14 +1083,18 @@ Recommended state:
    enough to justify hash, refcount, privacy, and recovery costs.
 9. Reject H17 semi-solid groups as a default-format change. The measured size
    gains are tiny or negative while read amplification grows sharply.
+10. Keep the native zstd encoder prototype as an opt-in profile. It is the
+   strongest measured path toward GPG/zstd size without changing bounded frame
+   semantics, but it writes feature-gated artifacts and should not be default
+   until portability/WASM policy is settled.
 
 Next research, if the goal remains smaller than current Lockbox while
 preserving partial access:
 
 - The GPG/zstd gap now points more at compression backend/strategy than at
-  larger groups. The direct probe shows `zstd` CLI is much smaller and faster
-  than `oxiarc-zstd` on text/source bounded groups, so the next size prototype
-  should be a native/libzstd encoder path or an `oxiarc-zstd` strategy fix.
+  larger groups. The native encoder prototype confirms the backend path works
+  as an opt-in profile; the remaining decision is whether to accept the native
+  dependency/artifact compatibility tradeoff as a product profile.
 - Content-defined chunking remains a separate project gated by
   `docs/cdc_dedupe_threat_recovery_design.md` and realistic
   duplicate/shifted-version corpora; exact-file dedupe was not enough.

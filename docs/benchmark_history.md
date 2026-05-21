@@ -215,6 +215,54 @@ Conclusion:
   `oxiarc-zstd` strategy investigation, not larger frames, dictionaries, or
   dedupe.
 
+## 2026-05-21 - Native zstd Encoder Prototype
+
+Description: implemented the backend-gap recommendation as an opt-in
+`lockbox_core/native-zstd-encoder` feature. The feature uses the `zstd` crate's
+bulk compressor for compression frames and writes a distinct compression
+algorithm id. Native-compressed artifacts require a build with the same feature
+to decode; default builds fail closed with an explicit unsupported native-zstd
+message.
+
+Commands:
+
+```bash
+cd /home/bsutton/git/dvault/rust
+cargo build --offline --release -p lockbox_cli
+cargo build --offline --release -p lockbox_cli \
+  --features lockbox_core/native-zstd-encoder
+```
+
+Fixture measurement:
+
+| Fixture | Default bytes | Native-zstd bytes | Delta | Default add | Native add | Default RSS KiB | Native RSS KiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| repeated-small | 97,376 | 84,064 | +13,312 | 0.32s | 0.35s | 20,852 | 21,452 |
+| text-tree | 2,929,760 | 2,094,176 | +835,584 | 0.43s | 0.15s | 22,128 | 22,432 |
+| mixed-tree | 17,037,408 | 16,866,400 | +171,008 | 0.26s | 0.22s | 70,904 | 69,484 |
+| high-entropy | 67,131,488 | 67,131,488 | 0 | 0.63s | 0.64s | 77,432 | 77,512 |
+| dvault-source | 304,224 | 236,640 | +67,584 | 0.04s | 0.01s | 8,420 | 8,128 |
+
+Compatibility checks:
+
+```bash
+cargo test --offline -p lockbox_core \
+  native_zstd_compression_frame_requires_feature -- --nocapture
+cargo test --offline -p lockbox_core --features native-zstd-encoder \
+  native_zstd_compression_frame_round_trips_with_feature -- --nocapture
+```
+
+Outcome:
+
+- Keep the prototype as an opt-in native profile. It produces large size wins on
+  text/source workloads while preserving the current bounded compression-frame
+  shape.
+- Do not make it the default yet. Native-compressed artifacts require native
+  decode support, and the project still needs a policy decision for WASM,
+  portability, and long-term format compatibility.
+- The native path is now the leading candidate for closing the GPG/zstd gap
+  without adopting semi-solid groups, dictionaries, or dedupe.
+
 ## 2026-05-21 - Follow-Up Compression Performance Sweep
 
 Description: continued from commit `afaf754 Optimize compression frame metadata

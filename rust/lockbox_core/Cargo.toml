@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [features]
 vault-bridge = []
+native-zstd-encoder = ["dep:zstd"]
 
 [dependencies]
 argon2 = "0.5"
@@ -25,6 +26,7 @@ oxiarc-zstd = "0.2"
 sysinfo = { version = "0.38.4", default-features = false, features = [
     "system",
 ] }
+zstd = { version = "0.13.3", default-features = false, optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

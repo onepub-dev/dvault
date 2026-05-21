@@ -3,6 +3,7 @@ use crate::{Error, Result};
 
 pub(crate) const COMPRESSION_NONE: u8 = 0;
 pub(crate) const COMPRESSION_ZSTD: u8 = 1;
+pub(crate) const COMPRESSION_ZSTD_NATIVE: u8 = 2;
 const MAX_DECOMPRESSED_PAGE_BODY_BYTES: u64 = DEFAULT_MAX_PAGE_LOGICAL_BYTES as u64;
 pub(crate) const MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES: u64 = 4 * 1024 * 1024;
 const MIN_INCOMPRESSIBLE_CHECK_BYTES: usize = 64 * 1024;
@@ -65,8 +66,25 @@ fn zstd_encode(payload: &[u8], level: i32) -> Vec<u8> {
         .expect("zstd compression should not fail for an in-memory buffer")
 }
 
+#[cfg(feature = "native-zstd-encoder")]
+fn zstd_encode_compression_frame(payload: &[u8], level: i32) -> Vec<u8> {
+    zstd::bulk::compress(payload, level)
+        .expect("native zstd compression should not fail for an in-memory buffer")
+}
+
+#[cfg(not(feature = "native-zstd-encoder"))]
+fn zstd_encode_compression_frame(payload: &[u8], level: i32) -> Vec<u8> {
+    zstd_encode(payload, level)
+}
+
 fn zstd_decode(stored: &[u8]) -> Result<Vec<u8>> {
     oxiarc_zstd::decode_all(stored).map_err(|_| Error::CorruptRecord)
+}
+
+#[cfg(feature = "native-zstd-encoder")]
+fn zstd_decode_native(stored: &[u8], expected_len: u64) -> Result<Vec<u8>> {
+    let expected_len = usize::try_from(expected_len).map_err(|_| Error::CorruptRecord)?;
+    zstd::bulk::decompress(stored, expected_len).map_err(|_| Error::CorruptRecord)
 }
 
 pub(crate) fn encode_compression_frame(payload: &[u8]) -> (u8, Vec<u8>) {
@@ -77,12 +95,22 @@ pub(crate) fn encode_compression_frame_with_level(payload: &[u8], level: i32) ->
     if looks_incompressible(payload) {
         return (COMPRESSION_NONE, payload.to_vec());
     }
-    let compressed = zstd_encode(payload, level);
+    let compressed = zstd_encode_compression_frame(payload, level);
     if compressed.len() < payload.len() {
-        (COMPRESSION_ZSTD, compressed)
+        (compression_frame_zstd_algorithm(), compressed)
     } else {
         (COMPRESSION_NONE, payload.to_vec())
     }
+}
+
+#[cfg(feature = "native-zstd-encoder")]
+fn compression_frame_zstd_algorithm() -> u8 {
+    COMPRESSION_ZSTD_NATIVE
+}
+
+#[cfg(not(feature = "native-zstd-encoder"))]
+fn compression_frame_zstd_algorithm() -> u8 {
+    COMPRESSION_ZSTD
 }
 
 pub(crate) fn decode_compression_frame(
@@ -103,6 +131,24 @@ pub(crate) fn decode_compression_frame(
                 return Err(Error::CorruptRecord);
             }
             zstd_decode(stored)?
+        }
+        COMPRESSION_ZSTD_NATIVE => {
+            #[cfg(feature = "native-zstd-encoder")]
+            {
+                let declared_len =
+                    zstd_declared_content_size(stored)?.ok_or(Error::CorruptRecord)?;
+                if declared_len != expected_len {
+                    return Err(Error::CorruptRecord);
+                }
+                zstd_decode_native(stored, expected_len)?
+            }
+            #[cfg(not(feature = "native-zstd-encoder"))]
+            {
+                return Err(Error::InvalidOperation(
+                    "lockbox uses native zstd compression; rebuild with native-zstd-encoder support"
+                        .to_string(),
+                ));
+            }
         }
         _ => return Err(Error::CorruptRecord),
     };
@@ -294,6 +340,35 @@ mod tests {
             decode_compression_frame(COMPRESSION_ZSTD, &stored, payload.len() as u64 + 1),
             Err(Error::CorruptRecord)
         ));
+    }
+
+    #[cfg(not(feature = "native-zstd-encoder"))]
+    #[test]
+    fn native_zstd_compression_frame_requires_feature() {
+        let err = decode_compression_frame(COMPRESSION_ZSTD_NATIVE, &[], 0).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidOperation(message)
+                if message.contains("native zstd compression")
+                    && message.contains("native-zstd-encoder")
+        ));
+    }
+
+    #[cfg(feature = "native-zstd-encoder")]
+    #[test]
+    fn native_zstd_compression_frame_round_trips_with_feature() {
+        let payload = b"native backend compatibility ".repeat(4096);
+        let (algorithm, stored) = encode_compression_frame_with_level(&payload, 1);
+
+        assert_eq!(algorithm, COMPRESSION_ZSTD_NATIVE);
+        assert_eq!(
+            zstd_declared_content_size(&stored).unwrap(),
+            Some(payload.len() as u64)
+        );
+        assert_eq!(
+            decode_compression_frame(algorithm, &stored, payload.len() as u64).unwrap(),
+            payload
+        );
     }
 
     fn fill_randomish(buf: &mut [u8]) {
