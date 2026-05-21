@@ -5,6 +5,120 @@ dependency, or implementation changes. Keep each entry self-contained: include
 the change being measured, the command, environment, baseline source, and
 observed result table.
 
+## 2026-05-21 - Current Lockbox vs GPG Archive Comparison
+
+Description: reran the archive comparison harness after commits
+`afaf754 Optimize compression frame metadata and extraction` and
+`94ed764 Optimize uncompressed frame reads`. The harness compares current
+Lockbox output against GPG symmetric encryption using default compression,
+GPG zlib level 9, and external zstd streams encrypted with GPG compression
+disabled.
+
+Commands:
+
+```bash
+cd /home/bsutton/git/dvault
+bash rust/tools/compare_archive_compression.sh
+```
+
+Environment:
+
+- Host: local Linux workstation
+- Fixture output: `rust/target/archive-comparison/results/summary.tsv`
+- Timing source: `/usr/bin/time`, elapsed wall-clock seconds and max RSS
+
+Results:
+
+| Fixture | Tool | Logical bytes | Output bytes | Seconds | Max RSS KiB |
+| --- | --- | ---: | ---: | ---: | ---: |
+| repeated-small | Lockbox | 104,857,600 | 97,376 | 0.29 | 20,988 |
+| repeated-small | `tar | gpg` default | 104,857,600 | 463,334 | 0.64 | 5,320 |
+| repeated-small | `tar | gpg --compress-algo zlib --compress-level 9` | 104,857,600 | 200,155 | 0.70 | 5,540 |
+| repeated-small | `tar | zstd -1 | gpg --compress-algo none` | 104,857,600 | 55,627 | 0.15 | 17,712 |
+| repeated-small | `tar | zstd -19 | gpg --compress-algo none` | 104,857,600 | 48,495 | 0.44 | 437,140 |
+| text-tree | Lockbox | 30,193,763 | 2,929,760 | 0.44 | 22,068 |
+| text-tree | `tar | gpg` default | 30,193,763 | 2,494,015 | 0.36 | 5,264 |
+| text-tree | `tar | gpg --compress-algo zlib --compress-level 9` | 30,193,763 | 2,007,625 | 0.57 | 5,256 |
+| text-tree | `tar | zstd -1 | gpg --compress-algo none` | 30,193,763 | 1,763,322 | 0.20 | 18,216 |
+| text-tree | `tar | zstd -19 | gpg --compress-algo none` | 30,193,763 | 1,126,606 | 25.18 | 117,024 |
+| mixed-tree | Lockbox | 21,947,435 | 17,037,408 | 0.26 | 71,360 |
+| mixed-tree | `tar | gpg` default | 21,947,435 | 17,019,926 | 0.63 | 5,436 |
+| mixed-tree | `tar | gpg --compress-algo zlib --compress-level 9` | 21,947,435 | 16,939,281 | 0.73 | 5,648 |
+| mixed-tree | `tar | zstd -1 | gpg --compress-algo none` | 21,947,435 | 16,984,571 | 0.26 | 23,048 |
+| mixed-tree | `tar | zstd -19 | gpg --compress-algo none` | 21,947,435 | 16,862,451 | 5.50 | 125,124 |
+| high-entropy | Lockbox | 67,108,880 | 67,131,488 | 0.64 | 77,532 |
+| high-entropy | `tar | gpg` default | 67,108,880 | 67,299,458 | 1.85 | 5,476 |
+| high-entropy | `tar | gpg --compress-algo zlib --compress-level 9` | 67,108,880 | 67,177,002 | 2.04 | 5,452 |
+| high-entropy | `tar | zstd -1 | gpg --compress-algo none` | 67,108,880 | 67,174,412 | 0.57 | 22,712 |
+| high-entropy | `tar | zstd -19 | gpg --compress-algo none` | 67,108,880 | 67,172,282 | 8.66 | 383,124 |
+| dvault-source | Lockbox | 1,039,364 | 304,224 | 0.03 | 8,348 |
+| dvault-source | `tar | gpg` default | 1,039,364 | 258,947 | 0.17 | 5,556 |
+| dvault-source | `tar | gpg --compress-algo zlib --compress-level 9` | 1,039,364 | 226,736 | 0.21 | 5,336 |
+| dvault-source | `tar | zstd -1 | gpg --compress-algo none` | 1,039,364 | 254,388 | 0.15 | 5,488 |
+| dvault-source | `tar | zstd -19 | gpg --compress-algo none` | 1,039,364 | 179,158 | 0.38 | 87,088 |
+
+Conclusion:
+
+- Lockbox is much smaller and faster than GPG default or GPG zlib9 on the
+  repeated-small fixture while preserving indexed recovery metadata.
+- Solid zstd archive streams remain smaller on repeated/text/source fixtures
+  because they compress one tar stream rather than bounded random-access
+  frames.
+- Lockbox remains effectively optimal on high-entropy data and smaller than
+  every GPG comparison row for that fixture.
+- `dvault-source` is where dictionary or semi-solid experiments are most
+  interesting: Lockbox is fastest, but still larger than all archive-wide
+  compression rows.
+
+## 2026-05-21 - Dictionary And Exact-Dedupe Probes
+
+Description: measured two larger research ideas without changing the Lockbox
+format: per-corpus zstd dictionaries for 2 MiB compression frames, and exact
+file-content dedupe before frame compression. Both probes use the archive
+comparison fixtures and current 2 MiB frame sizing.
+
+Commands:
+
+```bash
+cd /home/bsutton/git/dvault/rust
+cargo run --release -p lockbox_core --example dict_probe -- \
+  target/archive-comparison/fixtures/{fixture}
+cargo run --release -p lockbox_core --example dedupe_probe -- \
+  target/archive-comparison/fixtures/{fixture}
+```
+
+Dictionary probe results:
+
+| Fixture | Baseline frame bytes | Best dict size | Dict frame bytes | Dict total bytes | Net delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| repeated-small | 3,899 | 16 | 4,103 | 4,119 | -220 |
+| text-tree | 2,890,828 | 4,096 | 2,880,382 | 2,884,478 | +6,350 |
+| mixed-tree | 17,010,876 | 4,096 | 17,009,224 | 17,013,320 | -2,444 |
+| high-entropy | 67,108,880 | 20 | 67,108,880 | 67,108,900 | -20 |
+| dvault-source | 294,478 | 4,094 | 293,186 | 297,280 | -2,802 |
+
+Exact-file dedupe probe results:
+
+| Fixture | Logical bytes | Duplicate bytes | Hash ms | Baseline frame bytes | Deduped frame bytes | Frame delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| repeated-small | 104,857,600 | 104,832,000 | 49.535 | 3,899 | 15 | +3,884 |
+| text-tree | 30,193,763 | 0 | 14.960 | 2,890,828 | 2,890,828 | 0 |
+| mixed-tree | 21,947,435 | 2,796 | 10.883 | 17,010,876 | 17,010,871 | +5 |
+| high-entropy | 67,108,880 | 0 | 32.645 | 67,108,880 | 67,108,880 | 0 |
+| dvault-source | 1,039,364 | 0 | 0.565 | 294,478 | 294,478 | 0 |
+
+Conclusion:
+
+- Dictionary compression is not a default-format win in this shape. Only the
+  text fixture had a net positive result after storing the dictionary, and the
+  gain was 6,350 bytes while dictionary training cost about 2.8 seconds.
+- Exact-file dedupe is not worth implementing for this branch. Compression
+  already captures the duplicate repeated-small fixture, and realistic fixtures
+  had no material exact-duplicate savings.
+- Content-defined dedupe remains a separate, higher-complexity research track
+  because it may find shifted or partial duplicates, but it needs a privacy,
+  refcount, and recovery design before implementation.
+
 ## 2026-05-21 - Follow-Up Compression Performance Sweep
 
 Description: continued from commit `afaf754 Optimize compression frame metadata

@@ -29,9 +29,14 @@ Recommendation after this pass:
 7. Do not implement segment delta-varints yet; current frames almost always
    have one physical segment, so descriptor-to-descriptor deltas are the only
    plausible remaining delta variant.
-8. Keep dedupe, dictionaries, semi-solid grouping, and multi-threading as
+8. Reject dictionaries for the default format for now; the measured net gains
+   are too small and workload-sensitive after dictionary storage is counted.
+9. Reject exact-file dedupe for this branch; zstd already captures the only
+   fixture with massive exact duplicates, and realistic fixtures show no
+   material savings.
+10. Keep content-defined dedupe, semi-solid grouping, and multi-threading as
    separate research tracks with their own measurements.
-9. Stop single-threaded format-tuning for now. The remaining measured size
+11. Stop single-threaded format-tuning for now. The remaining measured size
    candidates either produced no artifact change or traded too much range-read
    performance for tiny size wins.
 
@@ -232,17 +237,30 @@ local runs. Profile before optimizing H6/H7.
 
 ### Zstd Dictionary Feasibility Probe
 
-This did not modify Lockbox. It trained a zstd dictionary from fixture samples
-and compressed files independently with and without the dictionary.
+The first probe did not modify Lockbox. It trained a zstd dictionary from
+fixture samples and compressed files independently with and without the
+dictionary.
 
 | Fixture | Independent zstd -1 | zstd -1 with trained dictionary | Outcome |
 | --- | ---: | ---: | --- |
 | text-tree | 1,890,678 | 2,100,782 | dictionary worsened size |
 | dvault-source | 295,533 | 248,761 | dictionary improved size by 15.8% |
 
-Outcome: dictionary compression is workload-sensitive. It is worth a later
-targeted experiment for source-like corpora, but it is not a safe default based
-on this simple training method.
+The second probe simulated current Lockbox-style 2 MiB compression frames using
+`oxiarc-zstd`, counted dictionary storage, and did not modify the format.
+
+| Fixture | Baseline frame bytes | Best dict size | Dict frame bytes | Dict total bytes | Net delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| repeated-small | 3,899 | 16 | 4,103 | 4,119 | -220 |
+| text-tree | 2,890,828 | 4,096 | 2,880,382 | 2,884,478 | +6,350 |
+| mixed-tree | 17,010,876 | 4,096 | 17,009,224 | 17,013,320 | -2,444 |
+| high-entropy | 67,108,880 | 20 | 67,108,880 | 67,108,900 | -20 |
+| dvault-source | 294,478 | 4,094 | 293,186 | 297,280 | -2,802 |
+
+Outcome: dictionary compression is workload-sensitive and the frame-level
+benefit is not large enough to justify default-format dictionary storage,
+authentication, recovery, and decode complexity. The only net win was
+`text-tree`, at 6,350 bytes, with about 2.8 seconds of dictionary training.
 
 ### Lockbox Zstd Level Sweep
 
@@ -596,6 +614,26 @@ Preliminary conclusion:
 Do not include dedupe in the compression-frame optimization branch. It is a
 separate research project.
 
+Measured outcome:
+
+An exact-file dedupe probe was run before compression. The probe hashes each
+file payload, keeps the first copy of each digest, and compresses only unique
+file content into the same 2 MiB frame layout. It estimates the best case for
+exact file dedupe without implementing refcounts or format changes.
+
+| Fixture | Logical bytes | Duplicate bytes | Hash ms | Baseline frame bytes | Deduped frame bytes | Frame delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| repeated-small | 104,857,600 | 104,832,000 | 49.535 | 3,899 | 15 | +3,884 |
+| text-tree | 30,193,763 | 0 | 14.960 | 2,890,828 | 2,890,828 | 0 |
+| mixed-tree | 21,947,435 | 2,796 | 10.883 | 17,010,876 | 17,010,871 | +5 |
+| high-entropy | 67,108,880 | 0 | 32.645 | 67,108,880 | 67,108,880 | 0 |
+| dvault-source | 1,039,364 | 0 | 0.565 | 294,478 | 294,478 | 0 |
+
+Conclusion: reject exact-file dedupe for this branch. It adds hash CPU,
+reference tracking, equality leakage, and recovery complexity for no material
+realistic-corpus saving. Even the synthetic repeated-small fixture saves only
+3,884 compressed frame bytes because zstd already captures the repeated data.
+
 ## H9: Multi-Threaded Import
 
 Hypothesis:
@@ -667,8 +705,11 @@ Measured outcome:
 
 - External zstd dictionary probe improved `dvault-source` independent-file
   compression by 15.8%, but worsened `text-tree` by 11.1%.
-- Conclusion: dictionary compression is workload-sensitive. Research further
-  only as an explicit profile or trained-per-corpus experiment.
+- The Lockbox-frame simulation found only one net win after counting dictionary
+  storage: `text-tree` saved 6,350 bytes with a 4 KiB dictionary. Other
+  fixtures regressed once dictionary bytes were counted.
+- Conclusion: reject dictionaries for the default format. Research further
+  only as an explicit trained-per-corpus archive profile.
 
 ### H11: Seekable Zstd-Style Framing
 
@@ -736,6 +777,14 @@ Preliminary conclusion:
 
 High potential, high complexity. This is not an opportunistic optimization.
 Keep it as a separate research project.
+
+Measured outcome:
+
+- Exact-file dedupe did not produce material savings on realistic fixtures.
+- This does not disprove CDC, because CDC targets shifted and partial
+  duplicates rather than whole-file equality, but it raises the bar for any
+  dedupe work: it must show large realistic-corpus wins after CPU, metadata,
+  privacy, and recovery costs are included.
 
 ### H13: Chunking Privacy And Metadata Leakage
 
@@ -915,36 +964,35 @@ profile boundary.
 
 ## Final Conclusions
 
-The current branch is in a good state to become the baseline for controlled
-experiments. The next likely size win is not more generic zstd tuning; it is
-removing repeated TOC metadata while leaving recovery metadata in the file-data
-segments.
+The current branch has exhausted the low-risk single-threaded format tuning
+that was measured in this research pass.
 
-Recommended next sequence:
+Recommended state:
 
-1. Implement and measure H1.
-2. Repeat the 2 MiB H3/H4 constant runs to confirm they are stable.
-3. Test zstd level 3 combined with the 2 MiB bulk target as a profile candidate.
-4. If H1 wins, only then revisit H2; otherwise drop H2.
-5. Try H5 as a speed-only change after frame-size decisions.
-6. Profile before attempting H6 or H7.
-7. Research H10, H11, H15, and H16 as likely-compatible techniques.
-8. Keep H8, H9, H12, H13, H14, and H17 as separate tracks unless the product
-   goal explicitly shifts toward backup/archive semantics.
+1. Keep H1 shared TOC descriptors.
+2. Keep H3/H4 2 MiB bounded compression frames.
+3. Keep H5 frame-grouped extraction.
+4. Keep H16 zstd level 3 for `BulkImport` compression frames only.
+5. Keep the uncompressed-frame direct-slice read fast path from the follow-up
+   speed sweep.
+6. Reject H2 segment/delta variants for now because they produced no artifact
+   size change.
+7. Reject H10 dictionaries for the default format because the measured net
+   gains are too small and inconsistent.
+8. Reject H8 exact-file dedupe for this branch because it does not beat zstd
+   enough to justify hash, refcount, privacy, and recovery costs.
 
-Expected outcome:
+Next research, if the goal remains smaller than current Lockbox while
+preserving partial access:
 
-- H1 has the highest probability of a useful size win with acceptable risk.
-- H2 is now lower priority because current frames usually have one physical
-  segment.
-- H3/H4 measurements both point at 2 MiB as the best next candidate.
-- H5 may improve extraction speed if larger shared frames are kept, but current
-  directory extraction is already strong.
-- H6/H7 do not yet have evidence justifying implementation.
-- H10 dictionary compression is mixed; H16 zstd level 3 is more immediately
-  promising for a bulk/archive profile.
-- H11 is useful as a reference model, not as a direct adoption target.
-- H12/H13/H14/H17 are larger projects, not opportunistic branch work.
+- Semi-solid archive groups are the most plausible route toward GPG/zstd
+  ratios, but only as an explicit profile with a clear access/update tradeoff.
+- Content-defined chunking should be a separate project with a threat model and
+  realistic duplicate/shifted-version corpora; exact-file dedupe was not enough.
+- Multi-threaded import is now the most plausible speed track, but it should
+  build on the settled single-threaded frame choices rather than changing them.
+- Seekable-zstd and domain-specific metadata codecs remain useful references,
+  but the directly measured metadata codec change has already landed as H1.
 
 ## References
 
