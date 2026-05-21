@@ -34,9 +34,14 @@ Recommendation after this pass:
 9. Reject exact-file dedupe for this branch; zstd already captures the only
    fixture with massive exact duplicates, and realistic fixtures show no
    material savings.
-10. Keep content-defined dedupe, semi-solid grouping, and multi-threading as
-   separate research tracks with their own measurements.
-11. Stop single-threaded format-tuning for now. The remaining measured size
+10. Reject semi-solid grouping as a default-format change; the measured size
+   gain is tiny or negative while read amplification increases sharply.
+11. Investigate a native/libzstd encoder path or `oxiarc-zstd` strategy fix.
+   The measured GPG/zstd gap is primarily an encoder backend gap, not a
+   grouping, dictionary, or dedupe gap.
+12. Keep content-defined dedupe and multi-threading as separate research tracks
+   with their own measurements.
+13. Stop single-threaded format-tuning for now. The remaining measured size
    candidates either produced no artifact change or traded too much range-read
    performance for tiny size wins.
 
@@ -785,6 +790,11 @@ Measured outcome:
   duplicates rather than whole-file equality, but it raises the bar for any
   dedupe work: it must show large realistic-corpus wins after CPU, metadata,
   privacy, and recovery costs are included.
+- The required CDC threat/recovery gate is now documented in
+  `docs/cdc_dedupe_threat_recovery_design.md`. It requires path-bearing file
+  manifests for TOC-loss recovery, keyed per-lockbox chunk ids, rebuildable
+  refcount/index state, delete redaction, and explicit chunk-size leakage
+  analysis before implementation.
 
 ### H13: Chunking Privacy And Metadata Leakage
 
@@ -817,6 +827,15 @@ Preliminary conclusion:
 
 This is the main reason dedupe should remain separate. Compression-frame work
 does not currently need to accept these risks.
+
+Measured outcome:
+
+- `docs/cdc_dedupe_threat_recovery_design.md` now captures the required threat
+  model before any CDC prototype: storage readers/writers, access-pattern
+  observers, chosen-input collaborators, and newly added authorized recipients.
+- Required constraints include no cross-lockbox dedupe, no convergent
+  encryption, no clear-text chunk metadata, keyed chunk identifiers, and
+  recovery that does not trust mutable refcounts.
 
 ### H14: Rsync-Style Delta Encoding
 
@@ -932,6 +951,34 @@ Measured outcome:
   Do not change page-body metadata compression or interactive compression
   frames from level 1.
 
+Follow-up backend-gap outcome:
+
+The GPG/zstd archive gap was measured directly against the current zstd backend
+by compressing the same fixture payloads in the same 2 MiB file-boundary groups.
+
+| Fixture | Backend | Level | 2 MiB frame bytes | Compress ms |
+| --- | --- | ---: | ---: | ---: |
+| text-tree | `oxiarc-zstd` | 3 | 2,890,828 | 322.197 |
+| text-tree | `zstd` CLI | 1 | 1,726,640 | 119.125 |
+| text-tree | `zstd` CLI | 6 | 1,653,236 | 305.772 |
+| text-tree | `zstd` CLI | 19 | 1,063,211 | 18,684.987 |
+| dvault-source | `oxiarc-zstd` | 3 | 294,478 | 23.003 |
+| dvault-source | `zstd` CLI | 1 | 248,149 | 8.150 |
+| dvault-source | `zstd` CLI | 3 | 226,102 | 9.968 |
+| mixed-tree | `oxiarc-zstd` | 3 | 17,010,876 | 530.230 |
+| mixed-tree | `zstd` CLI | 3 | 16,834,770 | 88.920 |
+| high-entropy | `oxiarc-zstd` | 3 | 67,108,880 | 1,926.788 |
+| high-entropy | `zstd` CLI | 3 | 67,108,880 | 273.057 |
+| repeated-small | `oxiarc-zstd` | 3 | 3,899 | 80.021 |
+| repeated-small | `zstd` CLI | 3 | 4,358 | 347.108 |
+
+Conclusion: the text/source gap is mostly the encoder backend or strategy, not
+the bounded-frame model. A native/libzstd encoder profile could improve
+`text-tree` and `dvault-source` size without changing the Lockbox file format,
+provided the produced zstd frames remain decodable by the supported reader
+stack and the pure-Rust/WASM story remains clear. `repeated-small` should keep
+the current encoder path because it is already smaller there.
+
 ### H17: Solid Or Semi-Solid Archive Groups
 
 External basis:
@@ -962,6 +1009,37 @@ This is the principled way to chase archive-tool ratios, but it changes product
 semantics. Do not mix it with the default indexed format until there is a clear
 profile boundary.
 
+Measured outcome:
+
+The semi-solid probe compressed fixture payloads with current 2 MiB grouping
+and larger group targets using the current pure-Rust zstd backend at level 3.
+It also measured the decompression amplification paid when every file is read
+independently once.
+
+| Fixture | 2 MiB frame bytes | Best larger group | Larger-group bytes | Delta vs 2 MiB | All-files-once read amplification |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| repeated-small | 3,899 | solid 100 MiB | 3,213 | +686 | 4,096.000x |
+| text-tree | 2,890,828 | none | 2,890,828 | 0 | 69.797x |
+| mixed-tree | 17,010,876 | 4 MiB | 17,010,859 | +17 | 137.219x |
+| high-entropy | 67,108,880 | none | 67,108,880 | 0 | 1.984x |
+| dvault-source | 294,478 | none | 294,478 | 0 | 131.000x |
+
+An external zstd sanity check on concatenated `text-tree` payloads showed that
+solid grouping alone does not explain the archive-compression gap:
+
+| Tool/shape | Compressed bytes |
+| --- | ---: |
+| `zstd -1`, 2 MiB split | 1,724,626 |
+| `zstd -1`, solid raw payload | 1,712,429 |
+| `zstd -3`, 2 MiB split | 2,059,143 |
+| `zstd -3`, solid raw payload | 2,088,798 |
+
+Conclusion: reject H17 as a default-format change. Larger semi-solid groups do
+not produce enough size improvement to justify worse random access, update
+granularity, decompression-bomb review, and recovery complexity. The remaining
+GPG/zstd gap was investigated as a compression backend/strategy question and
+points at the encoder backend, not group size.
+
 ## Final Conclusions
 
 The current branch has exhausted the low-risk single-threaded format tuning
@@ -981,14 +1059,19 @@ Recommended state:
    gains are too small and inconsistent.
 8. Reject H8 exact-file dedupe for this branch because it does not beat zstd
    enough to justify hash, refcount, privacy, and recovery costs.
+9. Reject H17 semi-solid groups as a default-format change. The measured size
+   gains are tiny or negative while read amplification grows sharply.
 
 Next research, if the goal remains smaller than current Lockbox while
 preserving partial access:
 
-- Semi-solid archive groups are the most plausible route toward GPG/zstd
-  ratios, but only as an explicit profile with a clear access/update tradeoff.
-- Content-defined chunking should be a separate project with a threat model and
-  realistic duplicate/shifted-version corpora; exact-file dedupe was not enough.
+- The GPG/zstd gap now points more at compression backend/strategy than at
+  larger groups. The direct probe shows `zstd` CLI is much smaller and faster
+  than `oxiarc-zstd` on text/source bounded groups, so the next size prototype
+  should be a native/libzstd encoder path or an `oxiarc-zstd` strategy fix.
+- Content-defined chunking remains a separate project gated by
+  `docs/cdc_dedupe_threat_recovery_design.md` and realistic
+  duplicate/shifted-version corpora; exact-file dedupe was not enough.
 - Multi-threaded import is now the most plausible speed track, but it should
   build on the settled single-threaded frame choices rather than changing them.
 - Seekable-zstd and domain-specific metadata codecs remain useful references,

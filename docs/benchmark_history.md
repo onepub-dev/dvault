@@ -119,6 +119,102 @@ Conclusion:
   because it may find shifted or partial duplicates, but it needs a privacy,
   refcount, and recovery design before implementation.
 
+## 2026-05-21 - Semi-Solid Group Size Probe And CDC Design Gate
+
+Description: measured semi-solid compression groups without changing the
+Lockbox format, then documented the threat/recovery gate required before any
+content-defined chunking implementation. The semi-solid probe uses the current
+pure-Rust zstd backend at level 3 and compares larger group targets against the
+current 2 MiB compression-frame shape.
+
+Commands:
+
+```bash
+cd /home/bsutton/git/dvault/rust
+cargo run --release -p lockbox_core --example semisolid_probe -- \
+  target/archive-comparison/fixtures/{fixture}
+```
+
+Selected semi-solid results:
+
+| Fixture | 2 MiB frame bytes | Best larger group | Larger-group bytes | Delta vs 2 MiB | All-files-once read amplification |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| repeated-small | 3,899 | solid 100 MiB | 3,213 | +686 | 4,096.000x |
+| text-tree | 2,890,828 | none | 2,890,828 | 0 | 69.797x |
+| mixed-tree | 17,010,876 | 4 MiB | 17,010,859 | +17 | 137.219x |
+| high-entropy | 67,108,880 | none | 67,108,880 | 0 | 1.984x |
+| dvault-source | 294,478 | none | 294,478 | 0 | 131.000x |
+
+External zstd sanity check on concatenated `text-tree` payload bytes:
+
+| Tool/shape | Compressed bytes |
+| --- | ---: |
+| `zstd -1`, 2 MiB split | 1,724,626 |
+| `zstd -1`, solid raw payload | 1,712,429 |
+| `zstd -3`, 2 MiB split | 2,059,143 |
+| `zstd -3`, solid raw payload | 2,088,798 |
+
+Conclusion:
+
+- Reject semi-solid groups as a default-format size change. The measured gains
+  are tiny or negative while random-access amplification increases sharply.
+- The GPG/zstd archive gap is not explained by group size alone. A zstd CLI raw
+  payload check improved `text-tree` by only about 12 KiB from 2 MiB split to
+  solid at level 1, and level 3 was worse when made solid.
+- The more useful follow-up is a separate backend/strategy comparison, not
+  larger default compression groups.
+- CDC remains separate. The design gate is now documented in
+  `docs/cdc_dedupe_threat_recovery_design.md`; no CDC implementation should
+  proceed until that threat/recovery model is accepted.
+
+## 2026-05-21 - Zstd Backend Gap Probe
+
+Description: investigated why GPG/zstd archive rows are much smaller than
+Lockbox on `text-tree` and `dvault-source`. The probe compresses the same raw
+fixture payloads in the same 2 MiB file-boundary groups with both the current
+`oxiarc-zstd` encoder and the local `zstd` CLI.
+
+Commands:
+
+```bash
+cd /home/bsutton/git/dvault/rust
+cargo run --release -p lockbox_core --example zstd_gap_probe -- \
+  target/archive-comparison/fixtures/{fixture}
+```
+
+Selected results:
+
+| Fixture | Shape | Backend | Level | Compressed bytes | Compress ms |
+| --- | --- | --- | ---: | ---: | ---: |
+| text-tree | 2 MiB | `oxiarc-zstd` | 3 | 2,890,828 | 322.197 |
+| text-tree | 2 MiB | `zstd` CLI | 1 | 1,726,640 | 119.125 |
+| text-tree | 2 MiB | `zstd` CLI | 6 | 1,653,236 | 305.772 |
+| text-tree | 2 MiB | `zstd` CLI | 19 | 1,063,211 | 18,684.987 |
+| dvault-source | 2 MiB | `oxiarc-zstd` | 3 | 294,478 | 23.003 |
+| dvault-source | 2 MiB | `zstd` CLI | 1 | 248,149 | 8.150 |
+| dvault-source | 2 MiB | `zstd` CLI | 3 | 226,102 | 9.968 |
+| dvault-source | 2 MiB | `zstd` CLI | 19 | 173,620 | 329.645 |
+| mixed-tree | 2 MiB | `oxiarc-zstd` | 3 | 17,010,876 | 530.230 |
+| mixed-tree | 2 MiB | `zstd` CLI | 3 | 16,834,770 | 88.920 |
+| high-entropy | 2 MiB | `oxiarc-zstd` | 3 | 67,108,880 | 1,926.788 |
+| high-entropy | 2 MiB | `zstd` CLI | 3 | 67,108,880 | 273.057 |
+| repeated-small | 2 MiB | `oxiarc-zstd` | 3 | 3,899 | 80.021 |
+| repeated-small | 2 MiB | `zstd` CLI | 3 | 4,358 | 347.108 |
+
+Conclusion:
+
+- The text/source GPG-zstd gap is primarily a zstd backend/strategy gap, not a
+  semi-solid grouping gap.
+- `zstd` CLI level 1 on the same 2 MiB groups nearly matches the archive
+  comparison's `tar | zstd -1 | gpg --compress-algo none` result for
+  `text-tree`, while preserving bounded groups.
+- For `dvault-source`, `zstd` CLI level 3 on one bounded group reaches 226,102
+  bytes before Lockbox metadata/encryption overhead, matching the GPG zlib9
+  size class and substantially beating current Lockbox frame bytes.
+- The next size experiment should be a native/libzstd encoder path or an
+  `oxiarc-zstd` strategy investigation, not larger frames, dictionaries, or
+  dedupe.
+
 ## 2026-05-21 - Follow-Up Compression Performance Sweep
 
 Description: continued from commit `afaf754 Optimize compression frame metadata
