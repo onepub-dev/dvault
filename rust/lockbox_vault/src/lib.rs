@@ -17,6 +17,7 @@ mod content_key_store;
 mod hex;
 mod key_format;
 mod noop_store;
+mod platform_secret_store;
 mod vault;
 mod vault_directory;
 
@@ -45,6 +46,11 @@ pub use key_format::{
     import_public_key, KeyFormat,
 };
 pub use noop_store::NoopStore;
+pub use platform_secret_store::{
+    disable_platform_secret_store, enable_platform_secret_store, forget_platform_vault_password,
+    get_platform_vault_password, platform_secret_store_disabled, platform_secret_store_status,
+    put_platform_vault_password, PlatformSecretStoreStatus,
+};
 pub use vault::{local_vault, LocalVault, Vault};
 pub use vault_directory::{
     default_vault_dir, default_vault_path, StoredTrustedRecipient, VaultDirectory,
