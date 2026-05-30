@@ -1,5 +1,7 @@
 use crate::constants::DEFAULT_MAX_PAGE_LOGICAL_BYTES;
 use crate::{Error, Result};
+use ruzstd::decoding::FrameDecoder;
+use ruzstd::encoding::{compress_to_vec, CompressionLevel};
 
 pub(crate) const COMPRESSION_NONE: u8 = 0;
 pub(crate) const COMPRESSION_ZSTD: u8 = 1;
@@ -52,7 +54,7 @@ pub(crate) fn decode_page_body(body: &[u8]) -> Result<Vec<u8>> {
     let stored = &body[17..17 + stored_len];
     let decoded = match algorithm {
         COMPRESSION_NONE => stored.to_vec(),
-        COMPRESSION_ZSTD => zstd_decode(stored)?,
+        COMPRESSION_ZSTD => zstd_decode(stored, real_len)?,
         _ => return Err(Error::CorruptRecord),
     };
     if decoded.len() as u64 != real_len {
@@ -62,8 +64,7 @@ pub(crate) fn decode_page_body(body: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn zstd_encode(payload: &[u8], level: i32) -> Vec<u8> {
-    oxiarc_zstd::encode_all(payload, level)
-        .expect("zstd compression should not fail for an in-memory buffer")
+    compress_to_vec(payload, ruzstd_level(level))
 }
 
 #[cfg(feature = "native-zstd-encoder")]
@@ -77,8 +78,23 @@ fn zstd_encode_compression_frame(payload: &[u8], level: i32) -> Vec<u8> {
     zstd_encode(payload, level)
 }
 
-fn zstd_decode(stored: &[u8]) -> Result<Vec<u8>> {
-    oxiarc_zstd::decode_all(stored).map_err(|_| Error::CorruptRecord)
+fn zstd_decode(stored: &[u8], expected_len: u64) -> Result<Vec<u8>> {
+    let expected_len = usize::try_from(expected_len).map_err(|_| Error::CorruptRecord)?;
+    let mut decoded = Vec::with_capacity(expected_len);
+    FrameDecoder::new()
+        .decode_all_to_vec(stored, &mut decoded)
+        .map_err(|_| Error::CorruptRecord)?;
+    Ok(decoded)
+}
+
+fn ruzstd_level(level: i32) -> CompressionLevel {
+    match level {
+        i32::MIN..=0 => CompressionLevel::Uncompressed,
+        1 => CompressionLevel::Fastest,
+        2..=3 => CompressionLevel::Default,
+        4..=6 => CompressionLevel::Better,
+        _ => CompressionLevel::Best,
+    }
 }
 
 #[cfg(feature = "native-zstd-encoder")]
@@ -126,11 +142,16 @@ pub(crate) fn decode_compression_frame(
     let decoded = match algorithm {
         COMPRESSION_NONE => stored.to_vec(),
         COMPRESSION_ZSTD => {
-            let declared_len = zstd_declared_content_size(stored)?.ok_or(Error::CorruptRecord)?;
-            if declared_len != expected_len {
+            if let Some(declared_len) = zstd_declared_content_size(stored)? {
+                if declared_len != expected_len {
+                    return Err(Error::CorruptRecord);
+                }
+            }
+            let decoded = zstd_decode(stored, expected_len)?;
+            if decoded.len() as u64 != expected_len {
                 return Err(Error::CorruptRecord);
             }
-            zstd_decode(stored)?
+            decoded
         }
         COMPRESSION_ZSTD_NATIVE => {
             #[cfg(feature = "native-zstd-encoder")]

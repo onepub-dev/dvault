@@ -1750,3 +1750,187 @@ Conclusion:
   remaining significant secure-store cost, which is expected for protected
   pages. Further reductions would require a larger API or policy change, such
   as a write access guard for batch construction or an explicitly weaker mode.
+
+## 2026-05-22 - Archive V2 Pack Layout Probe
+
+Description: added an experimental `archive_v2_probe` example to estimate a
+clean-slate append-only pack/checkpoint archive layout. This run used the
+then-current pure-Rust `oxiarc-zstd` backend, so the recorded numbers are
+historical and are not directly comparable with later local `ruzstd` reruns.
+
+Command:
+
+```bash
+cd rust
+cargo run --offline -q -p lockbox_core --example archive_v2_probe -- \
+  target/archive-comparison/fixtures/<fixture>
+```
+
+Raw local TSV output:
+
+- `rust/target/archive-comparison/results/archive_v2_probe.tsv`
+
+Selected best estimated v2 sizes compared with current Lockbox artifacts:
+
+| Fixture | Current Lockbox bytes | Best v2 estimate | Result |
+| --- | ---: | ---: | --- |
+| `repeated-small` | 97,376 | 167,397 | worse |
+| `text-tree` | 2,929,760 | 2,936,280 | roughly equal |
+| `mixed-tree` | 17,037,408 | 17,048,782 | roughly equal |
+| `high-entropy` | 67,131,488 | 67,111,776 | slightly better |
+| `dvault-source` | 304,224 | 297,964 | 2.1% smaller |
+
+Conclusion:
+
+- Changing archive layout alone did not close the gap to `tar | zstd | gpg`
+  with the `oxiarc-zstd` backend used for this run. At that point, the
+  pure-Rust zstd encoder remained the main size limiter on text/source
+  fixtures.
+- Larger packs reduce metadata bytes but quickly increase random-read
+  amplification. The default interactive target should stay around 512 KiB to
+  1 MiB; 2 MiB to 4 MiB belongs in bulk import or compaction profiles.
+- Extension/content-class grouping did not materially beat path-order grouping
+  on these fixtures, so grouping heuristics should remain experimental.
+- The clean-slate v2 design is still useful for append-only updates,
+  checkpointing, range planning, and recovery, but it should be prototyped as a
+  separate experimental format before replacing the current page format.
+
+## 2026-05-22 - zstd-rs Upstream Compression Experiments
+
+Description: benchmarked the discussed pure-Rust `ruzstd` encoder experiments
+as separate upstream candidate variants. The benchmark used a release-mode
+external path-dependency harness so every checked-out variant ran the same
+fixture generator and timing loop.
+
+Raw artifacts:
+
+- `/tmp/zstd-upstream-bench-run/all-experiments.csv`
+- `/tmp/zstd-upstream-bench-run/all-experiment-totals.csv`
+- `/tmp/zstd-upstream-bench-run/zstd-cli-sizes.csv`
+- Detailed report: `docs/zstd_upstream_experiment_report.md`
+
+Aggregate results across 5.97 MiB of generated fixtures:
+
+| Variant | Total compressed bytes | Delta vs master | Aggregate measured ns | CPU delta vs master |
+| --- | ---: | ---: | ---: | ---: |
+| `master` | 1,116,962 | 0 | 40,808,252 | 0.0% |
+| `raw-fallback` | 1,116,954 | -8 | 40,336,334 | -1.2% |
+| `literal-choices` | 1,108,812 | -8,150 | 42,278,659 | +3.6% |
+| `huffman-maxheight` | 1,097,645 | -19,317 | 40,524,198 | -0.7% |
+| `huffman-depth-probe` | 1,097,637 | -19,325 | 46,713,246 | +14.5% |
+| `fse-predefined` | 1,268,847 | +151,885 | 36,502,871 | -10.6% |
+| `fse-oracle` | 1,097,629 | -19,333 | 74,346,322 | +82.2% |
+
+Native `zstd -1` compressed the same fixtures to 772,083 bytes total.
+
+Conclusion:
+
+- Submit `raw-fallback` first. It is small, tested, and prevents avoidable
+  expansion on incompressible fastest blocks.
+- Submit `huffman-maxheight` next as an independent patch. It is the largest
+  measured Rust-side win and mirrors the C zstd strategy of repairing overlong
+  Huffman trees instead of falling back to rank-only weights.
+- Treat `literal-choices` as optional cleanup. It is correct but modest.
+- Reject Huffman depth probing and FSE oracle selection for now because they
+  save almost nothing beyond `huffman-maxheight` and cost too much CPU.
+- The remaining native zstd gap points at match finding and sequence generation
+  rather than literal Huffman selection.
+
+## 2026-05-22 - zstd-rs Match Finder and Sequence Experiments
+
+Description: tested the next suspected source of the native `zstd -1` size gap:
+match finding and sequence generation. Each variant was based on the current
+Huffman max-height patch and used the same release-mode benchmark harness as
+the upstream compression experiments.
+
+Raw artifacts:
+
+- `/tmp/zstd-upstream-bench-run/minmatch4.csv`
+- `/tmp/zstd-upstream-bench-run/hash-overwrite.csv`
+- `/tmp/zstd-upstream-bench-run/repcode-offsets.csv`
+- `/tmp/zstd-upstream-bench-run/hash-oldest-newest.csv`
+- `/tmp/zstd-upstream-bench-run/hash-oldest-newest-repcode.csv`
+- `/tmp/zstd-upstream-bench-run/hash-two-packed.csv`
+- `/tmp/zstd-upstream-bench-run/hash-two-step2.csv`
+- `/tmp/zstd-upstream-bench-run/current-huffman-step2.csv`
+- `/tmp/zstd-upstream-bench-run/current-profile-optimized2.csv`
+- `/tmp/zstd-upstream-bench-run/current-profile-hash1.csv`
+- `/tmp/zstd-upstream-bench-run/match-sequence-totals.csv`
+- Detailed report: `docs/zstd_match_sequence_experiment_report.md`
+
+Aggregate results across 5.97 MiB of generated fixtures:
+
+| Variant | Total compressed bytes | Delta vs Huffman max-height | Aggregate measured ns | Throughput MiB/s |
+| --- | ---: | ---: | ---: | ---: |
+| `huffman-maxheight` | 1,097,645 | 0 | 40,524,198 | 140.5 |
+| `repcode-offsets` | 1,097,645 | 0 | 41,809,551 | 136.2 |
+| `hash-overwrite` | 1,054,684 | -42,961 | 41,489,884 | 137.3 |
+| `hash-oldest-newest` | 1,032,338 | -65,307 | 51,303,214 | 111.0 |
+| `hash-oldest-newest-repcode` | 1,032,338 | -65,307 | 48,999,827 | 116.2 |
+| `hash-two-packed` | 1,032,338 | -65,307 | 45,847,949 | 124.2 |
+| `hash-two-step2` | 1,039,557 | -58,088 | 41,079,658 | 138.6 |
+| `current-huffman-step2` | 1,039,557 | -58,088 | 38,856,287 | 146.6 |
+| `current-profile-optimized2` | 1,039,557 | -58,088 | 32,979,753 | 172.7 |
+| `current-profile-hash1` | 992,288 | -105,357 | 31,099,865 | 183.1 |
+
+Native `zstd -1` compressed the same fixtures to 772,083 bytes total.
+
+Conclusion:
+
+- Match finding is the next compression-ratio lever. Keeping both oldest and
+  newest hash candidates preserved repeated-run compression while improving the
+  4 MiB JSON fixture from 504,060 bytes to 452,147 bytes in the full prototype.
+- The submit candidate is the profiled packed matcher with a one-multiply
+  five-byte hash. It improved the 4 MiB JSON fixture from 504,060 bytes to
+  419,775 bytes, saved 105,357 bytes aggregate versus Huffman max-height, and
+  measured faster than the baseline harness.
+- Callgrind on the 4 MiB JSON fixture dropped from 380.7M instructions before
+  profiling changes to 335.6M after removing redundant matcher work.
+- Repeat-offset sequence encoding passed tests in isolation but did not improve
+  size on these fixtures. Revisit it only after match generation produces more
+  local repeated offsets.
+- Reject `minmatch4` and simple hash overwrite. Both were useful probes, but
+  they either worsened structured text or regressed repeated text.
+
+## 2026-05-30 - Local ruzstd Encoder vs GPG Archive Comparison
+
+Description: switched the default pure-Rust zstd path from published
+`oxiarc-zstd` to the local `ruzstd` checkout at `../zstd-rs/ruzstd`, then reran
+the archive comparison against GPG. This was a local dependency experiment, not
+a merge-ready dependency layout.
+
+Command:
+
+```bash
+bash rust/tools/compare_archive_compression.sh
+```
+
+Raw local TSV output:
+
+- `rust/target/archive-comparison/results/summary.tsv`
+
+Selected results:
+
+| Fixture | Tool | Logical bytes | Output bytes | Seconds | Max RSS KiB |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `repeated-small` | Lockbox local `ruzstd` | 104,857,600 | 63,584 | 0.31 | 20,556 |
+| `repeated-small` | `tar | zstd -1 | gpg --compress-algo none` | 104,857,600 | 55,627 | 0.14 | 18,528 |
+| `text-tree` | Lockbox local `ruzstd` | 30,193,763 | 1,340,512 | 0.41 | 22,004 |
+| `text-tree` | `tar | zstd -1 | gpg --compress-algo none` | 30,193,763 | 1,763,322 | 0.17 | 19,096 |
+| `mixed-tree` | Lockbox local `ruzstd` | 21,947,435 | 16,855,136 | 0.32 | 70,728 |
+| `mixed-tree` | `tar | zstd -1 | gpg --compress-algo none` | 21,947,435 | 16,984,571 | 0.23 | 24,136 |
+| `high-entropy` | Lockbox local `ruzstd` | 67,108,880 | 67,131,488 | 0.67 | 79,172 |
+| `high-entropy` | `tar | zstd -1 | gpg --compress-algo none` | 67,108,880 | 67,174,412 | 0.45 | 24,048 |
+| `dvault-source` | Lockbox local `ruzstd` | 1,039,364 | 258,144 | 0.05 | 9,864 |
+| `dvault-source` | `tar | zstd -1 | gpg --compress-algo none` | 1,039,364 | 254,388 | 0.14 | 7,552 |
+
+Conclusion:
+
+- The local `ruzstd` branch materially improves the default pure-Rust Lockbox
+  size story on structured data: Lockbox is now smaller than `tar | zstd -1 |
+  gpg` on `text-tree`, `mixed-tree`, and `high-entropy`.
+- `repeated-small` and `dvault-source` still leave a small size gap versus the
+  external zstd stream, but Lockbox remains faster on `dvault-source`.
+- Peak RSS is higher for Lockbox on large mixed/high-entropy fixtures. The next
+  pass should profile allocation and streaming behavior rather than only
+  encoder ratio.

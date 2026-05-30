@@ -1,4 +1,8 @@
-use oxiarc_zstd::ZstdEncoder;
+#[path = "common/probe_ruzstd.rs"]
+mod probe_ruzstd;
+
+use probe_ruzstd::ruzstd_level;
+use ruzstd::encoding::compress_to_vec;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -202,8 +206,6 @@ fn collect_files_recursive(
 }
 
 fn compress_group(payload: &[u8]) -> Result<usize, Box<dyn std::error::Error>> {
-    let mut encoder = ZstdEncoder::new();
-    encoder.set_level(LEVEL);
-    let compressed = encoder.compress(payload)?;
+    let compressed = compress_to_vec(payload, ruzstd_level(LEVEL));
     Ok(compressed.len().min(payload.len()))
 }

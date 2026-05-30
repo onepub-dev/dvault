@@ -1,4 +1,8 @@
-use oxiarc_zstd::ZstdEncoder;
+#[path = "common/probe_ruzstd.rs"]
+mod probe_ruzstd;
+
+use probe_ruzstd::ruzstd_level;
+use ruzstd::encoding::compress_to_vec;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
@@ -147,8 +151,6 @@ fn digest(payload: &[u8]) -> [u8; 32] {
 }
 
 fn compress_frame(payload: &[u8]) -> Result<usize, Box<dyn std::error::Error>> {
-    let mut encoder = ZstdEncoder::new();
-    encoder.set_level(LEVEL);
-    let compressed = encoder.compress(payload)?;
+    let compressed = compress_to_vec(payload, ruzstd_level(LEVEL));
     Ok(compressed.len().min(payload.len()))
 }
