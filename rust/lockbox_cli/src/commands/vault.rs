@@ -1,8 +1,9 @@
 use super::context::{default_vault, require_arg, CliResult};
 use lockbox_core::{Error, RecipientKeyPair};
 use lockbox_vault::{
-    default_vault_dir, export_private_key, export_public_key, import_private_key_file,
-    import_public_key, KeyFormat, VaultDirectory,
+    default_vault_dir, disable_platform_secret_store, enable_platform_secret_store,
+    export_private_key, export_public_key, forget_platform_vault_password, import_private_key_file,
+    import_public_key, platform_secret_store_status, KeyFormat, VaultDirectory,
 };
 use std::fs;
 use std::io::Write;
@@ -17,10 +18,50 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "trust" => trust(&args[1..]),
         "remove-key" => remove_key(&args[1..]),
         "remove-trusted" => remove_trusted(&args[1..]),
+        "platform-store" => platform_store(&args[1..]),
         "list" => list(),
         "export-key" => export_key(&args[1..]),
         "export-public" => export_public(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
+    }
+}
+
+fn platform_store(args: &[String]) -> CliResult<()> {
+    let command = args.first().map(String::as_str).unwrap_or("status");
+    match command {
+        "status" => platform_store_status(),
+        "enable" => {
+            enable_platform_secret_store()?;
+            platform_store_status()
+        }
+        "disable" => {
+            disable_platform_secret_store()?;
+            platform_store_status()
+        }
+        "forget" => {
+            forget_platform_vault_password()?;
+            Ok(())
+        }
+        _ => Err(
+            Error::InvalidInput(format!("unknown vault platform-store command: {command}")).into(),
+        ),
+    }
+}
+
+fn platform_store_status() -> CliResult<()> {
+    let status = platform_secret_store_status()?;
+    println!("backend\t{}", status.backend);
+    println!("supported\t{}", yes_no(status.supported));
+    println!("disabled\t{}", yes_no(status.disabled));
+    println!("item\t{}", status.item);
+    Ok(())
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
     }
 }
 

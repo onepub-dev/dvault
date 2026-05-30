@@ -5,7 +5,9 @@ use lockbox_core::{
     SecretVec,
 };
 use lockbox_vault::{
-    import_public_key, local_vault, NoopStore, SecretString, Vault, VaultDirectory,
+    forget_platform_vault_password, get_platform_vault_password, import_public_key, local_vault,
+    platform_secret_store_disabled, put_platform_vault_password, NoopStore, SecretString, Vault,
+    VaultDirectory,
 };
 use std::env;
 use std::path::Path;
@@ -98,13 +100,6 @@ pub(crate) fn read_password(prompt: &str) -> CliResult<SecretString> {
     Ok(prompt_secret(prompt)?)
 }
 
-pub(crate) fn read_vault_password() -> CliResult<SecretString> {
-    if let Some(password) = SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
-        return Ok(password);
-    }
-    Ok(prompt_secret("Vault password: ")?)
-}
-
 pub(crate) fn read_new_password() -> CliResult<SecretString> {
     if let Some(password) = SecretString::try_from_env("LOCKBOX_PASSWORD")? {
         return Ok(password);
@@ -120,8 +115,28 @@ pub(crate) fn read_new_password() -> CliResult<SecretString> {
 }
 
 pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
-    let password = read_vault_password().map_err(|err| Error::Io(err.to_string()))?;
-    VaultDirectory::open_default(&password)
+    if let Some(password) = SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
+        return VaultDirectory::open_default(&password);
+    }
+
+    let platform_enabled = !platform_secret_store_disabled()?;
+    if platform_enabled {
+        if let Ok(Some(password)) = get_platform_vault_password() {
+            match VaultDirectory::open_default(&password) {
+                Ok(vault) => return Ok(vault),
+                Err(_) => {
+                    let _ = forget_platform_vault_password();
+                }
+            }
+        }
+    }
+
+    let password = prompt_secret("Vault password: ").map_err(|err| Error::Io(err.to_string()))?;
+    let vault = VaultDirectory::open_default(&password)?;
+    if platform_enabled {
+        let _ = put_platform_vault_password(&password);
+    }
+    Ok(vault)
 }
 
 pub(crate) fn mirror_key_directory(lockbox: &Lockbox) -> Result<(), Error> {

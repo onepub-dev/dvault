@@ -28,6 +28,7 @@ pub(crate) fn usage(verbose: bool) {
   lockbox vault export-key [name] <private-key-output>
   lockbox vault trust <name> <public-key>
   lockbox vault list
+  lockbox vault platform-store status|enable|disable|forget
   lockbox vault remove-key [name]
   lockbox vault remove-trusted <name>"
     );
@@ -48,6 +49,7 @@ developer/testing:
   LOCKBOX_KEY=<raw-content-key> lockbox <command> ...
   LOCKBOX_PASSWORD=<password> lockbox open <lockbox>
   LOCKBOX_VAULT_PASSWORD=<password> lockbox vault <command>
+  LOCKBOX_PLATFORM_SECRET_STORE=auto|disabled lockbox vault <command>
   LOCKBOX_AGENT_DIR=<dir> lockbox <command> ...
   LOCKBOX_VAULT_DIR=<dir> lockbox <command> ...
 
