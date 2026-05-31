@@ -5,6 +5,54 @@ dependency, or implementation changes. Keep each entry self-contained: include
 the change being measured, the command, environment, baseline source, and
 observed result table.
 
+## 2026-05-31 - Native Worker Pipeline Jobs Probe
+
+Description: implemented `lockbox --jobs auto|1|N add ...` and a native worker
+pipeline for compression-frame preparation. Large-file frames and small-file
+bulk-import batches can now be prepared on worker threads while the final page
+writer remains ordered. The full report is in
+`docs/native_threading_report_2026_05_31.md`.
+
+Commands:
+
+```bash
+cd /home/bsutton/git/dvault
+cargo build --release -p lockbox_cli --manifest-path rust/Cargo.toml
+# Reused fixtures from rust/target/archive-comparison-profile-20260531/fixtures.
+# Swept --jobs 1 through $(nproc); each row creates a fresh lockbox and times
+# only `lockbox add`.
+```
+
+Environment:
+
+- Host: local Linux workstation
+- Output: `rust/target/jobs-sweep-20260531/summary.tsv`
+- Timing source: `/usr/bin/time`, elapsed wall-clock seconds, CPU split, and
+  max RSS
+- Compression backend: local `../zstd-rs/ruzstd`
+
+Best observed results:
+
+| Fixture | Jobs 1 wall s | Best jobs | Best wall s | Speedup | Jobs 1 RSS KiB | Best RSS KiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| repeated-small | 0.46 | 15 | 0.19 | 2.42x | 20,552 | 37,956 |
+| text-tree | 0.35 | 7 | 0.13 | 2.69x | 21,776 | 42,104 |
+| mixed-tree | 0.24 | 7 | 0.21 | 1.14x | 78,636 | 93,504 |
+| high-entropy | 0.69 | 12 | 0.62 | 1.11x | 78,688 | 94,200 |
+| dvault-source | 0.04 | 1 | 0.04 | 1.00x | 11,404 | 11,404 |
+
+Conclusion:
+
+- Worker threads are a clear wall-time win for compressible many-file imports:
+  `repeated-small` improved from 0.46 s to 0.19 s, and `text-tree` from 0.35 s
+  to 0.13 s.
+- Output bytes are unchanged because the worker pipeline changes scheduling,
+  not format or compression decisions.
+- RSS increases when workers are enabled because multiple frames can be staged
+  at once.
+- High-entropy and tiny source-tree imports do not benefit in this run; users
+  can choose `--jobs 1` for low-memory or low-overhead operation.
+
 ## 2026-05-21 - Current Lockbox vs GPG Archive Comparison
 
 Description: reran the archive comparison harness after commits

@@ -28,7 +28,10 @@ use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::secret_vec::SecretVec;
 use crate::storage::{Storage, StorageBackend};
 use crate::toc_entry::TocEntry;
-use crate::{CacheStats, EnvName, Error, LockboxOptions, RecoveryReport, Result, WorkloadProfile};
+use crate::{
+    CacheStats, EnvName, Error, LockboxOptions, RecoveryReport, Result, WorkerPolicy,
+    WorkloadProfile,
+};
 use zeroize::Zeroize;
 
 mod commit;
@@ -110,6 +113,7 @@ pub struct Lockbox {
     page_manager: RefCell<PageCache>,
     compression_frame_cache: RefCell<CompressionFrameCache>,
     workload_profile: WorkloadProfile,
+    worker_policy: WorkerPolicy,
     free_space: FreeSpace,
     record_ref_counts: std::collections::HashMap<u64, usize, FastBuildHasher>,
     pending_redactions: BTreeMap<u64, PendingRedaction>,
@@ -147,6 +151,7 @@ impl Lockbox {
             page_manager: RefCell::new(self.page_manager.borrow().clone()),
             compression_frame_cache: RefCell::new(CompressionFrameCache::default()),
             workload_profile: self.workload_profile,
+            worker_policy: self.worker_policy,
             free_space: self.free_space.clone(),
             record_ref_counts: self.record_ref_counts.clone(),
             pending_redactions: self.pending_redactions.clone(),
@@ -220,6 +225,7 @@ impl Lockbox {
             page_manager: RefCell::new(PageCache::new(options.cache_limit)),
             compression_frame_cache: RefCell::new(CompressionFrameCache::default()),
             workload_profile: options.workload_profile,
+            worker_policy: options.worker_policy,
             free_space: FreeSpace::default(),
             record_ref_counts: std::collections::HashMap::with_hasher(FastBuildHasher::default()),
             pending_redactions: BTreeMap::new(),
@@ -303,6 +309,7 @@ impl Lockbox {
             page_manager: RefCell::new(PageCache::new(options.cache_limit)),
             compression_frame_cache: RefCell::new(CompressionFrameCache::default()),
             workload_profile: options.workload_profile,
+            worker_policy: options.worker_policy,
             free_space: FreeSpace::default(),
             record_ref_counts: std::collections::HashMap::with_hasher(FastBuildHasher::default()),
             pending_redactions: BTreeMap::new(),
@@ -386,6 +393,20 @@ impl Lockbox {
     /// Return the currently selected workload profile.
     pub fn workload_profile(&self) -> WorkloadProfile {
         self.workload_profile
+    }
+
+    /// Set the worker policy used for native page/frame preparation.
+    pub fn set_worker_policy(&mut self, policy: WorkerPolicy) {
+        self.worker_policy = policy;
+    }
+
+    /// Return the currently selected worker policy.
+    pub fn worker_policy(&self) -> WorkerPolicy {
+        self.worker_policy
+    }
+
+    pub(crate) fn worker_jobs(&self) -> usize {
+        self.worker_policy.effective_jobs()
     }
 
     pub(crate) fn should_discard_file_pages_after_flush(&self) -> bool {

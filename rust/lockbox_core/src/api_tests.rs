@@ -2,7 +2,7 @@ use crate::{
     CacheLimit, EnvName, EnvSensitivity, EnvValueRef, Error, ExtractPolicy, ListOptions, Lockbox,
     LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotProtection,
     LockboxOptions, LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair,
-    RecipientPublicKey, RecoveryReportOptions, RecoveryScanner, Result, SecretString,
+    RecipientPublicKey, RecoveryReportOptions, RecoveryScanner, Result, SecretString, WorkerPolicy,
     WorkloadProfile,
 };
 use sha2::{Digest, Sha256};
@@ -752,7 +752,7 @@ fn toc_round_trips_when_toc_payload_exceeds_minimum_page_body() {
     let payload = b"x";
 
     for i in 0..220 {
-        let component = format!("file-{i:03}-{}.txt", "x".repeat(220));
+        let component = toc_overflow_component(i);
         lb.add_file(&p(format!("/toc-overflow/{component}")), payload, false)
             .unwrap();
     }
@@ -780,13 +780,21 @@ fn toc_round_trips_when_toc_payload_exceeds_minimum_page_body() {
         ));
     assert_eq!(
         reopened
-            .get_file(&p(format!(
-                "/toc-overflow/file-219-{}.txt",
-                "x".repeat(220)
-            )))
+            .get_file(&p(format!("/toc-overflow/{}", toc_overflow_component(219))))
             .unwrap(),
         payload
     );
+}
+
+fn toc_overflow_component(index: usize) -> String {
+    let mut out = format!("file-{index:03}-");
+    let mut value = index as u64 ^ 0x6a09_e667_f3bc_c909;
+    while out.len() < 230 {
+        value = value.wrapping_add(0x9e37_79b9_7f4a_7c15).rotate_left(17) ^ 0xbf58_476d_1ce4_e5b9;
+        out.push_str(&format!("{value:016x}"));
+    }
+    out.push_str(".txt");
+    out
 }
 
 #[test]
@@ -1016,6 +1024,7 @@ fn bulk_import_flushes_file_pages_without_retaining_them_in_cache() {
         LockboxOptions {
             cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
             workload_profile: WorkloadProfile::BulkImport,
+            ..LockboxOptions::default()
         },
     );
 
@@ -1040,6 +1049,7 @@ fn bulk_import_drains_small_file_staging_before_commit() {
         LockboxOptions {
             cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
             workload_profile: WorkloadProfile::BulkImport,
+            ..LockboxOptions::default()
         },
     );
 
@@ -1067,6 +1077,7 @@ fn bulk_small_file_frames_keep_non_tail_pages_dense() {
         LockboxOptions {
             cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
             workload_profile: WorkloadProfile::BulkImport,
+            ..LockboxOptions::default()
         },
     );
 
@@ -1100,12 +1111,150 @@ fn bulk_small_file_frames_keep_non_tail_pages_dense() {
 }
 
 #[test]
+fn threaded_large_file_import_round_trips_multiframe_data() {
+    let mut data = vec![0; 5 * 1024 * 1024 + 12345];
+    fill_randomish(&mut data);
+    let mut lb = Lockbox::create_with_options(
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            worker_policy: WorkerPolicy::Threads(4),
+            ..LockboxOptions::default()
+        },
+    );
+
+    lb.add_file(&p("/threaded/large.bin"), &data, false)
+        .unwrap();
+    lb.commit().unwrap();
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+
+    assert_eq!(reopened.get_file(&p("/threaded/large.bin")).unwrap(), data);
+    assert_eq!(
+        reopened
+            .read_file_range(&p("/threaded/large.bin"), 2 * 1024 * 1024 - 17, 96)
+            .unwrap(),
+        data[2 * 1024 * 1024 - 17..2 * 1024 * 1024 + 79].to_vec()
+    );
+    assert_eq!(
+        reopened
+            .list(ListOptions::new(&p("/threaded")))
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn threaded_bulk_small_file_batches_round_trip_after_reopen() {
+    let mut lb = Lockbox::create_with_options(
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            workload_profile: WorkloadProfile::BulkImport,
+            worker_policy: WorkerPolicy::Threads(4),
+        },
+    );
+
+    for index in 0..384 {
+        let mut data = vec![0; 24 * 1024 + index % 97];
+        fill_randomish(&mut data);
+        lb.add_file(
+            &p(format!("/threaded-small/file-{index:04}.bin")),
+            &data,
+            false,
+        )
+        .unwrap();
+    }
+    lb.commit().unwrap();
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+
+    for index in [0, 1, 127, 255, 383] {
+        let mut expected = vec![0; 24 * 1024 + index % 97];
+        fill_randomish(&mut expected);
+        assert_eq!(
+            reopened
+                .get_file(&p(format!("/threaded-small/file-{index:04}.bin")))
+                .unwrap(),
+            expected
+        );
+    }
+    assert_eq!(
+        reopened
+            .list(ListOptions {
+                recursive: true,
+                ..ListOptions::new(&p("/threaded-small"))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .len(),
+        384
+    );
+}
+
+#[test]
+fn worker_policy_single_and_threads_have_same_logical_results() {
+    fn build(policy: WorkerPolicy) -> Lockbox {
+        let mut lb = Lockbox::create_with_options(
+            KEY,
+            LockboxOptions {
+                cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+                workload_profile: WorkloadProfile::BulkImport,
+                worker_policy: policy,
+            },
+        );
+        let mut large = vec![0; 3 * 1024 * 1024 + 77];
+        fill_randomish(&mut large);
+        lb.add_file(&p("/compare/large.bin"), &large, false)
+            .unwrap();
+        for index in 0..64 {
+            let mut data = vec![0; 32 * 1024 + index];
+            fill_randomish(&mut data);
+            lb.add_file(&p(format!("/compare/small-{index:03}.bin")), &data, false)
+                .unwrap();
+        }
+        lb.commit().unwrap();
+        Lockbox::open(lb.to_bytes(), KEY).unwrap()
+    }
+
+    let single = build(WorkerPolicy::Single);
+    let threaded = build(WorkerPolicy::Threads(3));
+    let single_entries = single
+        .list(ListOptions {
+            recursive: true,
+            ..ListOptions::new(&p("/compare"))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+    let threaded_entries = threaded
+        .list(ListOptions {
+            recursive: true,
+            ..ListOptions::new(&p("/compare"))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+
+    assert_eq!(single_entries, threaded_entries);
+    for entry in single_entries {
+        assert_eq!(
+            single.get_file(&entry.path).unwrap(),
+            threaded.get_file(&entry.path).unwrap()
+        );
+    }
+}
+
+#[test]
 fn extract_many_caches_decoded_compression_frames() {
     let mut lb = Lockbox::create_with_options(
         KEY,
         LockboxOptions {
             cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
             workload_profile: WorkloadProfile::BulkImport,
+            ..LockboxOptions::default()
         },
     );
     lb.add_file(&p("/cache/a.txt"), b"alpha", false).unwrap();
@@ -1118,6 +1267,7 @@ fn extract_many_caches_decoded_compression_frames() {
         LockboxOptions {
             cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
             workload_profile: WorkloadProfile::ExtractMany,
+            ..LockboxOptions::default()
         },
     )
     .unwrap();

@@ -93,6 +93,20 @@ pub(crate) fn remove_global_flag(args: &mut Vec<String>, flag: &str) -> bool {
     }
 }
 
+pub(crate) fn remove_global_option(
+    args: &mut Vec<String>,
+    flag: &str,
+) -> CliResult<Option<String>> {
+    let Some(index) = args.iter().position(|arg| arg == flag) else {
+        return Ok(None);
+    };
+    args.remove(index);
+    if index >= args.len() {
+        return Err(Error::InvalidInput(format!("missing value for {flag}")).into());
+    }
+    Ok(Some(args.remove(index)))
+}
+
 pub(crate) fn read_password(prompt: &str) -> CliResult<SecretString> {
     if let Some(password) = SecretString::try_from_env("LOCKBOX_PASSWORD")? {
         return Ok(password);

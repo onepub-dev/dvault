@@ -8,7 +8,8 @@ mod recovery;
 mod vault;
 mod visualize;
 
-use context::{read_access, remove_global_flag, CliResult};
+use context::{read_access, remove_global_flag, remove_global_option, CliResult};
+use lockbox_core::{Error, WorkerPolicy};
 
 pub(crate) fn run() -> CliResult<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -30,6 +31,7 @@ pub(crate) fn run() -> CliResult<()> {
         return Ok(());
     }
 
+    let worker_policy = read_worker_policy(&mut args)?;
     let access = read_access(&mut args)?;
     let Some(command) = args.first().cloned() else {
         help::usage(verbose_help);
@@ -48,7 +50,7 @@ pub(crate) fn run() -> CliResult<()> {
         "list-keys" => keys::list_keys(&args, &access)?,
         "remove-key" => keys::remove_key(&args, &access)?,
         "vault" => vault::run(&args)?,
-        "add" => files::add(&args, &access)?,
+        "add" => files::add(&args, &access, worker_policy)?,
         "extract" => files::extract(&args, &access)?,
         "cat" => files::cat(&args, &access)?,
         "list" => files::list(&args, &access)?,
@@ -61,4 +63,26 @@ pub(crate) fn run() -> CliResult<()> {
     }
 
     Ok(())
+}
+
+fn read_worker_policy(args: &mut Vec<String>) -> CliResult<WorkerPolicy> {
+    let Some(value) = remove_global_option(args, "--jobs")? else {
+        return Ok(WorkerPolicy::Auto);
+    };
+    match value.as_str() {
+        "auto" => Ok(WorkerPolicy::Auto),
+        "1" => Ok(WorkerPolicy::Single),
+        _ => {
+            let jobs = value.parse::<usize>().map_err(|_| {
+                Error::InvalidInput("--jobs must be auto, 1, or a positive integer".to_string())
+            })?;
+            if jobs == 0 {
+                return Err(Error::InvalidInput(
+                    "--jobs must be auto, 1, or a positive integer".to_string(),
+                )
+                .into());
+            }
+            Ok(WorkerPolicy::Threads(jobs))
+        }
+    }
 }

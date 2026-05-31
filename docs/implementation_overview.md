@@ -57,6 +57,37 @@ targets, and TOC entries are inside fixed-size encrypted pages. Metadata
 pages are currently 128 KiB and file-data pages are 8 MiB. Normal storage
 writes operate on whole physical pages.
 
+## Native Worker Pipeline
+
+Native archive-style imports can use a bounded worker pipeline. The CLI exposes
+this as:
+
+```bash
+lockbox --jobs auto add archive.lbox source /
+lockbox --jobs 1 add archive.lbox source /
+lockbox --jobs 4 add archive.lbox source /
+```
+
+`--jobs auto` is the native default and uses available CPU parallelism. `--jobs
+1` disables worker threads. Browser-style WASM treats automatic worker
+selection as single-threaded unless a future embedding explicitly provides
+threaded WASM support.
+
+The write path keeps final archive mutation ordered:
+
+```text
+reader
+  -> bounded compression-frame work queue
+  -> compression workers
+  -> ordered page writer
+  -> commit root
+```
+
+Workers prepare independent file compression frames. The writer assigns final
+page/object identifiers, writes pages, updates TOC state, and publishes the
+commit root last. This keeps the file format unchanged and avoids concurrent
+mutation of the lockbox storage backend.
+
 ## TOC And Recovery
 
 Normal open uses the header's latest authenticated commit root. The commit root

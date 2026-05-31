@@ -7,6 +7,7 @@ OUT="${1:-$RUST_DIR/target/archive-comparison}"
 KEY="000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 PASSPHRASE="lockbox-bench"
 GNUPGHOME="$OUT/gnupg"
+LOCKBOX_JOBS="${LOCKBOX_JOBS:-auto}"
 
 mkdir -p "$OUT/fixtures" "$OUT/results" "$GNUPGHOME"
 chmod 700 "$GNUPGHOME"
@@ -160,7 +161,7 @@ run_tool() {
       local lb="$result_dir/lockbox.lbx"
       rm -f "$lb"
       time_to "$metric" "$LOCKBOX" --key "$KEY" create "$lb"
-      time_to "$metric.add" "$LOCKBOX" --key "$KEY" add "$lb" "$src" /
+      time_to "$metric.add" "$LOCKBOX" --key "$KEY" --jobs "$LOCKBOX_JOBS" add "$lb" "$src" /
       artifact="$lb"
       ;;
     gpg-default)

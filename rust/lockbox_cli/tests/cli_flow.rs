@@ -153,6 +153,45 @@ fn content_key_create_does_not_mirror_empty_key_directory() {
 }
 
 #[test]
+fn add_accepts_jobs_option_for_large_files() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("jobs-add");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("jobs.lbox");
+    let source = dir.join("large.bin");
+    let extracted = dir.join("extracted.bin");
+    let mut data = Vec::with_capacity(3 * 1024 * 1024);
+    for i in 0..(3 * 1024 * 1024) {
+        data.push((i % 251) as u8);
+    }
+    fs::write(&source, &data).unwrap();
+
+    run(
+        bin,
+        &[
+            "--jobs",
+            "2",
+            "add",
+            lockbox.to_str().unwrap(),
+            source.to_str().unwrap(),
+            "/large.bin",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "extract",
+            lockbox.to_str().unwrap(),
+            "/large.bin",
+            extracted.to_str().unwrap(),
+        ],
+    );
+
+    assert_eq!(fs::read(extracted).unwrap(), data);
+}
+
+#[test]
 fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("secret-env");
