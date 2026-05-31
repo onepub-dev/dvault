@@ -88,6 +88,11 @@ page/object identifiers, writes pages, updates TOC state, and publishes the
 commit root last. This keeps the file format unchanged and avoids concurrent
 mutation of the lockbox storage backend.
 
+For benchmark diagnostics, setting `LOCKBOX_IMPORT_TIMINGS=1` prints one
+tab-separated timing line on stderr after `lockbox add`. The counters report
+wall time for the add and commit phases plus coarse stage totals for host
+metadata, host reads, frame preparation, and page writes.
+
 ## TOC And Recovery
 
 Normal open uses the header's latest authenticated commit root. The commit root

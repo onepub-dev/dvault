@@ -52,6 +52,8 @@ Conclusion:
   at once.
 - High-entropy and tiny source-tree imports do not benefit in this run; users
   can choose `--jobs 1` for low-memory or low-overhead operation.
+- A follow-up 2026-06-01 stage-timing sweep on larger fixtures is recorded in
+  `docs/native_threading_report_2026_05_31.md`.
 
 ## 2026-05-21 - Current Lockbox vs GPG Archive Comparison
 

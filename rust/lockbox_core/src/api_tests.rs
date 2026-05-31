@@ -1248,6 +1248,33 @@ fn worker_policy_single_and_threads_have_same_logical_results() {
 }
 
 #[test]
+fn import_stats_record_threaded_import_stages_and_can_be_reset() {
+    let mut data = vec![0; 3 * 1024 * 1024 + 17];
+    fill_randomish(&mut data);
+    let mut lb = Lockbox::create_with_options(
+        KEY,
+        LockboxOptions {
+            cache_limit: CacheLimit::Bytes(128 * 1024 * 1024),
+            worker_policy: WorkerPolicy::Threads(2),
+            ..LockboxOptions::default()
+        },
+    );
+
+    lb.reset_import_stats();
+    lb.add_file_from_reader(&p("/stats/large.bin"), Cursor::new(data), false)
+        .unwrap();
+    let stats = lb.import_stats();
+
+    assert!(stats.host_read_nanos > 0);
+    assert!(stats.frame_prepare_nanos > 0);
+    assert!(stats.page_write_nanos > 0);
+    assert_eq!(stats.host_stat_nanos, 0);
+
+    lb.reset_import_stats();
+    assert_eq!(lb.import_stats(), Default::default());
+}
+
+#[test]
 fn extract_many_caches_decoded_compression_frames() {
     let mut lb = Lockbox::create_with_options(
         KEY,

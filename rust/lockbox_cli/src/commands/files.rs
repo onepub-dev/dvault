@@ -5,6 +5,7 @@ use lockbox_core::{
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::time::Instant;
 
 pub(crate) fn add(args: &[String], access: &Access, worker_policy: WorkerPolicy) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
@@ -17,8 +18,25 @@ pub(crate) fn add(args: &[String], access: &Access, worker_policy: WorkerPolicy)
     if creates_lockbox || source_path.is_dir() {
         lb.set_workload_profile(WorkloadProfile::BulkImport);
     }
+    lb.reset_import_stats();
+    let add_start = Instant::now();
     add_source_path(&mut lb, source_path, path)?;
+    let add_wall = add_start.elapsed();
+    let commit_start = Instant::now();
     lb.commit()?;
+    let commit_wall = commit_start.elapsed();
+    if std::env::var_os("LOCKBOX_IMPORT_TIMINGS").is_some() {
+        let stats = lb.import_stats();
+        eprintln!(
+            "lockbox_import_timings\tadd_wall_s={:.6}\tcommit_wall_s={:.6}\thost_stat_s={:.6}\thost_read_s={:.6}\tframe_prepare_s={:.6}\tpage_write_s={:.6}",
+            add_wall.as_secs_f64(),
+            commit_wall.as_secs_f64(),
+            nanos_to_secs(stats.host_stat_nanos),
+            nanos_to_secs(stats.host_read_nanos),
+            nanos_to_secs(stats.frame_prepare_nanos),
+            nanos_to_secs(stats.page_write_nanos),
+        );
+    }
     Ok(())
 }
 
@@ -85,6 +103,10 @@ fn kind_name(kind: &lockbox_core::LockboxEntryKind) -> &'static str {
         lockbox_core::LockboxEntryKind::File => "file",
         lockbox_core::LockboxEntryKind::Symlink => "symlink",
     }
+}
+
+fn nanos_to_secs(nanos: u128) -> f64 {
+    nanos as f64 / 1_000_000_000.0
 }
 
 fn extract_policy_from_args(args: &[String]) -> ExtractPolicy {

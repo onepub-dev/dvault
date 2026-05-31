@@ -104,3 +104,62 @@ for:
 
 For WASM, keep the effective default single-threaded unless a future embedding
 explicitly enables threaded WASM.
+
+## Follow-Up Stage Timing - 2026-06-01
+
+After reviewing the initial sweep, we added coarse import stage timing behind
+`LOCKBOX_IMPORT_TIMINGS=1` and reran larger fixtures across `--jobs 1..16`.
+
+Raw results:
+
+```text
+rust/target/jobs-stage-sweep-20260601/results-clean/summary.tsv
+```
+
+Larger fixtures:
+
+```text
+fixture              logical bytes
+repeated-small-200m    209,715,200
+text-tree-120m         122,150,245
+single-text-256m       268,435,556
+high-entropy-128m      134,217,728
+```
+
+Best observed wall times:
+
+```text
+fixture              jobs_1_wall  best_jobs  best_wall  speedup
+repeated-small-200m       1.00s          5      0.44s    2.27x
+text-tree-120m            1.42s          6      0.59s    2.41x
+single-text-256m          2.07s         16      0.34s    6.09x
+high-entropy-128m         1.35s         15      1.24s    1.09x
+```
+
+Representative stage timings at the best wall-time point:
+
+```text
+fixture              jobs  add_wall  commit  host_read  frame_prepare  page_write
+repeated-small-200m     5     0.405   0.033      0.093          0.662       0.003
+text-tree-120m          6     0.544   0.043      0.060          1.409       0.036
+single-text-256m       16     0.338   0.002      0.126          3.641       0.067
+high-entropy-128m      15     1.239   0.003      0.034          0.249       0.958
+```
+
+Interpretation:
+
+- The threaded compression path is working. The single large compressible file
+  scales from 2.07 s to 0.34 s and reaches about 10 effective CPU cores.
+- The many-small-file fixtures flatten around 2-3 effective cores because the
+  CLI still walks, stats, opens, and reads files serially, and the ordered
+  writer still drains prepared frames through one mutation path.
+- High-entropy input barely benefits from more threads because compression
+  preparation is cheap and page write/encoding dominates.
+
+Next likely performance targets:
+
+- Add bounded parallel directory walk/stat/read for bulk imports.
+- Split page payload encoding/encryption from ordered page publication so
+  high-entropy imports can use more cores without breaking commit ordering.
+- Keep the ordered writer responsible for final offsets, TOC updates, and commit
+  root publication.

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::Lockbox;
 use crate::compression::{
@@ -229,11 +230,15 @@ impl Lockbox {
         destination: &LockboxPath,
         replace: bool,
     ) -> Result<()> {
+        let stat_start = Instant::now();
         let metadata = std::fs::metadata(source)
             .map_err(|err| Error::Io(format!("stat {}: {err}", source.display())))?;
+        self.add_host_stat_nanos(stat_start.elapsed().as_nanos());
         if metadata.len() <= SMALL_FILE_PACKING_LIMIT as u64 {
+            let read_start = Instant::now();
             let data = std::fs::read(source)
                 .map_err(|err| Error::Io(format!("read {}: {err}", source.display())))?;
+            self.add_host_read_nanos(read_start.elapsed().as_nanos());
             return self.add_file(destination, &data, replace);
         }
         let file = std::fs::File::open(source)
@@ -332,7 +337,11 @@ impl Lockbox {
         let mut writer = FilePageWriter::new(self);
         let mut buffer = vec![0; FILE_COMPRESSION_FRAME_BYTES];
         loop {
+            let read_start = Instant::now();
             let read = read_next_chunk(&mut reader, &mut buffer)?;
+            writer
+                .lockbox
+                .add_host_read_nanos(read_start.elapsed().as_nanos());
             if read == 0 {
                 if file_offset == 0 {
                     writer.write_compression_frame(
@@ -407,7 +416,11 @@ impl Lockbox {
             let mut job_count = 0usize;
             let mut buffer = vec![0; FILE_COMPRESSION_FRAME_BYTES];
             loop {
+                let read_start = Instant::now();
                 let read = read_next_chunk(&mut reader, &mut buffer)?;
+                writer
+                    .lockbox
+                    .add_host_read_nanos(read_start.elapsed().as_nanos());
                 if read == 0 {
                     if file_offset == 0 {
                         job_tx
@@ -1181,6 +1194,7 @@ struct PreparedCompressionFrame {
     compression_frame_digest: [u8; 32],
     slices: Vec<CompressionFrameSlice>,
     stored: Zeroizing<Vec<u8>>,
+    prepare_nanos: u128,
 }
 
 struct ParallelCompressionJob {
@@ -1252,6 +1266,7 @@ impl<'a> FilePageWriter<'a> {
         prepared: PreparedCompressionFrame,
         chunks: &mut Vec<FileChunk>,
     ) -> Result<Vec<usize>> {
+        self.lockbox.add_frame_prepare_nanos(prepared.prepare_nanos);
         self.lockbox.sequence += 1;
         let compression_frame_id = self.lockbox.sequence;
         let mut chunk_indices = Vec::with_capacity(prepared.slices.len());
@@ -1343,6 +1358,7 @@ impl<'a> FilePageWriter<'a> {
         if self.packer.is_empty() {
             return Ok(());
         }
+        let write_start = Instant::now();
         let pending = self.packer.pending().to_vec();
         let objects = pending
             .iter()
@@ -1372,6 +1388,8 @@ impl<'a> FilePageWriter<'a> {
             }
         }
         self.packer.clear();
+        self.lockbox
+            .add_page_write_nanos(write_start.elapsed().as_nanos());
         Ok(())
     }
 }
@@ -1380,6 +1398,7 @@ fn prepare_compression_frame(
     frames: &[CompressionFrameWrite<'_>],
     zstd_level: i32,
 ) -> PreparedCompressionFrame {
+    let prepare_start = Instant::now();
     let mut compression_frame_payload = Vec::new();
     let mut slices = Vec::with_capacity(frames.len());
     for frame in frames {
@@ -1394,7 +1413,7 @@ fn prepare_compression_frame(
             len: frame.data.len() as u64,
         });
     }
-    prepare_compression_frame_payload(compression_frame_payload, slices, zstd_level)
+    prepare_compression_frame_payload(compression_frame_payload, slices, zstd_level, prepare_start)
 }
 
 fn prepare_compression_frame_batches(
@@ -1445,6 +1464,7 @@ fn prepare_parallel_compression_frame(
     mut job: ParallelCompressionJob,
     zstd_level: i32,
 ) -> ParallelCompressionResult {
+    let prepare_start = Instant::now();
     let index = job.index;
     let slice = CompressionFrameSlice {
         path: job.path.clone(),
@@ -1454,8 +1474,12 @@ fn prepare_parallel_compression_frame(
         compression_frame_offset: 0,
         len: job.data.len() as u64,
     };
-    let frame =
-        prepare_compression_frame_payload(std::mem::take(&mut job.data), vec![slice], zstd_level);
+    let frame = prepare_compression_frame_payload(
+        std::mem::take(&mut job.data),
+        vec![slice],
+        zstd_level,
+        prepare_start,
+    );
     ParallelCompressionResult { index, frame }
 }
 
@@ -1463,6 +1487,7 @@ fn prepare_compression_frame_payload(
     mut compression_frame_payload: Vec<u8>,
     slices: Vec<CompressionFrameSlice>,
     zstd_level: i32,
+    prepare_start: Instant,
 ) -> PreparedCompressionFrame {
     let compression_frame_len = compression_frame_payload.len() as u64;
     let (compression, stored) =
@@ -1470,6 +1495,7 @@ fn prepare_compression_frame_payload(
     compression_frame_payload.zeroize();
     let stored = Zeroizing::new(stored);
     let compression_frame_digest = strong_checksum(stored.as_slice());
+    let prepare_nanos = prepare_start.elapsed().as_nanos();
     PreparedCompressionFrame {
         compression,
         compression_frame_len,
@@ -1477,5 +1503,6 @@ fn prepare_compression_frame_payload(
         compression_frame_digest,
         slices,
         stored,
+        prepare_nanos,
     }
 }
