@@ -111,6 +111,10 @@ pub(crate) fn list() -> io::Result<Vec<String>> {
     }
 }
 
+pub(crate) fn is_running() -> bool {
+    open_pipe(&wide_pipe_name()).is_ok()
+}
+
 fn request(message: &SecretVec) -> io::Result<AgentResponse> {
     let pipe_name = wide_pipe_name();
     let handle = match open_pipe(&pipe_name) {

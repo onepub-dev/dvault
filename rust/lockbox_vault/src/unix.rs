@@ -97,6 +97,10 @@ pub(crate) fn list() -> io::Result<Vec<String>> {
     }
 }
 
+pub(crate) fn is_running() -> bool {
+    UnixStream::connect(socket_path()).is_ok()
+}
+
 fn request(message: &SecretVec) -> io::Result<AgentResponse> {
     ensure_agent()?;
     let mut stream = UnixStream::connect(socket_path())?;

@@ -28,7 +28,8 @@ mod unix;
 mod windows;
 
 pub use agent_client::{
-    forget, forget_all, get, list, put, serve_agent, verify_agent_transport_security, AgentClient,
+    forget, forget_all, get, is_running, list, put, serve_agent, verify_agent_transport_security,
+    AgentClient,
 };
 #[cfg(unix)]
 pub(crate) use agent_protocol::max_message_bytes;

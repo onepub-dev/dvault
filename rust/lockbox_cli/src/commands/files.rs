@@ -3,7 +3,7 @@ use lockbox_core::{
     Error, ExtractPolicy, ListOptions, Lockbox, LockboxPath, WorkerPolicy, WorkloadProfile,
 };
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 use std::time::Instant;
 
@@ -104,11 +104,25 @@ fn default_lockbox_path_for_source(source: &Path) -> CliResult<String> {
 }
 
 pub(crate) fn remove(args: &[String], access: &Access) -> CliResult<()> {
-    let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let path = LockboxPath::new(require_arg(args, 1, "lockbox path")?)?;
+    let force = args.iter().any(|arg| arg == "--force" || arg == "--noask");
+    let args = args
+        .iter()
+        .filter(|arg| !matches!(arg.as_str(), "--force" | "--noask"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let lockbox_path = require_arg(&args, 0, "lockbox")?;
+    let path = LockboxPath::new(require_arg(&args, 1, "lockbox path")?)?;
     let mut lb = open_existing(lockbox_path, access)?;
+    let Some(entry) = lb.stat(&path) else {
+        return Err(Error::NotFound(path.to_string()).into());
+    };
+    if !force && !confirm_remove(path.as_str())? {
+        println!("No entries removed.");
+        return Ok(());
+    }
     lb.delete(&path)?;
     lb.commit()?;
+    println!("Removed 1 {}: {}", kind_name(&entry.kind), entry.path);
     Ok(())
 }
 
@@ -206,4 +220,12 @@ fn join_lockbox_path(lockbox_root: &LockboxPath, relative: &Path) -> CliResult<L
         out.push_str(part);
     }
     Ok(LockboxPath::new(out)?)
+}
+
+fn confirm_remove(path: &str) -> CliResult<bool> {
+    eprint!("Remove lockbox entry '{path}'? Type yes to confirm: ");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(answer.trim() == "yes")
 }

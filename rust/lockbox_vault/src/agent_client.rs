@@ -47,6 +47,10 @@ mod platform {
     pub(crate) fn list() -> io::Result<Vec<String>> {
         Ok(Vec::new())
     }
+
+    pub(crate) fn is_running() -> bool {
+        false
+    }
 }
 
 /// Content-key store backed by the platform lockbox agent.
@@ -119,4 +123,9 @@ pub fn forget_all() -> io::Result<()> {
 /// Lists cached lockbox ids known to the platform agent.
 pub fn list() -> io::Result<Vec<String>> {
     platform::list()
+}
+
+/// Returns true when the platform agent transport is currently reachable.
+pub fn is_running() -> bool {
+    platform::is_running()
 }

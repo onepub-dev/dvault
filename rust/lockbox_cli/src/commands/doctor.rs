@@ -1,5 +1,5 @@
 use super::context::CliResult;
-use lockbox_vault::{default_vault_path, verify_agent_transport_security};
+use lockbox_vault::{default_vault_path, is_running, verify_agent_transport_security};
 use std::fs::OpenOptions;
 
 pub(crate) fn run() -> CliResult<()> {
@@ -36,7 +36,7 @@ pub(crate) fn run() -> CliResult<()> {
             "unsupported"
         }
     );
-    println!("  running: unknown");
+    println!("  running: {}", yes_no(is_running()));
     Ok(())
 }
 

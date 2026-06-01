@@ -10,6 +10,8 @@ use lockbox_vault::{
     NoopStore, SecretString, Vault, VaultDirectory,
 };
 use std::fmt;
+use std::fs;
+use std::io;
 use std::path::Path;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -25,7 +27,7 @@ impl fmt::Display for CliMessage {
 
 impl std::error::Error for CliMessage {}
 
-fn cli_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
+pub(crate) fn cli_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
     Box::new(CliMessage(message.into()))
 }
 
@@ -36,6 +38,7 @@ pub(crate) enum Access {
 }
 
 pub(crate) fn open_existing(path: &str, access: &Access) -> CliResult<Lockbox> {
+    ensure_lockbox_path_accessible(path)?;
     match access {
         Access::ContentKey(key) => Ok(Vault::new(NoopStore)
             .unlock_lockbox(path, LockboxUnlock::ContentKey(key.try_clone()?))?),
@@ -75,6 +78,22 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> CliResult<Lockbox> 
                 "lockbox does not exist and no creation unlock method was supplied",
             )),
         }
+    }
+}
+
+fn ensure_lockbox_path_accessible(path: &str) -> CliResult<()> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            Err(cli_error(format!("lockbox path is a directory: {path}")))
+        }
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            Err(cli_error(format!("lockbox not found: {path}")))
+        }
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => Err(cli_error(format!(
+            "permission denied reading lockbox: {path}"
+        ))),
+        Err(err) => Err(cli_error(format!("cannot access lockbox {path}: {err}"))),
     }
 }
 

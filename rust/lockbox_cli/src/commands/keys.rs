@@ -1,5 +1,5 @@
 use super::context::{
-    default_vault, ensure_default_vault_initialized, load_private_key_from_arg,
+    cli_error, default_vault, ensure_default_vault_initialized, load_private_key_from_arg,
     load_recipient_from_arg, mirror_key_directory, open_existing, read_new_password, read_password,
     require_arg, Access, CliResult,
 };
@@ -149,7 +149,18 @@ pub(crate) fn remove_key(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let slot_id = require_arg(args, 1, "slot id")?.parse::<u64>()?;
     let mut lb = open_existing(lockbox_path, access)?;
-    lb.delete_key(slot_id)?;
+    if let Err(err) = lb.delete_key(slot_id) {
+        if matches!(
+            &err,
+            Error::SecurityLimitExceeded(message)
+                if message == "refusing to remove the last key slot"
+        ) {
+            return Err(cli_error(
+                "cannot remove the last key slot; add another recipient before removing this key",
+            ));
+        }
+        return Err(err.into());
+    }
     lb.commit()?;
     mirror_key_directory(&lb)?;
     Ok(())

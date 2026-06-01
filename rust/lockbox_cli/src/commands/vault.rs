@@ -7,7 +7,7 @@ use lockbox_vault::{
     default_vault_dir, default_vault_path, disable_platform_secret_store,
     enable_platform_secret_store, export_private_key, export_public_key,
     forget_platform_vault_password, import_private_key_file, import_public_key,
-    platform_secret_store_status, KeyFormat, VaultDirectory,
+    list as list_open_lockboxes, platform_secret_store_status, KeyFormat, VaultDirectory,
 };
 use std::fs;
 use std::io::{self, Write};
@@ -25,6 +25,7 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "remove-trusted" => remove_trusted(&args[1..]),
         "platform-store" => platform_store(&args[1..]),
         "list" | "ls" => list(),
+        "open" => list_open(),
         "export-key" => export_key(&args[1..]),
         "export-public" => export_public(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
@@ -282,6 +283,18 @@ fn list() -> CliResult<()> {
     }
     if !printed {
         println!("empty");
+    }
+    Ok(())
+}
+
+fn list_open() -> CliResult<()> {
+    let ids = list_open_lockboxes()?;
+    if ids.is_empty() {
+        println!("empty");
+    } else {
+        for id in ids {
+            println!("open\t{id}");
+        }
     }
     Ok(())
 }

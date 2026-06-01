@@ -123,6 +123,13 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .arg(optional("path", "Path inside the lockbox.")),
             file_command("rm", "Remove a stored entry.")
                 .visible_alias("remove")
+                .arg(
+                    Arg::new("force")
+                        .long("force")
+                        .visible_alias("noask")
+                        .action(ArgAction::SetTrue)
+                        .help("Remove without an interactive confirmation."),
+                )
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("lockbox-path", "Path inside the lockbox.")),
             file_command("rename", "Rename a stored entry.")
@@ -191,9 +198,6 @@ Environment
 
 Sharing
   recipient       Manage recipient access for a lockbox.
-  add-recipient   Share a lockbox with another public key.
-  list-keys       List keys that can unlock a lockbox.
-  remove-key      Remove a key from a lockbox.
 
 Vault
   vault           Manage your private keys and trusted public keys."
@@ -209,6 +213,9 @@ Advanced command options:
   lockbox add --jobs auto|1|N <lockbox> <source> <lockbox-path>
 
 Developer and compatibility commands:
+  add-recipient   Share a lockbox with another public key.
+  list-keys       List keys that can unlock a lockbox.
+  remove-key      Remove a key from a lockbox.
   keygen          Generate raw recipient key files.
   open-key        Unlock using a vault private key.
   visualize       Print internal lockbox structure.
@@ -430,6 +437,7 @@ fn vault_command(verbose: bool) -> Command {
                 .about("List local vault records.")
                 .visible_alias("ls"),
         )
+        .subcommand(Command::new("open").about("List lockboxes currently cached as open."))
         .subcommand(
             Command::new("path")
                 .about("Print the local vault directory.")

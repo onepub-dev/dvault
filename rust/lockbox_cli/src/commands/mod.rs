@@ -70,10 +70,7 @@ pub(crate) fn run() -> CliResult<()> {
             &access,
         )?,
         "list" => files::list(&list_args(command_matches), &access)?,
-        "rm" => files::remove(
-            &two_args(command_matches, "lockbox", "lockbox-path"),
-            &access,
-        )?,
+        "rm" => files::remove(&remove_args(command_matches), &access)?,
         "rename" => files::rename(
             &three_args(command_matches, "lockbox", "from", "to"),
             &access,
@@ -204,6 +201,12 @@ fn list_args(matches: &ArgMatches) -> Vec<String> {
     args
 }
 
+fn remove_args(matches: &ArgMatches) -> Vec<String> {
+    let mut args = two_args(matches, "lockbox", "lockbox-path");
+    push_flag(&mut args, matches, "force", "--force");
+    args
+}
+
 fn env_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let (command, sub) = matches
         .subcommand()
@@ -247,6 +250,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "overwrite", "--overwrite");
         }
         "list" | "ls" | "path" => {}
+        "open" => {}
         "key" => {
             let (key_command, key_sub) = sub
                 .subcommand()

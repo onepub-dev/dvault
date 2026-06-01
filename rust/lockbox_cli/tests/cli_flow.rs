@@ -132,12 +132,18 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
         ],
     );
     assert!(!help.contains("keygen          Generate raw recipient key files."));
+    assert!(!help.contains("add-recipient   Share a lockbox with another public key."));
+    assert!(!help.contains("list-keys       List keys that can unlock a lockbox."));
+    assert!(!help.contains("remove-key      Remove a key from a lockbox."));
     assert!(!help.contains("LOCKBOX_KEY=<raw-content-key>"));
 
     let verbose_help = run_output(bin, &["--help", "--verbose"]);
     assert_success(&verbose_help);
     let verbose_help = String::from_utf8_lossy(&verbose_help.stderr);
     assert!(verbose_help.contains("Advanced global options:"));
+    assert!(verbose_help.contains("add-recipient   Share a lockbox with another public key."));
+    assert!(verbose_help.contains("list-keys       List keys that can unlock a lockbox."));
+    assert!(verbose_help.contains("remove-key      Remove a key from a lockbox."));
     assert!(verbose_help.contains("keygen          Generate raw recipient key files."));
     assert!(verbose_help.contains("LOCKBOX_KEY=<raw-content-key>"));
 }
@@ -175,7 +181,15 @@ fn file_env_and_developer_aliases_execute_real_flows() {
     assert_success(&cat);
     assert_eq!(String::from_utf8_lossy(&cat.stdout), "alpha");
 
-    run(bin, &["remove", lockbox.to_str().unwrap(), "/docs/b.txt"]);
+    run(
+        bin,
+        &[
+            "remove",
+            "--force",
+            lockbox.to_str().unwrap(),
+            "/docs/b.txt",
+        ],
+    );
     let listing = run_output(bin, &["ls", lockbox.to_str().unwrap()]);
     assert_success(&listing);
     assert_eq!(String::from_utf8_lossy(&listing.stdout).trim(), "empty");
@@ -330,6 +344,162 @@ fn negative_cli_errors_remain_specific() {
     assert!(!invalid_export.status.success());
     assert!(String::from_utf8_lossy(&invalid_export.stderr)
         .contains("unsupported env export format: fish"));
+}
+
+#[test]
+fn remove_requires_confirmation_and_reports_count() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("remove-confirmation");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("remove.lbox");
+    let source = dir.join("remove.txt");
+    fs::write(&source, "delete me").unwrap();
+
+    run(
+        bin,
+        &[
+            "add",
+            lockbox.to_str().unwrap(),
+            source.to_str().unwrap(),
+            "/docs/remove.txt",
+        ],
+    );
+
+    let refused = run_output_with_stdin(
+        bin,
+        &["rm", lockbox.to_str().unwrap(), "/docs/remove.txt"],
+        "no\n",
+    );
+    assert_success(&refused);
+    assert!(String::from_utf8_lossy(&refused.stderr)
+        .contains("Remove lockbox entry '/docs/remove.txt'?"));
+    assert!(String::from_utf8_lossy(&refused.stdout).contains("No entries removed."));
+
+    let listing = run_output(bin, &["list", lockbox.to_str().unwrap()]);
+    assert_success(&listing);
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("/docs/remove.txt"));
+
+    let removed = run_output_with_stdin(
+        bin,
+        &["rm", lockbox.to_str().unwrap(), "/docs/remove.txt"],
+        "yes\n",
+    );
+    assert_success(&removed);
+    assert!(String::from_utf8_lossy(&removed.stdout).contains("Removed 1 file"));
+    assert!(String::from_utf8_lossy(&removed.stdout).contains("/docs/remove.txt"));
+
+    let listing = run_output(bin, &["list", lockbox.to_str().unwrap()]);
+    assert_success(&listing);
+    assert_eq!(String::from_utf8_lossy(&listing.stdout).trim(), "empty");
+}
+
+#[test]
+fn missing_lockbox_errors_are_cli_specific() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("missing-lockbox");
+    let missing = dir.join("missing.lbox");
+
+    let output = run_output(bin, &["visualize", missing.to_str().unwrap()]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("lockbox not found:"));
+    assert!(!stderr.contains("os error 2"));
+    assert!(!stderr.contains("another process is using the file"));
+}
+
+#[test]
+fn removing_last_lockbox_key_has_cli_guidance() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("last-key-message");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("last-key.lbox");
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let source = dir.join("source.txt");
+    let private_key = dir.join("recipient.key");
+    let public_key = dir.join("recipient.pub");
+    fs::write(&source, "alpha").unwrap();
+
+    run_in(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_in(
+        bin,
+        &[
+            "keygen",
+            private_key.to_str().unwrap(),
+            public_key.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &[
+            "add",
+            lockbox.to_str().unwrap(),
+            source.to_str().unwrap(),
+            "/alpha.txt",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &[
+            "add-recipient",
+            lockbox.to_str().unwrap(),
+            public_key.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+
+    let keys = run_output_in(
+        bin,
+        &["list-keys", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&keys);
+    let slot_id = String::from_utf8_lossy(&keys.stdout)
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .and_then(|line| line.split('\t').next())
+        .expect("key slot id")
+        .to_string();
+
+    let output = run_output_in(
+        bin,
+        &["remove-key", lockbox.to_str().unwrap(), &slot_id],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot remove the last key slot"));
+    assert!(stderr.contains("add another recipient"));
+    assert!(!stderr.contains("security limit exceeded"));
+    assert!(!stderr.contains("Reduce the input size"));
+}
+
+#[test]
+fn doctor_and_vault_open_report_agent_state() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("agent-reporting");
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    let doctor = run_output_in(bin, &["doctor"], &vault_root, &agent_root);
+    assert_success(&doctor);
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(doctor.contains("Agent"));
+    assert!(doctor.contains("running: no"));
+    assert!(!doctor.contains("running: unknown"));
+
+    let open = run_output_in(bin, &["vault", "open"], &vault_root, &agent_root);
+    assert_success(&open);
+    assert_eq!(String::from_utf8_lossy(&open.stdout).trim(), "empty");
 }
 
 #[test]
@@ -1314,6 +1484,43 @@ fn run_output_in(bin: &str, args: &[&str], vault_root: &PathBuf, agent_root: &Pa
         .env("LOCKBOX_VAULT_DIR", vault_root)
         .output()
         .unwrap()
+}
+
+fn run_output_with_stdin(bin: &str, args: &[&str], stdin: &str) -> Output {
+    run_output_in_with_stdin(
+        bin,
+        args,
+        &unique_dir().join("vault"),
+        &unique_dir().join("agent"),
+        stdin,
+    )
+}
+
+fn run_output_in_with_stdin(
+    bin: &str,
+    args: &[&str],
+    vault_root: &PathBuf,
+    agent_root: &PathBuf,
+    stdin: &str,
+) -> Output {
+    let mut child = Command::new(bin)
+        .args(args)
+        .env("LOCKBOX_KEY", "test-key")
+        .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
+        .env("LOCKBOX_AGENT_DIR", agent_root)
+        .env("LOCKBOX_VAULT_DIR", vault_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
 }
 
 fn run_output_without_content_key(
