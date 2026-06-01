@@ -1,7 +1,7 @@
 use super::{
-    encode_forget, encode_forget_all, encode_get, encode_key_response, encode_put,
-    encode_response_line, max_message_bytes, parse_request, parse_response, AgentRequest,
-    AgentResponse, SecretVec, DEFAULT_TTL_SECONDS,
+    encode_forget, encode_forget_all, encode_get, encode_key_response, encode_list,
+    encode_list_response, encode_put, encode_response_line, max_message_bytes, parse_request,
+    parse_response, AgentRequest, AgentResponse, SecretVec, DEFAULT_TTL_SECONDS,
 };
 use lockbox_core::LockboxId;
 use std::collections::BTreeMap;
@@ -59,6 +59,9 @@ pub(crate) fn verify_agent_transport_security() -> io::Result<()> {
 }
 
 pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
+    if UnixStream::connect(socket_path()).is_err() {
+        return Ok(None);
+    }
     match request(&encode_get(lockbox_id)?)? {
         AgentResponse::Key(key) => Ok(Some(key)),
         AgentResponse::Miss => Ok(None),
@@ -71,11 +74,27 @@ pub(crate) fn put(lockbox_id: LockboxId, key: &SecretVec) -> io::Result<()> {
 }
 
 pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
+    if UnixStream::connect(socket_path()).is_err() {
+        return Ok(());
+    }
     expect_ok(request(&encode_forget(lockbox_id)?)?)
 }
 
 pub(crate) fn forget_all() -> io::Result<()> {
+    if UnixStream::connect(socket_path()).is_err() {
+        return Ok(());
+    }
     expect_ok(request(&encode_forget_all()?)?)
+}
+
+pub(crate) fn list() -> io::Result<Vec<String>> {
+    if UnixStream::connect(socket_path()).is_err() {
+        return Ok(Vec::new());
+    }
+    match request(&encode_list()?)? {
+        AgentResponse::List(ids) => Ok(ids),
+        response => invalid_agent_response(response),
+    }
 }
 
 fn request(message: &SecretVec) -> io::Result<AgentResponse> {
@@ -151,6 +170,7 @@ fn handle_client(
             cache.clear();
             encode_response_line(b"OK\n")?
         }
+        Ok(AgentRequest::List) => encode_list_response(cache.keys().cloned())?,
         Err(_) => encode_response_line(b"ERR invalid request\n")?,
     };
     response
@@ -180,6 +200,7 @@ fn invalid_agent_response<T>(response: AgentResponse) -> io::Result<T> {
         AgentResponse::Ok => "OK",
         AgentResponse::Miss => "MISS",
         AgentResponse::Key(_) => "KEY",
+        AgentResponse::List(_) => "LIST",
         AgentResponse::Err(_) => "ERR",
     };
     Err(io::Error::new(

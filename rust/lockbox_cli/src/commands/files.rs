@@ -10,9 +10,12 @@ use std::time::Instant;
 pub(crate) fn add(args: &[String], access: &Access, worker_policy: WorkerPolicy) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let source = require_arg(args, 1, "source")?;
-    let path = require_arg(args, 2, "lockbox path")?;
-    let creates_lockbox = !Path::new(lockbox_path).exists();
     let source_path = Path::new(source);
+    let path = match args.get(2) {
+        Some(path) => path.clone(),
+        None => default_lockbox_path_for_source(source_path)?,
+    };
+    let creates_lockbox = !Path::new(lockbox_path).exists();
     let mut lb = open_or_create(lockbox_path, access)?;
     lb.set_worker_policy(worker_policy);
     if creates_lockbox || source_path.is_dir() {
@@ -20,7 +23,7 @@ pub(crate) fn add(args: &[String], access: &Access, worker_policy: WorkerPolicy)
     }
     lb.reset_import_stats();
     let add_start = Instant::now();
-    add_source_path(&mut lb, source_path, path)?;
+    add_source_path(&mut lb, source_path, &path)?;
     let add_wall = add_start.elapsed();
     let commit_start = Instant::now();
     lb.commit()?;
@@ -72,8 +75,10 @@ pub(crate) fn list(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let path = LockboxPath::new(args.get(1).map(String::as_str).unwrap_or("/"))?;
     let lb = open_existing(lockbox_path, access)?;
+    let mut options = ListOptions::new(&path);
+    options.recursive = true;
     let mut printed = false;
-    for entry in lb.list(ListOptions::new(&path))? {
+    for entry in lb.list(options)? {
         let entry = entry?;
         println!("{}\t{}\t{}", kind_name(&entry.kind), entry.len, entry.path);
         printed = true;
@@ -82,6 +87,20 @@ pub(crate) fn list(args: &[String], access: &Access) -> CliResult<()> {
         println!("empty");
     }
     Ok(())
+}
+
+fn default_lockbox_path_for_source(source: &Path) -> CliResult<String> {
+    if source.is_dir() {
+        return Ok("/".to_string());
+    }
+    let Some(name) = source.file_name().and_then(|name| name.to_str()) else {
+        return Err(Error::UnsupportedHostPath(format!(
+            "source path is not valid UTF-8: {}",
+            source.display()
+        ))
+        .into());
+    };
+    Ok(format!("/{name}"))
 }
 
 pub(crate) fn remove(args: &[String], access: &Access) -> CliResult<()> {

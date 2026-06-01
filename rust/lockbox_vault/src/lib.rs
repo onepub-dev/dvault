@@ -28,16 +28,16 @@ mod unix;
 mod windows;
 
 pub use agent_client::{
-    forget, forget_all, get, put, serve_agent, verify_agent_transport_security, AgentClient,
+    forget, forget_all, get, list, put, serve_agent, verify_agent_transport_security, AgentClient,
 };
 #[cfg(unix)]
 pub(crate) use agent_protocol::max_message_bytes;
 #[cfg(windows)]
 pub(crate) use agent_protocol::max_message_bytes;
 pub(crate) use agent_protocol::{
-    encode_forget, encode_forget_all, encode_get, encode_key_response, encode_put,
-    encode_response_line, parse_request, parse_response, AgentRequest, AgentResponse,
-    DEFAULT_TTL_SECONDS,
+    encode_forget, encode_forget_all, encode_get, encode_key_response, encode_list,
+    encode_list_response, encode_put, encode_response_line, parse_request, parse_response,
+    AgentRequest, AgentResponse, DEFAULT_TTL_SECONDS,
 };
 pub use content_key_store::ContentKeyStore;
 pub use hex::{decode_hex, encode_hex};

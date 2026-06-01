@@ -10,23 +10,44 @@ use lockbox_vault::{
     platform_secret_store_status, KeyFormat, VaultDirectory,
 };
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 
 pub(crate) fn run(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault command")?;
     match command {
         "init" => init(&args[1..]),
         "path" => path(),
+        "key" => key_command(&args[1..]),
         "keygen" => keygen(&args[1..]),
         "import-key" => import_key(&args[1..]),
-        "trust" => trust(&args[1..]),
+        "trust" => trust_command(&args[1..]),
         "remove-key" => remove_key(&args[1..]),
         "remove-trusted" => remove_trusted(&args[1..]),
         "platform-store" => platform_store(&args[1..]),
-        "list" => list(),
+        "list" | "ls" => list(),
         "export-key" => export_key(&args[1..]),
         "export-public" => export_public(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
+    }
+}
+
+fn key_command(args: &[String]) -> CliResult<()> {
+    let command = require_arg(args, 0, "vault key command")?;
+    match command {
+        "create" | "gen" | "generate" => keygen(&args[1..]),
+        "import" => import_key(&args[1..]),
+        "export" => export_key(&args[1..]),
+        "export-public" => export_public(&args[1..]),
+        "remove" | "rm" => remove_key(&args[1..]),
+        _ => Err(Error::InvalidInput(format!("unknown vault key command: {command}")).into()),
+    }
+}
+
+fn trust_command(args: &[String]) -> CliResult<()> {
+    match args.first().map(String::as_str) {
+        Some("add") => trust(&args[1..]),
+        Some("remove" | "rm") => remove_trusted(&args[1..]),
+        _ => trust(args),
     }
 }
 
@@ -220,11 +241,24 @@ fn import_key(args: &[String]) -> CliResult<()> {
 }
 
 fn remove_key(args: &[String]) -> CliResult<()> {
+    let force = args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--force" | "--noask"));
+    let args = args
+        .iter()
+        .filter(|arg| !matches!(arg.as_str(), "--force" | "--noask"))
+        .cloned()
+        .collect::<Vec<_>>();
     let name = args
         .first()
         .map(String::as_str)
         .unwrap_or(VaultDirectory::DEFAULT_KEY_NAME);
+    if !force && !confirm_private_key_removal(name)? {
+        println!("Vault private key not removed: {name}");
+        return Ok(());
+    }
     default_vault()?.delete_private_key(name)?;
+    println!("Vault private key removed: {name}");
     Ok(())
 }
 
@@ -265,12 +299,21 @@ fn ensure_default_private_key(vault: &VaultDirectory) -> CliResult<bool> {
 
 fn export_public(args: &[String]) -> CliResult<()> {
     let (args, format) = parse_format(args)?;
+    let vault = default_vault()?;
     let (name, destination) = match args.as_slice() {
-        [destination] => (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str()),
+        [destination] => {
+            if vault.private_key_exists(destination)? {
+                return Err(Error::InvalidInput(format!(
+                    "missing public key output path for vault key {destination}"
+                ))
+                .into());
+            }
+            (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str())
+        }
         [name, destination, ..] => (name.as_str(), destination.as_str()),
         [] => return Err(Error::InvalidInput("missing public key path".to_string()).into()),
     };
-    let keypair = default_vault()?.load_private_key(name)?;
+    let keypair = vault.load_private_key(name)?;
     fs::write(
         destination,
         export_public_key(&keypair.public_key(), format)?,
@@ -280,14 +323,35 @@ fn export_public(args: &[String]) -> CliResult<()> {
 
 fn export_key(args: &[String]) -> CliResult<()> {
     let (args, format) = parse_format(args)?;
+    let vault = default_vault()?;
     let (name, destination) = match args.as_slice() {
-        [destination] => (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str()),
+        [destination] => {
+            if vault.private_key_exists(destination)? {
+                return Err(Error::InvalidInput(format!(
+                    "missing private key output path for vault key {destination}"
+                ))
+                .into());
+            }
+            (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str())
+        }
         [name, destination, ..] => (name.as_str(), destination.as_str()),
         [] => return Err(Error::InvalidInput("missing private key path".to_string()).into()),
     };
-    let keypair = default_vault()?.load_private_key(name)?;
+    let keypair = vault.load_private_key(name)?;
     write_private_key(destination, &export_private_key(&keypair, format)?)?;
     Ok(())
+}
+
+fn confirm_private_key_removal(name: &str) -> CliResult<bool> {
+    eprintln!("Remove vault private key '{name}'?");
+    eprintln!(
+        "Lockboxes that only this private key can open may become inaccessible from this vault."
+    );
+    eprint!("Type 'yes' to remove it: ");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(answer.trim() == "yes")
 }
 
 fn parse_format(args: &[String]) -> CliResult<(Vec<String>, KeyFormat)> {

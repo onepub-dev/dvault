@@ -27,7 +27,14 @@ pub(crate) fn open_existing(path: &str, access: &Access) -> Result<Lockbox, Erro
         Access::PromptPassword => Err(Error::InvalidOperation(
             "password prompting is only used when creating a new lockbox; pass --key or open through the local vault".to_string(),
         )),
-        Access::CacheOnly => local_vault().open_lockbox(path),
+        Access::CacheOnly => local_vault().open_lockbox(path).map_err(|err| match err {
+            Error::VaultUnavailable(message) if message.contains("no cached content key") => {
+                Error::InvalidOperation(format!(
+                    "lockbox is closed: {path}. Run `lockbox open {path}` first"
+                ))
+            }
+            err => err,
+        }),
     }
 }
 

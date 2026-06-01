@@ -3,31 +3,38 @@ use super::context::{
     load_recipient_from_arg, mirror_key_directory, open_existing, read_new_password, read_password,
     require_arg, Access, CliResult,
 };
+use lockbox_core::vault_bridge::VaultUnlock;
 use lockbox_core::{Error, LockboxProtection, LockboxUnlock, RecipientKeyPair};
 use lockbox_vault::{
-    encode_hex, export_private_key, local_vault, KeyFormat, NoopStore, SecretVec, Vault,
+    encode_hex, export_private_key, list as list_open_lockboxes, local_vault, KeyFormat, NoopStore,
+    SecretVec, Vault,
 };
 use std::fs;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
     if args.first().map(String::as_str) == Some("--recipient") {
+        let recipient_name = require_arg(args, 1, "recipient")?;
+        let lockbox_path = create_path(require_arg(args, 2, "lockbox")?)?;
+        ensure_new_lockbox_path(&lockbox_path)?;
         ensure_default_vault_initialized()?;
         let _vault = default_vault()?;
-        let recipient_name = require_arg(args, 1, "recipient")?;
-        let lockbox_path = require_arg(args, 2, "lockbox")?;
         let recipient = load_recipient_from_arg(recipient_name)?;
+        println!("Creating lockbox: {}", lockbox_path.display());
         let lb = Vault::new(NoopStore).create_lockbox(
-            lockbox_path,
+            &lockbox_path,
             LockboxProtection::RecipientPublicKey(recipient),
         )?;
         mirror_key_directory(&lb)?;
         return Ok(());
     }
-    let lockbox_path = require_arg(args, 0, "lockbox")?;
+    let lockbox_path = create_path(require_arg(args, 0, "lockbox")?)?;
+    ensure_new_lockbox_path(&lockbox_path)?;
+    println!("Creating lockbox: {}", lockbox_path.display());
     match access {
         Access::ContentKey(key) => {
             let lb = Vault::new(NoopStore).create_lockbox(
-                lockbox_path,
+                &lockbox_path,
                 LockboxProtection::ContentKey(key.try_clone()?),
             )?;
             mirror_key_directory(&lb)?;
@@ -36,7 +43,7 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
             ensure_default_vault_initialized()?;
             let _vault = default_vault()?;
             let password = read_new_password()?;
-            let lb = local_vault().create_lockbox_with_password(lockbox_path, &password)?;
+            let lb = local_vault().create_lockbox_with_password(&lockbox_path, &password)?;
             mirror_key_directory(&lb)?;
         }
         Access::CacheOnly => {
@@ -47,19 +54,52 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
 }
 
 pub(crate) fn open(args: &[String]) -> CliResult<()> {
+    if args.first().map(String::as_str) == Some("--list") {
+        list_open()?;
+        return Ok(());
+    }
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let password = read_password("Password: ")?;
     let lb = local_vault().unlock_lockbox_with_password(lockbox_path, &password)?;
     mirror_key_directory(&lb)?;
+    println!("Lockbox opened: {lockbox_path}");
     Ok(())
 }
 
 pub(crate) fn lock(args: &[String]) -> CliResult<()> {
     if args.first().map(String::as_str) == Some("--all") {
         local_vault().lock_all()?;
+        println!("All lockboxes closed.");
     } else {
         let lockbox_path = require_arg(args, 0, "lockbox")?;
+        let was_open = lockbox_is_open(lockbox_path);
         local_vault().lock_lockbox(lockbox_path)?;
+        if was_open {
+            println!("Lockbox closed: {lockbox_path}");
+        } else {
+            println!("Lockbox was already closed: {lockbox_path}");
+        }
+    }
+    Ok(())
+}
+
+fn lockbox_is_open(lockbox_path: &str) -> bool {
+    let Ok(lockbox_id) = VaultUnlock::read_lockbox_id(Path::new(lockbox_path)) else {
+        return false;
+    };
+    list_open_lockboxes()
+        .map(|ids| ids.iter().any(|id| id == &lockbox_id.to_string()))
+        .unwrap_or(false)
+}
+
+pub(crate) fn list_open() -> CliResult<()> {
+    let ids = list_open_lockboxes()?;
+    if ids.is_empty() {
+        println!("empty");
+    } else {
+        for id in ids {
+            println!("open\t{id}");
+        }
     }
     Ok(())
 }
@@ -115,11 +155,36 @@ pub(crate) fn remove_key(args: &[String], access: &Access) -> CliResult<()> {
     Ok(())
 }
 
+pub(crate) fn recipient(args: &[String], access: &Access) -> CliResult<()> {
+    let command = require_arg(args, 0, "recipient command")?;
+    match command {
+        "add" => add_recipient(&args[1..], access),
+        "list" | "ls" => list_keys(&args[1..], access),
+        "remove" | "rm" => remove_key(&args[1..], access),
+        _ => Err(Error::InvalidInput(format!("unknown recipient command: {command}")).into()),
+    }
+}
+
 fn write_private_key(path: &str, bytes: &SecretVec) -> CliResult<()> {
     use std::io::Write;
 
     let mut file = create_private_key_file(path)?;
     bytes.with_bytes(|bytes| file.write_all(bytes))??;
+    Ok(())
+}
+
+fn create_path(path: &str) -> CliResult<PathBuf> {
+    let mut path = PathBuf::from(path);
+    if path.extension().is_none() {
+        path.set_extension("lbox");
+    }
+    Ok(path)
+}
+
+fn ensure_new_lockbox_path(path: &Path) -> CliResult<()> {
+    if path.exists() {
+        return Err(Error::AlreadyExists(path.display().to_string()).into());
+    }
     Ok(())
 }
 

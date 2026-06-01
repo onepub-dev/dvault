@@ -43,6 +43,10 @@ mod platform {
     pub(crate) fn forget_all() -> io::Result<()> {
         Ok(())
     }
+
+    pub(crate) fn list() -> io::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Content-key store backed by the platform lockbox agent.
@@ -110,4 +114,9 @@ pub fn forget(lockbox_id: LockboxId) -> io::Result<()> {
 /// Removes all content keys from the platform agent.
 pub fn forget_all() -> io::Result<()> {
     platform::forget_all()
+}
+
+/// Lists cached lockbox ids known to the platform agent.
+pub fn list() -> io::Result<Vec<String>> {
+    platform::list()
 }

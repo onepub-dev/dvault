@@ -11,12 +11,14 @@ pub(crate) enum AgentRequest {
     Put(String, SecretVec),
     Forget(String),
     ForgetAll,
+    List,
 }
 
 pub(crate) enum AgentResponse {
     Ok,
     Miss,
     Key(SecretVec),
+    List(Vec<String>),
     Err(String),
 }
 
@@ -45,6 +47,10 @@ pub(crate) fn encode_forget_all() -> io::Result<SecretVec> {
     secure_message(b"LBX1 FORGET_ALL\n")
 }
 
+pub(crate) fn encode_list() -> io::Result<SecretVec> {
+    secure_message(b"LBX1 LIST\n")
+}
+
 pub(crate) fn encode_key_response(key: &SecretVec) -> io::Result<SecretVec> {
     let mut message = SecretVec::new();
     message
@@ -58,6 +64,22 @@ pub(crate) fn encode_key_response(key: &SecretVec) -> io::Result<SecretVec> {
 
 pub(crate) fn encode_response_line(line: &[u8]) -> io::Result<SecretVec> {
     secure_message(line)
+}
+
+pub(crate) fn encode_list_response(
+    lockbox_ids: impl Iterator<Item = String>,
+) -> io::Result<SecretVec> {
+    let ids = lockbox_ids.collect::<Vec<_>>();
+    let mut message = SecretVec::new();
+    message
+        .try_extend_from_slice(format!("LIST {}\n", ids.len()).as_bytes())
+        .map_err(io::Error::other)?;
+    for id in ids {
+        message
+            .try_extend_from_slice(format!("{id}\n").as_bytes())
+            .map_err(io::Error::other)?;
+    }
+    Ok(message)
 }
 
 pub(crate) fn parse_request(request: &SecretVec) -> io::Result<AgentRequest> {
@@ -74,6 +96,7 @@ pub(crate) fn parse_request(request: &SecretVec) -> io::Result<AgentRequest> {
         }
         ParsedHeader::Forget(lockbox_id) => Ok(AgentRequest::Forget(lockbox_id)),
         ParsedHeader::ForgetAll => Ok(AgentRequest::ForgetAll),
+        ParsedHeader::List => Ok(AgentRequest::List),
     }
 }
 
@@ -85,6 +108,7 @@ pub(crate) fn parse_response(response: SecretVec) -> io::Result<AgentResponse> {
         ParsedResponse::Ok => Ok(AgentResponse::Ok),
         ParsedResponse::Miss => Ok(AgentResponse::Miss),
         ParsedResponse::Err(message) => Ok(AgentResponse::Err(message)),
+        ParsedResponse::List(ids) => Ok(AgentResponse::List(ids)),
         ParsedResponse::Key(body_offset, body_len) => {
             let key = response
                 .try_clone_range(body_offset, body_len)
@@ -113,6 +137,7 @@ enum ParsedHeader {
     Put(String, usize, usize),
     Forget(String),
     ForgetAll,
+    List,
 }
 
 fn parse_header(bytes: &[u8]) -> io::Result<ParsedHeader> {
@@ -151,6 +176,7 @@ fn parse_header(bytes: &[u8]) -> io::Result<ParsedHeader> {
             Ok(ParsedHeader::Forget((*lockbox_id).to_string()))
         }
         [version, "FORGET_ALL"] if *version == PROTOCOL_VERSION => Ok(ParsedHeader::ForgetAll),
+        [version, "LIST"] if *version == PROTOCOL_VERSION => Ok(ParsedHeader::List),
         _ => invalid_data("invalid agent request"),
     }
 }
@@ -159,6 +185,7 @@ enum ParsedResponse {
     Ok,
     Miss,
     Key(usize, usize),
+    List(Vec<String>),
     Err(String),
 }
 
@@ -180,6 +207,23 @@ fn parse_response_header(bytes: &[u8]) -> io::Result<ParsedResponse> {
     }
     if let Some(message) = header.strip_prefix("ERR ") {
         return Ok(ParsedResponse::Err(message.to_string()));
+    }
+    if let Some(count) = header.strip_prefix("LIST ") {
+        let count = count
+            .parse::<usize>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid list count"))?;
+        let body = &bytes[newline + 1..];
+        let text = std::str::from_utf8(body).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "list response body is not UTF-8",
+            )
+        })?;
+        let ids = text.lines().map(ToString::to_string).collect::<Vec<_>>();
+        if ids.len() != count {
+            return invalid_data("list response count does not match body");
+        }
+        return Ok(ParsedResponse::List(ids));
     }
     let parts: Vec<&str> = header.split_whitespace().collect();
     match parts.as_slice() {
@@ -231,5 +275,17 @@ mod tests {
             parse_request(&request).unwrap(),
             AgentRequest::ForgetAll
         ));
+        let request = SecretVec::try_from_slice(b"LBX1 LIST\n").unwrap();
+        assert!(matches!(
+            parse_request(&request).unwrap(),
+            AgentRequest::List
+        ));
+
+        let response =
+            encode_list_response(["a".to_string(), "b".to_string()].into_iter()).unwrap();
+        match parse_response(response).unwrap() {
+            AgentResponse::List(ids) => assert_eq!(ids, ["a", "b"]),
+            _ => panic!("expected LIST"),
+        }
     }
 }
