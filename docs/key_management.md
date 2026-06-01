@@ -248,6 +248,10 @@ a high-level `LocalVault` API for native CLIs and bindings, plus the lower-level
 agent protocol helpers needed by alternate front ends. The Rust CLI uses that
 crate rather than owning agent transport code itself.
 
+Browser WASM builds do not use the native agent or platform secret stores. Their
+unlock model is documented separately in
+[wasm_unlock_design.md](wasm_unlock_design.md).
+
 `lockbox_vault` currently has Unix-domain-socket and Windows named-pipe
 transport implementations. The Windows pipe is created with an owner-only DACL
 and the server still validates the connecting client's SID against the agent
