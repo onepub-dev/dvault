@@ -5,6 +5,46 @@ dependency, or implementation changes. Keep each entry self-contained: include
 the change being measured, the command, environment, baseline source, and
 observed result table.
 
+## 2026-06-01 - Real-World Large File Threading Sweep
+
+Description: measured the merged native worker pipeline against large local
+real-world files: a 956 MiB analyzer log snapshot, a 249 MiB Git pack, a
+350 MiB Android `libflutter.so`, and a 118 MiB MP4 screen recording. The full
+report is in `docs/real_world_large_file_benchmark_2026_06_01.md`.
+
+Commands:
+
+```bash
+cd /home/bsutton/git/dvault
+cargo build --release -p lockbox_cli --manifest-path rust/Cargo.toml
+# Swept --jobs 1,2,4,6,auto,8,12,16.
+# Each row creates a fresh lockbox and times `lockbox add`.
+```
+
+Environment:
+
+- Host: local Linux workstation, AMD Ryzen 7 3700X, 8 cores / 16 threads
+- Output: `rust/target/real-world-large-files-20260601/results/summary.tsv`
+- Timing source: `/usr/bin/time` plus `LOCKBOX_IMPORT_TIMINGS=1`
+- Compression backend: local `../zstd-rs/ruzstd`
+
+Best observed results:
+
+| Dataset | Jobs 1 wall s | Best jobs | Best wall s | Speedup | Output ratio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| analyzer-log | 8.77 | 12 | 1.24 | 7.07x | 0.02036 |
+| git-pack | 2.53 | 4 | 2.28 | 1.11x | 1.00020 |
+| libflutter-so | 14.25 | 16 | 2.15 | 6.63x | 0.29951 |
+| screencast-mp4 | 1.01 | 16 | 0.24 | 4.21x | 0.09146 |
+
+Conclusion:
+
+- Native threading is a strong win for large compressible files.
+- The six-worker `--jobs auto` cap remains a sensible default, while explicit
+  `--jobs 12` or `--jobs 16` can improve large compressible imports further.
+- Already-packed data, represented by the Git pack, is dominated by write and
+  commit work and does not materially benefit from more compression threads.
+
 ## 2026-05-31 - Native Worker Pipeline Jobs Probe
 
 Description: implemented `lockbox --jobs auto|1|N add ...` and a native worker
