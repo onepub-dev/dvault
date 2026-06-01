@@ -3,6 +3,44 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 #[test]
+fn help_is_grouped_and_commands_have_specific_help() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+
+    let help = run_output(bin, &["--help"]);
+    assert_success(&help);
+    let help = String::from_utf8_lossy(&help.stderr);
+    assert!(help.contains(
+        "Create encrypted file archives, store secrets safely, and share access with public keys."
+    ));
+    assert!(help.contains("Usage: lockbox <command> [arguments]"));
+    assert!(help.contains("Available commands:"));
+    assert!(help.contains("Archives"));
+    assert!(help.contains("Files"));
+    assert!(help.contains("Vault"));
+    assert!(!help.contains("--jobs auto|1|N"));
+
+    let add_help = run_output(bin, &["add", "--help"]);
+    assert_success(&add_help);
+    let add_help = String::from_utf8_lossy(&add_help.stdout);
+    assert!(add_help.contains("Usage: lockbox add"));
+    assert!(add_help.contains("<lockbox>"));
+    assert!(add_help.contains("<source>"));
+    assert!(add_help.contains("<lockbox-path>"));
+    assert!(!add_help.contains("--jobs"));
+
+    let add_verbose_help = run_output(bin, &["add", "--help", "--verbose"]);
+    assert_success(&add_verbose_help);
+    let add_verbose_help = String::from_utf8_lossy(&add_verbose_help.stdout);
+    assert!(add_verbose_help.contains("--jobs <auto|1|N>"));
+    assert!(add_verbose_help.contains("--key <RAW_CONTENT_KEY>"));
+
+    let env_help = run_output(bin, &["env", "set", "--help"]);
+    assert_success(&env_help);
+    let env_help = String::from_utf8_lossy(&env_help.stdout);
+    assert!(env_help.contains("-v, --value <VALUE>"));
+}
+
+#[test]
 fn cli_env_rename_and_visualize_flow() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir();
@@ -170,9 +208,9 @@ fn add_accepts_jobs_option_for_large_files() {
     run(
         bin,
         &[
+            "add",
             "--jobs",
             "2",
-            "add",
             lockbox.to_str().unwrap(),
             source.to_str().unwrap(),
             "/large.bin",

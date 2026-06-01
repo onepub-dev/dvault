@@ -9,7 +9,6 @@ use lockbox_vault::{
     platform_secret_store_disabled, put_platform_vault_password, NoopStore, SecretString, Vault,
     VaultDirectory,
 };
-use std::env;
 use std::path::Path;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -18,28 +17,6 @@ pub(crate) enum Access {
     ContentKey(SecretVec),
     PromptPassword,
     CacheOnly,
-}
-
-pub(crate) fn read_access(args: &mut Vec<String>) -> CliResult<Access> {
-    if args.first().map(String::as_str) == Some("--key") {
-        if args.len() < 2 {
-            return Err(Error::InvalidInput("missing --key value".to_string()).into());
-        }
-        args.remove(0);
-        return Ok(Access::ContentKey(SecretVec::try_from_vec(
-            args.remove(0).into_bytes(),
-        )?));
-    }
-    if let Ok(key) = env::var("LOCKBOX_KEY") {
-        return Ok(Access::ContentKey(SecretVec::try_from_vec(
-            key.into_bytes(),
-        )?));
-    }
-    if args.first().map(String::as_str) == Some("create") {
-        Ok(Access::PromptPassword)
-    } else {
-        Ok(Access::CacheOnly)
-    }
 }
 
 pub(crate) fn open_existing(path: &str, access: &Access) -> Result<Lockbox, Error> {
@@ -82,29 +59,6 @@ pub(crate) fn require_arg<'a>(args: &'a [String], index: usize, name: &str) -> C
     args.get(index)
         .map(String::as_str)
         .ok_or_else(|| Error::InvalidInput(format!("missing {name}")).into())
-}
-
-pub(crate) fn remove_global_flag(args: &mut Vec<String>, flag: &str) -> bool {
-    if let Some(index) = args.iter().position(|arg| arg == flag) {
-        args.remove(index);
-        true
-    } else {
-        false
-    }
-}
-
-pub(crate) fn remove_global_option(
-    args: &mut Vec<String>,
-    flag: &str,
-) -> CliResult<Option<String>> {
-    let Some(index) = args.iter().position(|arg| arg == flag) else {
-        return Ok(None);
-    };
-    args.remove(index);
-    if index >= args.len() {
-        return Err(Error::InvalidInput(format!("missing value for {flag}")).into());
-    }
-    Ok(Some(args.remove(index)))
 }
 
 pub(crate) fn read_password(prompt: &str) -> CliResult<SecretString> {
