@@ -28,7 +28,10 @@ use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::secret_vec::SecretVec;
 use crate::storage::{Storage, StorageBackend};
 use crate::toc_entry::TocEntry;
-use crate::{CacheStats, EnvName, Error, LockboxOptions, RecoveryReport, Result, WorkloadProfile};
+use crate::{
+    CacheStats, EnvName, Error, LockboxOptions, RecoveryReport, Result, WorkerPolicy,
+    WorkloadProfile,
+};
 use zeroize::Zeroize;
 
 mod commit;
@@ -72,6 +75,22 @@ pub(crate) struct CachedCompressionFrame {
     pub(crate) data: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Coarse import pipeline timing counters.
+///
+/// These counters are intended for benchmark diagnostics. They are cumulative
+/// for the current `Lockbox` handle until `reset_import_stats` is called.
+pub struct ImportStats {
+    /// Host filesystem metadata/stat calls, in nanoseconds.
+    pub host_stat_nanos: u128,
+    /// Host filesystem reads, including streamed chunk reads, in nanoseconds.
+    pub host_read_nanos: u128,
+    /// Compression-frame payload assembly and compression, in nanoseconds.
+    pub frame_prepare_nanos: u128,
+    /// Page/object encoding and storage writes, in nanoseconds.
+    pub page_write_nanos: u128,
+}
+
 impl Drop for CachedCompressionFrame {
     fn drop(&mut self) {
         self.data.zeroize();
@@ -109,7 +128,9 @@ pub struct Lockbox {
     dirty_env: bool,
     page_manager: RefCell<PageCache>,
     compression_frame_cache: RefCell<CompressionFrameCache>,
+    import_stats: RefCell<ImportStats>,
     workload_profile: WorkloadProfile,
+    worker_policy: WorkerPolicy,
     free_space: FreeSpace,
     record_ref_counts: std::collections::HashMap<u64, usize, FastBuildHasher>,
     pending_redactions: BTreeMap<u64, PendingRedaction>,
@@ -146,7 +167,9 @@ impl Lockbox {
             dirty_env: self.dirty_env,
             page_manager: RefCell::new(self.page_manager.borrow().clone()),
             compression_frame_cache: RefCell::new(CompressionFrameCache::default()),
+            import_stats: RefCell::new(ImportStats::default()),
             workload_profile: self.workload_profile,
+            worker_policy: self.worker_policy,
             free_space: self.free_space.clone(),
             record_ref_counts: self.record_ref_counts.clone(),
             pending_redactions: self.pending_redactions.clone(),
@@ -219,7 +242,9 @@ impl Lockbox {
             dirty_env: false,
             page_manager: RefCell::new(PageCache::new(options.cache_limit)),
             compression_frame_cache: RefCell::new(CompressionFrameCache::default()),
+            import_stats: RefCell::new(ImportStats::default()),
             workload_profile: options.workload_profile,
+            worker_policy: options.worker_policy,
             free_space: FreeSpace::default(),
             record_ref_counts: std::collections::HashMap::with_hasher(FastBuildHasher::default()),
             pending_redactions: BTreeMap::new(),
@@ -302,7 +327,9 @@ impl Lockbox {
             dirty_env: false,
             page_manager: RefCell::new(PageCache::new(options.cache_limit)),
             compression_frame_cache: RefCell::new(CompressionFrameCache::default()),
+            import_stats: RefCell::new(ImportStats::default()),
             workload_profile: options.workload_profile,
+            worker_policy: options.worker_policy,
             free_space: FreeSpace::default(),
             record_ref_counts: std::collections::HashMap::with_hasher(FastBuildHasher::default()),
             pending_redactions: BTreeMap::new(),
@@ -386,6 +413,46 @@ impl Lockbox {
     /// Return the currently selected workload profile.
     pub fn workload_profile(&self) -> WorkloadProfile {
         self.workload_profile
+    }
+
+    /// Set the worker policy used for native page/frame preparation.
+    pub fn set_worker_policy(&mut self, policy: WorkerPolicy) {
+        self.worker_policy = policy;
+    }
+
+    /// Return the currently selected worker policy.
+    pub fn worker_policy(&self) -> WorkerPolicy {
+        self.worker_policy
+    }
+
+    pub(crate) fn worker_jobs(&self) -> usize {
+        self.worker_policy.effective_jobs()
+    }
+
+    /// Reset import diagnostic counters.
+    pub fn reset_import_stats(&self) {
+        *self.import_stats.borrow_mut() = ImportStats::default();
+    }
+
+    /// Return cumulative import diagnostic counters for this handle.
+    pub fn import_stats(&self) -> ImportStats {
+        *self.import_stats.borrow()
+    }
+
+    pub(crate) fn add_host_stat_nanos(&self, nanos: u128) {
+        self.import_stats.borrow_mut().host_stat_nanos += nanos;
+    }
+
+    pub(crate) fn add_host_read_nanos(&self, nanos: u128) {
+        self.import_stats.borrow_mut().host_read_nanos += nanos;
+    }
+
+    pub(crate) fn add_frame_prepare_nanos(&self, nanos: u128) {
+        self.import_stats.borrow_mut().frame_prepare_nanos += nanos;
+    }
+
+    pub(crate) fn add_page_write_nanos(&self, nanos: u128) {
+        self.import_stats.borrow_mut().page_write_nanos += nanos;
     }
 
     pub(crate) fn should_discard_file_pages_after_flush(&self) -> bool {

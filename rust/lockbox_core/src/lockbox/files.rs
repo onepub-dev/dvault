@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::Lockbox;
 use crate::compression::{
@@ -229,11 +230,15 @@ impl Lockbox {
         destination: &LockboxPath,
         replace: bool,
     ) -> Result<()> {
+        let stat_start = Instant::now();
         let metadata = std::fs::metadata(source)
             .map_err(|err| Error::Io(format!("stat {}: {err}", source.display())))?;
+        self.add_host_stat_nanos(stat_start.elapsed().as_nanos());
         if metadata.len() <= SMALL_FILE_PACKING_LIMIT as u64 {
+            let read_start = Instant::now();
             let data = std::fs::read(source)
                 .map_err(|err| Error::Io(format!("read {}: {err}", source.display())))?;
+            self.add_host_read_nanos(read_start.elapsed().as_nanos());
             return self.add_file(destination, &data, replace);
         }
         let file = std::fs::File::open(source)
@@ -267,7 +272,7 @@ impl Lockbox {
     fn write_file_from_reader_with_permissions(
         &mut self,
         path: &LockboxPath,
-        mut reader: impl Read,
+        reader: impl Read,
         permissions: u32,
         replace: bool,
     ) -> Result<()> {
@@ -284,40 +289,12 @@ impl Lockbox {
             self.free_entry_slots(old)?;
         }
 
-        let mut chunks = Vec::new();
-        let mut file_offset = 0u64;
-        let mut writer = FilePageWriter::new(self);
-        let mut buffer = vec![0; FILE_COMPRESSION_FRAME_BYTES];
-        loop {
-            let read = read_next_chunk(&mut reader, &mut buffer)?;
-            if read == 0 {
-                if file_offset == 0 {
-                    writer.write_compression_frame(
-                        CompressionFrameWrite {
-                            path: &path,
-                            permissions,
-                            total_len: 0,
-                            file_offset: 0,
-                            data: &[],
-                        },
-                        &mut chunks,
-                    )?;
-                }
-                break;
-            }
-            writer.write_compression_frame(
-                CompressionFrameWrite {
-                    path: &path,
-                    permissions,
-                    total_len: 0,
-                    file_offset,
-                    data: &buffer[..read],
-                },
-                &mut chunks,
-            )?;
-            file_offset += read as u64;
-        }
-        writer.finish(&mut chunks)?;
+        let jobs = self.worker_jobs();
+        let (file_offset, chunks) = if jobs > 1 {
+            self.write_file_data_parallel(&path, reader, permissions, jobs)?
+        } else {
+            self.write_file_data_sequential(&path, reader, permissions)?
+        };
 
         let entry = TocEntry {
             path: path.clone(),
@@ -347,6 +324,169 @@ impl Lockbox {
         self.mark_toc_dirty(&path);
         self.needs_packing = true;
         Ok(())
+    }
+
+    fn write_file_data_sequential(
+        &mut self,
+        path: &LockboxPath,
+        mut reader: impl Read,
+        permissions: u32,
+    ) -> Result<(u64, Vec<FileChunk>)> {
+        let mut chunks = Vec::new();
+        let mut file_offset = 0u64;
+        let mut writer = FilePageWriter::new(self);
+        let mut buffer = vec![0; FILE_COMPRESSION_FRAME_BYTES];
+        loop {
+            let read_start = Instant::now();
+            let read = read_next_chunk(&mut reader, &mut buffer)?;
+            writer
+                .lockbox
+                .add_host_read_nanos(read_start.elapsed().as_nanos());
+            if read == 0 {
+                if file_offset == 0 {
+                    writer.write_compression_frame(
+                        CompressionFrameWrite {
+                            path,
+                            permissions,
+                            total_len: 0,
+                            file_offset: 0,
+                            data: &[],
+                        },
+                        &mut chunks,
+                    )?;
+                }
+                break;
+            }
+            writer.write_compression_frame(
+                CompressionFrameWrite {
+                    path,
+                    permissions,
+                    total_len: 0,
+                    file_offset,
+                    data: &buffer[..read],
+                },
+                &mut chunks,
+            )?;
+            file_offset += read as u64;
+        }
+        writer.finish(&mut chunks)?;
+        Ok((file_offset, chunks))
+    }
+
+    fn write_file_data_parallel(
+        &mut self,
+        path: &LockboxPath,
+        mut reader: impl Read,
+        permissions: u32,
+        jobs: usize,
+    ) -> Result<(u64, Vec<FileChunk>)> {
+        let jobs = jobs.max(1);
+        let level = self.compression_frame_zstd_level();
+        let queue_bound = jobs.saturating_mul(2).max(1);
+        let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<ParallelCompressionJob>(queue_bound);
+        let (result_tx, result_rx) = std::sync::mpsc::channel::<ParallelCompressionResult>();
+        let job_rx = Arc::new(Mutex::new(job_rx));
+
+        std::thread::scope(|scope| -> Result<(u64, Vec<FileChunk>)> {
+            for _ in 0..jobs {
+                let job_rx = Arc::clone(&job_rx);
+                let result_tx = result_tx.clone();
+                scope.spawn(move || loop {
+                    let job = match job_rx.lock() {
+                        Ok(rx) => rx.recv(),
+                        Err(_) => return,
+                    };
+                    let Ok(job) = job else {
+                        return;
+                    };
+                    let result = prepare_parallel_compression_frame(job, level);
+                    if result_tx.send(result).is_err() {
+                        return;
+                    }
+                });
+            }
+            drop(result_tx);
+
+            let mut writer = FilePageWriter::new(self);
+            let mut chunks = Vec::new();
+            let mut pending = BTreeMap::new();
+            let mut next_index = 0usize;
+            let mut received_count = 0usize;
+            let mut file_offset = 0u64;
+            let mut job_count = 0usize;
+            let mut buffer = vec![0; FILE_COMPRESSION_FRAME_BYTES];
+            loop {
+                let read_start = Instant::now();
+                let read = read_next_chunk(&mut reader, &mut buffer)?;
+                writer
+                    .lockbox
+                    .add_host_read_nanos(read_start.elapsed().as_nanos());
+                if read == 0 {
+                    if file_offset == 0 {
+                        job_tx
+                            .send(ParallelCompressionJob {
+                                index: job_count,
+                                path: path.clone(),
+                                permissions,
+                                total_len: 0,
+                                file_offset: 0,
+                                data: Vec::new(),
+                            })
+                            .map_err(|_| {
+                                Error::Io("compression worker stopped unexpectedly".to_string())
+                            })?;
+                        job_count += 1;
+                        drain_ready_parallel_results(
+                            &result_rx,
+                            &mut writer,
+                            &mut chunks,
+                            &mut pending,
+                            &mut next_index,
+                            &mut received_count,
+                        )?;
+                    }
+                    break;
+                }
+
+                job_tx
+                    .send(ParallelCompressionJob {
+                        index: job_count,
+                        path: path.clone(),
+                        permissions,
+                        total_len: 0,
+                        file_offset,
+                        data: buffer[..read].to_vec(),
+                    })
+                    .map_err(|_| {
+                        Error::Io("compression worker stopped unexpectedly".to_string())
+                    })?;
+                file_offset += read as u64;
+                job_count += 1;
+                drain_ready_parallel_results(
+                    &result_rx,
+                    &mut writer,
+                    &mut chunks,
+                    &mut pending,
+                    &mut next_index,
+                    &mut received_count,
+                )?;
+            }
+            drop(job_tx);
+
+            while received_count < job_count {
+                let result = result_rx.recv().map_err(|_| {
+                    Error::Io("compression worker stopped unexpectedly".to_string())
+                })?;
+                received_count += 1;
+                pending.insert(result.index, result.frame);
+                while let Some(frame) = pending.remove(&next_index) {
+                    writer.write_prepared_compression_frame(frame, &mut chunks)?;
+                    next_index += 1;
+                }
+            }
+            writer.finish(&mut chunks)?;
+            Ok((file_offset, chunks))
+        })
     }
 
     /// Return the complete contents of a file.
@@ -685,22 +825,15 @@ impl Lockbox {
         let mut updates = Vec::new();
         let mut dirty_paths = Vec::new();
         let pending = pending.into_values().collect::<Vec<_>>();
+        let mut batches = Vec::new();
         let mut batch = Vec::new();
         let mut batch_bytes = 0usize;
         for chunk in &pending {
             if !batch.is_empty()
                 && batch_bytes.saturating_add(chunk.data.len()) > compression_frame_target
             {
-                let indices = writer.write_compression_frame_bundle(&batch, &mut all_chunks)?;
-                for (frame, chunk_index) in batch.iter().zip(indices) {
-                    updates.push((
-                        (*frame.path).clone(),
-                        frame.permissions,
-                        frame.total_len,
-                        chunk_index,
-                    ));
-                }
-                batch.clear();
+                batches.push(batch);
+                batch = Vec::new();
                 batch_bytes = 0;
             }
             batch_bytes = batch_bytes.saturating_add(chunk.data.len());
@@ -713,7 +846,10 @@ impl Lockbox {
             });
         }
         if !batch.is_empty() {
-            let indices = writer.write_compression_frame_bundle(&batch, &mut all_chunks)?;
+            batches.push(batch);
+        }
+        let batch_indices = writer.write_compression_frame_batches(&batches, &mut all_chunks)?;
+        for (batch, indices) in batches.iter().zip(batch_indices) {
             for (frame, chunk_index) in batch.iter().zip(indices) {
                 updates.push((
                     (*frame.path).clone(),
@@ -781,22 +917,15 @@ impl Lockbox {
         let mut all_chunks = Vec::new();
         let mut updates = Vec::new();
         let mut dirty_paths = Vec::new();
+        let mut batches = Vec::new();
         let mut batch = Vec::new();
         let mut batch_bytes = 0usize;
         for (path, permissions, data, _) in &candidates {
             if !batch.is_empty()
                 && batch_bytes.saturating_add(data.len()) > compression_frame_target
             {
-                let indices = writer.write_compression_frame_bundle(&batch, &mut all_chunks)?;
-                for (frame, chunk_index) in batch.iter().zip(indices) {
-                    updates.push((
-                        (*frame.path).clone(),
-                        frame.permissions,
-                        frame.total_len,
-                        chunk_index,
-                    ));
-                }
-                batch.clear();
+                batches.push(batch);
+                batch = Vec::new();
                 batch_bytes = 0;
             }
             let len = data.len() as u64;
@@ -810,7 +939,10 @@ impl Lockbox {
             });
         }
         if !batch.is_empty() {
-            let indices = writer.write_compression_frame_bundle(&batch, &mut all_chunks)?;
+            batches.push(batch);
+        }
+        let batch_indices = writer.write_compression_frame_batches(&batches, &mut all_chunks)?;
+        for (batch, indices) in batches.iter().zip(batch_indices) {
             for (frame, chunk_index) in batch.iter().zip(indices) {
                 updates.push((
                     (*frame.path).clone(),
@@ -993,6 +1125,33 @@ fn read_next_chunk(reader: &mut impl Read, buffer: &mut [u8]) -> Result<usize> {
     Ok(read_total)
 }
 
+fn drain_ready_parallel_results(
+    result_rx: &std::sync::mpsc::Receiver<ParallelCompressionResult>,
+    writer: &mut FilePageWriter<'_>,
+    chunks: &mut Vec<FileChunk>,
+    pending: &mut BTreeMap<usize, PreparedCompressionFrame>,
+    next_index: &mut usize,
+    received_count: &mut usize,
+) -> Result<()> {
+    loop {
+        let result = match result_rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err(Error::Io(
+                    "compression worker stopped unexpectedly".to_string(),
+                ));
+            }
+        };
+        *received_count += 1;
+        pending.insert(result.index, result.frame);
+        while let Some(frame) = pending.remove(&*next_index) {
+            writer.write_prepared_compression_frame(frame, chunks)?;
+            *next_index += 1;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PendingSegment {
     chunk_indices: Vec<usize>,
@@ -1028,6 +1187,36 @@ struct CompressionFrameWrite<'a> {
     data: &'a [u8],
 }
 
+struct PreparedCompressionFrame {
+    compression: u8,
+    compression_frame_len: u64,
+    compressed_len: u64,
+    compression_frame_digest: [u8; 32],
+    slices: Vec<CompressionFrameSlice>,
+    stored: Zeroizing<Vec<u8>>,
+    prepare_nanos: u128,
+}
+
+struct ParallelCompressionJob {
+    index: usize,
+    path: LockboxPath,
+    permissions: u32,
+    total_len: u64,
+    file_offset: u64,
+    data: Vec<u8>,
+}
+
+impl Drop for ParallelCompressionJob {
+    fn drop(&mut self) {
+        self.data.zeroize();
+    }
+}
+
+struct ParallelCompressionResult {
+    index: usize,
+    frame: PreparedCompressionFrame,
+}
+
 impl<'a> FilePageWriter<'a> {
     fn new(lockbox: &'a mut Lockbox) -> Self {
         Self {
@@ -1050,38 +1239,44 @@ impl<'a> FilePageWriter<'a> {
         frames: &[CompressionFrameWrite<'_>],
         chunks: &mut Vec<FileChunk>,
     ) -> Result<Vec<usize>> {
+        let prepared =
+            prepare_compression_frame(frames, self.lockbox.compression_frame_zstd_level());
+        self.write_prepared_compression_frame(prepared, chunks)
+    }
+
+    fn write_compression_frame_batches(
+        &mut self,
+        batches: &[Vec<CompressionFrameWrite<'_>>],
+        chunks: &mut Vec<FileChunk>,
+    ) -> Result<Vec<Vec<usize>>> {
+        let prepared = prepare_compression_frame_batches(
+            batches,
+            self.lockbox.compression_frame_zstd_level(),
+            self.lockbox.worker_jobs(),
+        );
+        let mut indices = Vec::with_capacity(prepared.len());
+        for frame in prepared {
+            indices.push(self.write_prepared_compression_frame(frame, chunks)?);
+        }
+        Ok(indices)
+    }
+
+    fn write_prepared_compression_frame(
+        &mut self,
+        prepared: PreparedCompressionFrame,
+        chunks: &mut Vec<FileChunk>,
+    ) -> Result<Vec<usize>> {
+        self.lockbox.add_frame_prepare_nanos(prepared.prepare_nanos);
         self.lockbox.sequence += 1;
         let compression_frame_id = self.lockbox.sequence;
-        let mut compression_frame_payload = Vec::new();
-        let mut slices = Vec::with_capacity(frames.len());
-        let mut chunk_indices = Vec::with_capacity(frames.len());
-        for frame in frames {
-            let compression_frame_offset = compression_frame_payload.len() as u64;
-            compression_frame_payload.extend_from_slice(frame.data);
-            slices.push(CompressionFrameSlice {
-                path: frame.path.clone(),
-                permissions: frame.permissions,
-                total_len: frame.total_len,
-                file_offset: frame.file_offset,
-                compression_frame_offset,
-                len: frame.data.len() as u64,
-            });
-        }
-        let compression_frame_len = compression_frame_payload.len() as u64;
-        let (compression, stored) = encode_compression_frame_with_level(
-            &compression_frame_payload,
-            self.lockbox.compression_frame_zstd_level(),
-        );
-        let stored = Zeroizing::new(stored);
-        compression_frame_payload.zeroize();
-        let compression_frame_digest = strong_checksum(stored.as_slice());
+        let mut chunk_indices = Vec::with_capacity(prepared.slices.len());
         let manifest = CompressionFrameManifest {
             compression_frame_id,
-            compression,
-            compression_frame_len,
-            compressed_len: stored.len() as u64,
-            compression_frame_digest,
-            slices,
+            compression: prepared.compression,
+            compression_frame_len: prepared.compression_frame_len,
+            compressed_len: prepared.compressed_len,
+            compression_frame_digest: prepared.compression_frame_digest,
+            slices: prepared.slices,
         };
         for slice in &manifest.slices {
             let chunk_index = chunks.len();
@@ -1092,27 +1287,27 @@ impl<'a> FilePageWriter<'a> {
                 compression_frame_offset: slice.compression_frame_offset,
                 compression_frame_len: manifest.compression_frame_len,
                 compressed_len: manifest.compressed_len,
-                compression,
+                compression: manifest.compression,
                 compression_frame_id,
-                compression_frame_digest,
+                compression_frame_digest: manifest.compression_frame_digest,
                 segments: Vec::new(),
             });
             chunk_indices.push(chunk_index);
         }
 
-        if stored.is_empty() {
+        if prepared.stored.is_empty() {
             self.add_segment(&manifest, 0, &chunk_indices, &[], chunks)?;
             return Ok(chunk_indices);
         }
 
         let mut offset = 0usize;
-        while offset < stored.len() {
-            let end = (offset + MAX_SEGMENT_BYTES).min(stored.len());
+        while offset < prepared.stored.len() {
+            let end = (offset + MAX_SEGMENT_BYTES).min(prepared.stored.len());
             self.add_segment(
                 &manifest,
                 offset as u64,
                 &chunk_indices,
-                &stored[offset..end],
+                &prepared.stored[offset..end],
                 chunks,
             )?;
             offset = end;
@@ -1163,6 +1358,7 @@ impl<'a> FilePageWriter<'a> {
         if self.packer.is_empty() {
             return Ok(());
         }
+        let write_start = Instant::now();
         let pending = self.packer.pending().to_vec();
         let objects = pending
             .iter()
@@ -1192,6 +1388,121 @@ impl<'a> FilePageWriter<'a> {
             }
         }
         self.packer.clear();
+        self.lockbox
+            .add_page_write_nanos(write_start.elapsed().as_nanos());
         Ok(())
+    }
+}
+
+fn prepare_compression_frame(
+    frames: &[CompressionFrameWrite<'_>],
+    zstd_level: i32,
+) -> PreparedCompressionFrame {
+    let prepare_start = Instant::now();
+    let mut compression_frame_payload = Vec::new();
+    let mut slices = Vec::with_capacity(frames.len());
+    for frame in frames {
+        let compression_frame_offset = compression_frame_payload.len() as u64;
+        compression_frame_payload.extend_from_slice(frame.data);
+        slices.push(CompressionFrameSlice {
+            path: frame.path.clone(),
+            permissions: frame.permissions,
+            total_len: frame.total_len,
+            file_offset: frame.file_offset,
+            compression_frame_offset,
+            len: frame.data.len() as u64,
+        });
+    }
+    prepare_compression_frame_payload(compression_frame_payload, slices, zstd_level, prepare_start)
+}
+
+fn prepare_compression_frame_batches(
+    batches: &[Vec<CompressionFrameWrite<'_>>],
+    zstd_level: i32,
+    jobs: usize,
+) -> Vec<PreparedCompressionFrame> {
+    if jobs <= 1 || batches.len() <= 1 {
+        return batches
+            .iter()
+            .map(|batch| prepare_compression_frame(batch, zstd_level))
+            .collect();
+    }
+
+    let worker_count = jobs.min(batches.len()).max(1);
+    let next_index = std::sync::atomic::AtomicUsize::new(0);
+    let (result_tx, result_rx) = std::sync::mpsc::channel::<(usize, PreparedCompressionFrame)>();
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let result_tx = result_tx.clone();
+            let next_index = &next_index;
+            scope.spawn(move || loop {
+                let index = next_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if index >= batches.len() {
+                    return;
+                }
+                let prepared = prepare_compression_frame(&batches[index], zstd_level);
+                if result_tx.send((index, prepared)).is_err() {
+                    return;
+                }
+            });
+        }
+        drop(result_tx);
+    });
+
+    let mut prepared = Vec::with_capacity(batches.len());
+    prepared.resize_with(batches.len(), || None);
+    for (index, frame) in result_rx {
+        prepared[index] = Some(frame);
+    }
+    prepared
+        .into_iter()
+        .map(|frame| frame.expect("compression worker did not return a batch"))
+        .collect()
+}
+
+fn prepare_parallel_compression_frame(
+    mut job: ParallelCompressionJob,
+    zstd_level: i32,
+) -> ParallelCompressionResult {
+    let prepare_start = Instant::now();
+    let index = job.index;
+    let slice = CompressionFrameSlice {
+        path: job.path.clone(),
+        permissions: job.permissions,
+        total_len: job.total_len,
+        file_offset: job.file_offset,
+        compression_frame_offset: 0,
+        len: job.data.len() as u64,
+    };
+    let frame = prepare_compression_frame_payload(
+        std::mem::take(&mut job.data),
+        vec![slice],
+        zstd_level,
+        prepare_start,
+    );
+    ParallelCompressionResult { index, frame }
+}
+
+fn prepare_compression_frame_payload(
+    mut compression_frame_payload: Vec<u8>,
+    slices: Vec<CompressionFrameSlice>,
+    zstd_level: i32,
+    prepare_start: Instant,
+) -> PreparedCompressionFrame {
+    let compression_frame_len = compression_frame_payload.len() as u64;
+    let (compression, stored) =
+        encode_compression_frame_with_level(&compression_frame_payload, zstd_level);
+    compression_frame_payload.zeroize();
+    let stored = Zeroizing::new(stored);
+    let compression_frame_digest = strong_checksum(stored.as_slice());
+    let prepare_nanos = prepare_start.elapsed().as_nanos();
+    PreparedCompressionFrame {
+        compression,
+        compression_frame_len,
+        compressed_len: stored.len() as u64,
+        compression_frame_digest,
+        slices,
+        stored,
+        prepare_nanos,
     }
 }

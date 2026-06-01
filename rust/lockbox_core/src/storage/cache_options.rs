@@ -5,6 +5,7 @@ const DEFAULT_NATIVE_MAX_CACHE_BYTES: u64 = 4 * 1024 * MIB;
 const DEFAULT_WASM_CACHE_BYTES: u64 = 64 * MIB;
 const DEFAULT_FALLBACK_CACHE_BYTES: u64 = 128 * MIB;
 const DEFAULT_NATIVE_AVAILABLE_MEMORY_PERCENT: u64 = 15;
+const DEFAULT_NATIVE_AUTO_WORKERS: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Decoded-page cache size policy.
@@ -24,6 +25,8 @@ pub struct LockboxOptions {
     pub cache_limit: CacheLimit,
     /// Expected access pattern used to tune staging and cache behavior.
     pub workload_profile: WorkloadProfile,
+    /// Worker policy for native page/frame preparation.
+    pub worker_policy: WorkerPolicy,
 }
 
 impl Default for LockboxOptions {
@@ -31,6 +34,44 @@ impl Default for LockboxOptions {
         Self {
             cache_limit: CacheLimit::Auto,
             workload_profile: WorkloadProfile::Interactive,
+            worker_policy: WorkerPolicy::Auto,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Worker policy for CPU-heavy lockbox work.
+///
+/// Browser-style WASM builds should treat `Auto` as single-threaded unless the
+/// embedding explicitly provides a threaded worker implementation. Native
+/// callers can use `Threads` to bound CPU and memory use, or `Single` for
+/// deterministic low-overhead operation.
+pub enum WorkerPolicy {
+    /// Use the platform default. Native builds use available parallelism capped
+    /// at a conservative default; browser/WASM builds use one worker.
+    Auto,
+    /// Disable worker threads.
+    Single,
+    /// Use at most this many workers. A value below one is normalized to one.
+    Threads(usize),
+}
+
+impl WorkerPolicy {
+    pub(crate) fn effective_jobs(self) -> usize {
+        match self {
+            Self::Single => 1,
+            Self::Threads(jobs) => jobs.max(1),
+            Self::Auto => {
+                if cfg!(target_arch = "wasm32") {
+                    1
+                } else {
+                    std::thread::available_parallelism()
+                        .map(usize::from)
+                        .unwrap_or(1)
+                        .min(DEFAULT_NATIVE_AUTO_WORKERS)
+                        .max(1)
+                }
+            }
         }
     }
 }

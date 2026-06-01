@@ -4,7 +4,7 @@ pub(crate) fn usage(verbose: bool) {
   lockbox create <lockbox>
   lockbox create --recipient <vault-key-or-recipient> <lockbox>
   lockbox open <lockbox>
-  lockbox add <lockbox> <source> <lockbox-path>
+  lockbox [--jobs auto|1|N] add <lockbox> <source> <lockbox-path>
   lockbox extract <lockbox> <lockbox-path> <destination>
   lockbox extract <lockbox> --to <destination> [--overwrite] [--restore-symlinks] [--restore-permissions]
   lockbox cat <lockbox> <lockbox-path>
@@ -45,6 +45,7 @@ developer/testing:
   lockbox vault trust --overwrite <name> <public-key>
   lockbox vault export-public --format <lockbox-pem|jwk|jwks|raw-hex> [name] <public-key-output>
   lockbox vault export-key --format <lockbox-pem|jwk|jwks|raw-hex> [name] <private-key-output>
+  lockbox --jobs auto|1|N add <lockbox> <source> <lockbox-path>
   lockbox --key <raw-content-key> <command> ...
   LOCKBOX_KEY=<raw-content-key> lockbox <command> ...
   LOCKBOX_PASSWORD=<password> lockbox open <lockbox>

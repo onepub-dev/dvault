@@ -42,7 +42,7 @@ pub(crate) use paths::{host_path, lockbox_path};
 pub(crate) use storage::{cache_options, free_index, free_slot, memory_pressure, page_cache};
 pub(crate) use toc::{env_btree, page_tree, toc_btree, toc_codec, toc_entry};
 
-pub use cache_options::{CacheLimit, CacheStats, LockboxOptions, WorkloadProfile};
+pub use cache_options::{CacheLimit, CacheStats, LockboxOptions, WorkerPolicy, WorkloadProfile};
 pub use entry::{LockboxEntry, LockboxEntryKind};
 pub use env_name::EnvName;
 pub use env_sensitivity::EnvSensitivity;
@@ -52,7 +52,8 @@ pub use key_slot::{LockboxKeySlot, LockboxKeySlotAlgorithm, LockboxKeySlotProtec
 pub use key_wrap::{RecipientKeyPair, RecipientPublicKey, RecipientWrappedKey};
 pub use list_options::ListOptions;
 pub use lockbox::{
-    EnvValueRef, Lockbox, LockboxInspector, LockboxProtection, LockboxUnlock, RecoveryScanner,
+    EnvValueRef, ImportStats, Lockbox, LockboxInspector, LockboxProtection, LockboxUnlock,
+    RecoveryScanner,
 };
 pub use lockbox_id::LockboxId;
 pub use lockbox_path::LockboxPath;
