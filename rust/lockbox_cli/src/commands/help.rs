@@ -235,6 +235,9 @@ fn env_command() -> Command {
         "env",
         "Store, retrieve, list, export, or remove environment values.",
     )
+    .after_help(
+        "Normal values are printed by `env get` and included by `env export` as shell assignments.\nSecret values are encrypted the same way, but are redacted from `env export` and require `env get --secret` to print.",
+    )
     .subcommand_required(true)
     .arg_required_else_help(true)
     .subcommand(

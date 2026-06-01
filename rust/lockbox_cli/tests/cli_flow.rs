@@ -44,6 +44,9 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let env_help = String::from_utf8_lossy(&env_help.stdout);
     assert!(env_help.contains("Print one stored environment value by name."));
     assert!(env_help.contains("Print shell assignments for all non-secret environment values."));
+    assert!(env_help.contains("Normal values are printed by `env get`"));
+    assert!(env_help.contains("Secret values are encrypted the same way"));
+    assert!(env_help.contains("require `env get --secret` to print"));
 }
 
 #[test]
