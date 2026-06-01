@@ -1,4 +1,7 @@
-use std::{fs, io::Read};
+use std::{
+    fs,
+    io::{Read, Write},
+};
 
 use lockbox_core::{EnvName, EnvSensitivity, EnvValueRef, Error, SecretString};
 
@@ -90,34 +93,130 @@ fn set_env(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()
 }
 
 fn get_env(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()> {
-    let mut secret = false;
-    let mut name = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "-s" | "--secret" => secret = true,
-            value if name.is_none() => name = Some(value.to_string()),
-            _ => {
-                return Err(Error::InvalidInput("unexpected env get argument".to_string()).into());
-            }
-        }
-        index += 1;
-    }
-    let Some(name) = name else {
-        return Err(Error::InvalidInput("missing env name".to_string()).into());
-    };
-    let name = EnvName::new(name)?;
+    let request = EnvGetRequest::parse(args)?;
+    let name = EnvName::new(&request.name)?;
     let lb = open_existing(lockbox_path, access)?;
-    if secret {
-        if let Some(()) = lb
-            .with_secret_env(&name, |value| value.with_str(|value| println!("{value}")))?
-            .transpose()?
-        {
-            return Ok(());
+    if request.secret {
+        if let Some(write_result) = lb.with_secret_env(&name, |value| {
+            value.with_bytes(|value| request.write_value_bytes(value))
+        })? {
+            write_result??;
         }
     } else if let Some(value) = lb.get_env(&name)? {
-        println!("{value}");
+        request.write_value(&value)?;
     }
+    Ok(())
+}
+
+struct EnvGetRequest {
+    secret: bool,
+    name: String,
+    output: Option<String>,
+    overwrite: bool,
+}
+
+impl EnvGetRequest {
+    fn parse(args: &[String]) -> CliResult<Self> {
+        let mut secret = false;
+        let mut name = None;
+        let mut output = None;
+        let mut overwrite = false;
+        let mut index = 0;
+        while index < args.len() {
+            match args[index].as_str() {
+                "-s" | "--secret" => secret = true,
+                "--output" => {
+                    index += 1;
+                    output = Some(
+                        args.get(index)
+                            .ok_or_else(|| {
+                                Error::InvalidInput("missing --output argument".to_string())
+                            })?
+                            .to_string(),
+                    );
+                }
+                "--overwrite" => overwrite = true,
+                value if name.is_none() => name = Some(value.to_string()),
+                _ => {
+                    return Err(
+                        Error::InvalidInput("unexpected env get argument".to_string()).into(),
+                    );
+                }
+            }
+            index += 1;
+        }
+        let Some(name) = name else {
+            return Err(Error::InvalidInput("missing env name".to_string()).into());
+        };
+        if overwrite && output.is_none() {
+            return Err(Error::InvalidInput("--overwrite requires --output".to_string()).into());
+        }
+        Ok(Self {
+            secret,
+            name,
+            output,
+            overwrite,
+        })
+    }
+
+    fn write_value(&self, value: &str) -> CliResult<()> {
+        self.write_value_bytes(value.as_bytes())
+    }
+
+    fn write_value_bytes(&self, bytes: &[u8]) -> CliResult<()> {
+        if let Some(path) = &self.output {
+            write_output_file(path, bytes, self.overwrite)?;
+        } else {
+            let stdout = std::io::stdout();
+            let mut stdout = stdout.lock();
+            stdout.write_all(bytes)?;
+            stdout.write_all(b"\n")?;
+        }
+        Ok(())
+    }
+}
+
+fn write_output_file(path: &str, bytes: &[u8], overwrite: bool) -> CliResult<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    if overwrite {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    configure_private_output_file(&mut options);
+    let mut file = options.open(path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::AlreadyExists(path.to_string())
+        } else {
+            Error::Io(format!("create {path}: {err}"))
+        }
+    })?;
+    set_private_output_permissions(&file)?;
+    file.write_all(bytes)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn configure_private_output_file(options: &mut fs::OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.mode(0o600);
+}
+
+#[cfg(not(unix))]
+fn configure_private_output_file(_options: &mut fs::OpenOptions) {}
+
+#[cfg(unix)]
+fn set_private_output_permissions(file: &fs::File) -> CliResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_output_permissions(_file: &fs::File) -> CliResult<()> {
     Ok(())
 }
 

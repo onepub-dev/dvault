@@ -207,6 +207,8 @@ fn env_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
         }
         "get" => {
             push_flag(&mut args, sub, "secret", "-s");
+            push_option(&mut args, sub, "output", "--output");
+            push_flag(&mut args, sub, "overwrite", "--overwrite");
             args.push(value(sub, "name"));
         }
         "list" => {}

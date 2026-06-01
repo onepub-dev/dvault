@@ -53,6 +53,8 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let env_get_help = String::from_utf8_lossy(&env_get_help.stdout);
     assert!(env_get_help.contains("lockbox env get secrets.lbox APP_MODE"));
     assert!(env_get_help.contains("lockbox env get --secret secrets.lbox API_TOKEN"));
+    assert!(env_get_help.contains("--output <FILE>"));
+    assert!(env_get_help.contains("lockbox env get --secret --output api-token.txt"));
 
     let env_export_help = run_output(bin, &["env", "export", "--help"]);
     assert_success(&env_export_help);
@@ -366,6 +368,60 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
         String::from_utf8_lossy(&secret_get.stdout).trim(),
         "file-secret"
     );
+
+    let token_output = dir.join("api-token.txt");
+    run(
+        bin,
+        &[
+            "env",
+            "get",
+            "--secret",
+            "--output",
+            token_output.to_str().unwrap(),
+            lockbox.to_str().unwrap(),
+            "API_TOKEN",
+        ],
+    );
+    assert_eq!(fs::read(&token_output).unwrap(), b"file-secret");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            fs::metadata(&token_output).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    let rejected_output = run_output(
+        bin,
+        &[
+            "env",
+            "get",
+            "--secret",
+            "--output",
+            token_output.to_str().unwrap(),
+            lockbox.to_str().unwrap(),
+            "API_TOKEN",
+        ],
+    );
+    assert!(!rejected_output.status.success());
+    assert_eq!(fs::read(&token_output).unwrap(), b"file-secret");
+
+    run(
+        bin,
+        &[
+            "env",
+            "get",
+            "--secret",
+            "--output",
+            token_output.to_str().unwrap(),
+            "--overwrite",
+            lockbox.to_str().unwrap(),
+            "API_TOKEN",
+        ],
+    );
+    assert_eq!(fs::read(&token_output).unwrap(), b"file-secret");
 
     let rejected = run_output(
         bin,

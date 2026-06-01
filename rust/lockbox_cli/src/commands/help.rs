@@ -301,7 +301,7 @@ fn env_command() -> Command {
         Command::new("get")
             .about("Print one stored environment value by name.")
             .after_help(
-                "Examples:\n  lockbox env get secrets.lbox APP_MODE\n  lockbox env get --secret secrets.lbox API_TOKEN",
+                "Examples:\n  lockbox env get secrets.lbox APP_MODE\n  lockbox env get --secret secrets.lbox API_TOKEN\n  lockbox env get --secret --output api-token.txt secrets.lbox API_TOKEN",
             )
             .arg(required("lockbox", "Lockbox path."))
             .arg(
@@ -310,6 +310,19 @@ fn env_command() -> Command {
                     .long("secret")
                     .action(ArgAction::SetTrue)
                     .help("Print a secret value."),
+            )
+            .arg(
+                Arg::new("output")
+                    .long("output")
+                    .value_name("FILE")
+                    .help("Write the exact value bytes to a file instead of stdout."),
+            )
+            .arg(
+                Arg::new("overwrite")
+                    .long("overwrite")
+                    .requires("output")
+                    .action(ArgAction::SetTrue)
+                    .help("Replace the output file if it already exists."),
             )
             .arg(required("name", "Environment variable name.")),
     )
