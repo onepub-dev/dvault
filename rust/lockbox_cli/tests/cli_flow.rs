@@ -38,6 +38,12 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_success(&env_help);
     let env_help = String::from_utf8_lossy(&env_help.stdout);
     assert!(env_help.contains("-v, --value <VALUE>"));
+
+    let env_help = run_output(bin, &["env", "--help"]);
+    assert_success(&env_help);
+    let env_help = String::from_utf8_lossy(&env_help.stdout);
+    assert!(env_help.contains("Print one stored environment value by name."));
+    assert!(env_help.contains("Print shell assignments for all non-secret environment values."));
 }
 
 #[test]

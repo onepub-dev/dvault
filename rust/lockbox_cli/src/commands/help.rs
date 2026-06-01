@@ -27,14 +27,6 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .hide(!verbose)
                 .help("Use a raw content key for this command."),
         )
-        .arg(
-            Arg::new("jobs")
-                .long("jobs")
-                .global(true)
-                .value_name("auto|1|N")
-                .hide(!verbose)
-                .help("Set import worker count for add."),
-        )
         .subcommands([
             archive_command("create", "Create a new encrypted lockbox.")
                 .arg(
@@ -66,6 +58,13 @@ pub(crate) fn command(verbose: bool) -> Command {
             .arg(required("lockbox", "Lockbox path.")),
             archive_command("doctor", "Show local vault and agent diagnostics."),
             file_command("add", "Add a file or directory to a lockbox.")
+                .arg(
+                    Arg::new("jobs")
+                        .long("jobs")
+                        .value_name("auto|1|N")
+                        .hide(!verbose)
+                        .help("Set import worker count."),
+                )
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("source", "Source file or directory."))
                 .arg(required(
@@ -186,7 +185,9 @@ Vault
             "
 Advanced global options:
     --key <raw-content-key>    Use a raw content key for this command.
-    --jobs auto|1|N            Set import worker count for add.
+
+Advanced command options:
+  lockbox add --jobs auto|1|N <lockbox> <source> <lockbox-path>
 
 Developer and compatibility commands:
   keygen          Generate raw recipient key files.
@@ -292,7 +293,7 @@ fn env_command() -> Command {
     )
     .subcommand(
         Command::new("get")
-            .about("Print an environment value.")
+            .about("Print one stored environment value by name.")
             .arg(required("lockbox", "Lockbox path."))
             .arg(
                 Arg::new("secret")
@@ -310,7 +311,7 @@ fn env_command() -> Command {
     )
     .subcommand(
         Command::new("export")
-            .about("Export non-secret environment values.")
+            .about("Print shell assignments for all non-secret environment values.")
             .arg(required("lockbox", "Lockbox path.")),
     )
     .subcommand(

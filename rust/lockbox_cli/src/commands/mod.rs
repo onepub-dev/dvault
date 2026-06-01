@@ -41,7 +41,6 @@ pub(crate) fn run() -> CliResult<()> {
     let (command, command_matches) = matches
         .subcommand()
         .ok_or_else(|| Error::InvalidInput("missing command".to_string()))?;
-    let worker_policy = read_worker_policy(&matches)?;
     let access = read_access(&matches, command)?;
 
     match command {
@@ -62,7 +61,7 @@ pub(crate) fn run() -> CliResult<()> {
         "add" => files::add(
             &three_args(command_matches, "lockbox", "source", "lockbox-path"),
             &access,
-            worker_policy,
+            read_worker_policy(command_matches)?,
         )?,
         "extract" => files::extract(&extract_args(command_matches)?, &access)?,
         "cat" => files::cat(
