@@ -9,9 +9,25 @@ use lockbox_vault::{
     import_public_key, local_vault, platform_secret_store_disabled, put_platform_vault_password,
     NoopStore, SecretString, Vault, VaultDirectory,
 };
+use std::fmt;
 use std::path::Path;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+#[derive(Debug)]
+struct CliMessage(String);
+
+impl fmt::Display for CliMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CliMessage {}
+
+fn cli_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
+    Box::new(CliMessage(message.into()))
+}
 
 pub(crate) enum Access {
     ContentKey(SecretVec),
@@ -19,26 +35,26 @@ pub(crate) enum Access {
     CacheOnly,
 }
 
-pub(crate) fn open_existing(path: &str, access: &Access) -> Result<Lockbox, Error> {
+pub(crate) fn open_existing(path: &str, access: &Access) -> CliResult<Lockbox> {
     match access {
-        Access::ContentKey(key) => {
-            Vault::new(NoopStore).unlock_lockbox(path, LockboxUnlock::ContentKey(key.try_clone()?))
-        }
-        Access::PromptPassword => Err(Error::InvalidOperation(
-            "password prompting is only used when creating a new lockbox; pass --key or open through the local vault".to_string(),
+        Access::ContentKey(key) => Ok(Vault::new(NoopStore)
+            .unlock_lockbox(path, LockboxUnlock::ContentKey(key.try_clone()?))?),
+        Access::PromptPassword => Err(cli_error(
+            "password prompting is only used when creating a new lockbox; pass --key or open through the local vault",
         )),
-        Access::CacheOnly => local_vault().open_lockbox(path).map_err(|err| match err {
-            Error::VaultUnavailable(message) if message.contains("no cached content key") => {
-                Error::InvalidOperation(format!(
-                    "lockbox is closed: {path}. Run `lockbox open {path}` first"
-                ))
+        Access::CacheOnly => match local_vault().open_lockbox(path) {
+            Ok(lockbox) => Ok(lockbox),
+            Err(Error::VaultUnavailable(message)) if message.contains("no cached content key") => {
+                Err(cli_error(format!(
+                    "lockbox is closed: {path}. Run `lockbox open {path}` first."
+                )))
             }
-            err => err,
-        }),
+            Err(err) => Err(err.into()),
+        },
     }
 }
 
-pub(crate) fn open_or_create(path: &str, access: &Access) -> Result<Lockbox, Error> {
+pub(crate) fn open_or_create(path: &str, access: &Access) -> CliResult<Lockbox> {
     if Path::new(path).exists() {
         open_existing(path, access)
     } else {
@@ -55,8 +71,8 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> Result<Lockbox, Err
                 mirror_key_directory(&lockbox)?;
                 Ok(lockbox)
             }
-            Access::CacheOnly => Err(Error::VaultUnavailable(
-                "lockbox does not exist and no creation unlock method was supplied".to_string(),
+            Access::CacheOnly => Err(cli_error(
+                "lockbox does not exist and no creation unlock method was supplied",
             )),
         }
     }

@@ -316,8 +316,18 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 }
             } else {
                 push_flag(&mut args, sub, "overwrite", "--overwrite");
-                args.push(value(sub, "name"));
-                args.push(value(sub, "public-key"));
+                args.push(optional_value(sub, "name").ok_or_else(|| {
+                    Error::InvalidInput(
+                        "missing trusted recipient name; use `lockbox vault trust add <name> <public-key>`"
+                            .to_string(),
+                    )
+                })?);
+                args.push(optional_value(sub, "public-key").ok_or_else(|| {
+                    Error::InvalidInput(
+                        "missing public key path; use `lockbox vault trust add <name> <public-key>`"
+                            .to_string(),
+                    )
+                })?);
             }
         }
         "platform-store" => args.push(value(sub, "command")),
@@ -368,6 +378,10 @@ fn value(matches: &ArgMatches, name: &str) -> String {
         .get_one::<String>(name)
         .unwrap_or_else(|| panic!("clap did not provide required argument {name}"))
         .clone()
+}
+
+fn optional_value(matches: &ArgMatches, name: &str) -> Option<String> {
+    matches.get_one::<String>(name).cloned()
 }
 
 fn push_optional(args: &mut Vec<String>, matches: &ArgMatches, name: &str) {

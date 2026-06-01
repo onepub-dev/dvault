@@ -108,6 +108,231 @@ fn clap_errors_are_not_double_prefixed() {
 }
 
 #[test]
+fn top_level_help_pins_command_groups_and_hidden_commands() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+
+    let help = run_output(bin, &["--help"]);
+    assert_success(&help);
+    let help = String::from_utf8_lossy(&help.stderr);
+    assert_contains_in_order(
+        &help,
+        &[
+            "Archives",
+            "  create",
+            "  open",
+            "Files",
+            "  add",
+            "  extract",
+            "Environment",
+            "  env",
+            "Sharing",
+            "  recipient",
+            "Vault",
+            "  vault",
+        ],
+    );
+    assert!(!help.contains("keygen          Generate raw recipient key files."));
+    assert!(!help.contains("LOCKBOX_KEY=<raw-content-key>"));
+
+    let verbose_help = run_output(bin, &["--help", "--verbose"]);
+    assert_success(&verbose_help);
+    let verbose_help = String::from_utf8_lossy(&verbose_help.stderr);
+    assert!(verbose_help.contains("Advanced global options:"));
+    assert!(verbose_help.contains("keygen          Generate raw recipient key files."));
+    assert!(verbose_help.contains("LOCKBOX_KEY=<raw-content-key>"));
+}
+
+#[test]
+fn file_env_and_developer_aliases_execute_real_flows() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("command-aliases");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("aliases.lbox");
+    let source = dir.join("source.txt");
+    fs::write(&source, "alpha").unwrap();
+
+    run(
+        bin,
+        &[
+            "add",
+            lockbox.to_str().unwrap(),
+            source.to_str().unwrap(),
+            "/docs/a.txt",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "mv",
+            lockbox.to_str().unwrap(),
+            "/docs/a.txt",
+            "/docs/b.txt",
+        ],
+    );
+
+    let cat = run_output(bin, &["cat", lockbox.to_str().unwrap(), "/docs/b.txt"]);
+    assert_success(&cat);
+    assert_eq!(String::from_utf8_lossy(&cat.stdout), "alpha");
+
+    run(bin, &["remove", lockbox.to_str().unwrap(), "/docs/b.txt"]);
+    let listing = run_output(bin, &["ls", lockbox.to_str().unwrap()]);
+    assert_success(&listing);
+    assert_eq!(String::from_utf8_lossy(&listing.stdout).trim(), "empty");
+
+    run(
+        bin,
+        &["env", "set", lockbox.to_str().unwrap(), "APP_MODE", "prod"],
+    );
+    let env_list = run_output(bin, &["env", "ls", lockbox.to_str().unwrap()]);
+    assert_success(&env_list);
+    assert!(String::from_utf8_lossy(&env_list.stdout).contains("APP_MODE"));
+
+    run(
+        bin,
+        &["env", "remove", lockbox.to_str().unwrap(), "APP_MODE"],
+    );
+    let env_list = run_output(bin, &["env", "list", lockbox.to_str().unwrap()]);
+    assert_success(&env_list);
+    assert!(!String::from_utf8_lossy(&env_list.stdout).contains("APP_MODE"));
+
+    let visualize = run_output(bin, &["visualise", lockbox.to_str().unwrap()]);
+    assert_success(&visualize);
+    assert!(String::from_utf8_lossy(&visualize.stdout).contains("Lockbox"));
+}
+
+#[test]
+fn vault_command_aliases_and_noask_execute_real_flows() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-aliases");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let public_key = dir.join("alias.pub");
+    let exported_public_key = dir.join("alias-export.pub");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &[
+            "vault",
+            "key",
+            "create",
+            "alias",
+            public_key.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(
+        bin,
+        &[
+            "vault",
+            "key",
+            "export-public",
+            "alias",
+            exported_public_key.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(
+        String::from_utf8_lossy(&fs::read(&exported_public_key).unwrap())
+            .contains("BEGIN LOCKBOX PUBLIC KEY")
+    );
+
+    run_without_content_key(
+        bin,
+        &[
+            "vault",
+            "trust",
+            "add",
+            "friend",
+            public_key.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    let list = run_output_without_content_key(bin, &["vault", "ls"], &vault_root, &agent_root);
+    assert_success(&list);
+    assert!(String::from_utf8_lossy(&list.stdout).contains("trusted\tfriend"));
+
+    run_without_content_key(
+        bin,
+        &["vault", "trust", "rm", "friend"],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(
+        bin,
+        &["vault", "key", "rm", "--noask", "alias"],
+        &vault_root,
+        &agent_root,
+    );
+    let list = run_output_without_content_key(bin, &["vault", "list"], &vault_root, &agent_root);
+    assert_success(&list);
+    let list = String::from_utf8_lossy(&list.stdout);
+    assert!(!list.contains("trusted\tfriend"));
+    assert!(!list.contains("private\talias"));
+}
+
+#[test]
+fn negative_cli_errors_remain_specific() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("negative-cli-errors");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("negative.lbox");
+    let source = dir.join("source.txt");
+    fs::write(&source, "alpha").unwrap();
+
+    let invalid_jobs = run_output(
+        bin,
+        &[
+            "add",
+            "--jobs",
+            "0",
+            lockbox.to_str().unwrap(),
+            source.to_str().unwrap(),
+        ],
+    );
+    assert!(!invalid_jobs.status.success());
+    assert!(String::from_utf8_lossy(&invalid_jobs.stderr)
+        .contains("--jobs must be auto, 1, or a positive integer"));
+
+    let invalid_env_set = run_output(
+        bin,
+        &[
+            "env",
+            "set",
+            lockbox.to_str().unwrap(),
+            "APP_MODE",
+            "prod",
+            "--value",
+            "other",
+        ],
+    );
+    assert!(!invalid_env_set.status.success());
+    assert!(String::from_utf8_lossy(&invalid_env_set.stderr)
+        .contains("env set requires exactly one value source"));
+
+    let invalid_export = run_output(
+        bin,
+        &[
+            "env",
+            "export",
+            "--format",
+            "fish",
+            lockbox.to_str().unwrap(),
+        ],
+    );
+    assert!(!invalid_export.status.success());
+    assert!(String::from_utf8_lossy(&invalid_export.stderr)
+        .contains("unsupported env export format: fish"));
+}
+
+#[test]
 fn cli_env_rename_and_visualize_flow() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir();
@@ -707,6 +932,7 @@ fn open_list_and_lock_report_empty_cache_and_already_closed_state() {
     assert!(!listing.status.success());
     assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is closed"));
     assert!(!String::from_utf8_lossy(&listing.stderr).contains("Unlock the lockbox"));
+    assert!(!String::from_utf8_lossy(&listing.stderr).contains("use the API intended"));
 }
 
 #[test]
@@ -1141,6 +1367,16 @@ fn assert_success(output: &Output) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn assert_contains_in_order(text: &str, needles: &[&str]) {
+    let mut start = 0;
+    for needle in needles {
+        let Some(index) = text[start..].find(needle) else {
+            panic!("missing {needle:?} after byte {start} in:\n{text}");
+        };
+        start += index + needle.len();
+    }
 }
 
 fn unique_dir() -> PathBuf {

@@ -516,8 +516,8 @@ fn vault_command(verbose: bool) -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Replace an existing trusted recipient."),
                 )
-                .arg(required("name", "Trusted recipient name."))
-                .arg(required("public-key", "Public key path.")),
+                .arg(optional("name", "Trusted recipient name."))
+                .arg(optional("public-key", "Public key path.")),
         )
         .subcommand(
             Command::new("platform-store")

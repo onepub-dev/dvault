@@ -1,16 +1,18 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
+static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
-#[ignore = "requires local IPC support; disabled in sandboxed test runners"]
 fn open_populates_cache_and_lock_clears_it() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir();
+    let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let vault = dir.join("test.lbox");
     let source = dir.join("source.txt");
@@ -20,18 +22,41 @@ fn open_populates_cache_and_lock_clears_it() {
     fs::create_dir_all(&vault_dir).unwrap();
     fs::write(&source, "alpha").unwrap();
 
+    run(bin, &agent_dir, &vault_dir, &["vault", "init"]);
     run(
         bin,
         &agent_dir,
         &vault_dir,
         &["create", vault.to_str().unwrap()],
     );
-    run(
+    let open = run_output(
         bin,
         &agent_dir,
         &vault_dir,
         &["open", vault.to_str().unwrap()],
     );
+    if String::from_utf8_lossy(&open.stderr).contains("lockbox agent did not start") {
+        eprintln!("skipping agent cache assertions: lockbox agent did not start");
+        return;
+    }
+    assert!(
+        open.status.success(),
+        "command failed: {bin} open {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        vault.display(),
+        open.status,
+        String::from_utf8_lossy(&open.stdout),
+        String::from_utf8_lossy(&open.stderr)
+    );
+    let output = run_output(bin, &agent_dir, &vault_dir, &["open", "--list"]);
+    assert!(
+        output.status.success(),
+        "command failed: {bin} open --list\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("open\t"));
+
     run(
         bin,
         &agent_dir,
@@ -73,6 +98,17 @@ fn open_populates_cache_and_lock_clears_it() {
         &["list", vault.to_str().unwrap(), "/docs"],
     );
     assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("lockbox is closed"));
+
+    let output = run_output(bin, &agent_dir, &vault_dir, &["open", "--list"]);
+    assert!(
+        output.status.success(),
+        "command failed: {bin} open --list\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "empty");
 }
 
 fn run(bin: &str, agent_dir: &PathBuf, vault_dir: &PathBuf, args: &[&str]) {
@@ -133,7 +169,8 @@ fn command(bin: &str, agent_dir: &PathBuf, vault_dir: &PathBuf, args: &[&str]) -
 }
 
 fn unique_dir() -> PathBuf {
+    let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::SeqCst);
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../target/t")
-        .join(format!("ipc-{}", std::process::id()))
+        .join(format!("ipc-{}-{counter}", std::process::id()))
 }
