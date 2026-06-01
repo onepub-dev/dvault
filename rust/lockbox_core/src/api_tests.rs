@@ -1248,6 +1248,18 @@ fn worker_policy_single_and_threads_have_same_logical_results() {
 }
 
 #[test]
+fn worker_policy_auto_uses_conservative_native_cap() {
+    let auto_jobs = WorkerPolicy::Auto.effective_jobs();
+    assert!(auto_jobs >= 1);
+    if !cfg!(target_arch = "wasm32") {
+        assert!(auto_jobs <= 6);
+    }
+    assert_eq!(WorkerPolicy::Single.effective_jobs(), 1);
+    assert_eq!(WorkerPolicy::Threads(0).effective_jobs(), 1);
+    assert_eq!(WorkerPolicy::Threads(16).effective_jobs(), 16);
+}
+
+#[test]
 fn import_stats_record_threaded_import_stages_and_can_be_reset() {
     let mut data = vec![0; 3 * 1024 * 1024 + 17];
     fill_randomish(&mut data);

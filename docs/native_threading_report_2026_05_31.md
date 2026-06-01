@@ -93,9 +93,13 @@ be staged at once. The increase was modest for compressible fixtures and about
 
 ## Recommendation
 
-Keep `--jobs auto` as the native default because it materially improves the
-archive-style cases users are most likely to notice. Keep `--jobs 1` documented
-for:
+Keep `--jobs auto` as the native default, but cap native automatic worker
+selection at six workers. The cap captures most many-file speedups without
+paying the RSS and scheduling cost of always using every core. Explicit
+`--jobs N` remains available for large single-file imports where the larger
+stage-timing sweep kept improving up to 16 workers.
+
+Keep `--jobs 1` documented for:
 
 - low-memory systems
 - tiny imports

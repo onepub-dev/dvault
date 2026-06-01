@@ -5,6 +5,7 @@ const DEFAULT_NATIVE_MAX_CACHE_BYTES: u64 = 4 * 1024 * MIB;
 const DEFAULT_WASM_CACHE_BYTES: u64 = 64 * MIB;
 const DEFAULT_FALLBACK_CACHE_BYTES: u64 = 128 * MIB;
 const DEFAULT_NATIVE_AVAILABLE_MEMORY_PERCENT: u64 = 15;
+const DEFAULT_NATIVE_AUTO_WORKERS: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Decoded-page cache size policy.
@@ -46,8 +47,8 @@ impl Default for LockboxOptions {
 /// callers can use `Threads` to bound CPU and memory use, or `Single` for
 /// deterministic low-overhead operation.
 pub enum WorkerPolicy {
-    /// Use the platform default. Native builds use available parallelism;
-    /// browser/WASM builds use one worker.
+    /// Use the platform default. Native builds use available parallelism capped
+    /// at a conservative default; browser/WASM builds use one worker.
     Auto,
     /// Disable worker threads.
     Single,
@@ -67,6 +68,7 @@ impl WorkerPolicy {
                     std::thread::available_parallelism()
                         .map(usize::from)
                         .unwrap_or(1)
+                        .min(DEFAULT_NATIVE_AUTO_WORKERS)
                         .max(1)
                 }
             }

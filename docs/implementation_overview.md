@@ -68,10 +68,11 @@ lockbox --jobs 1 add archive.lbox source /
 lockbox --jobs 4 add archive.lbox source /
 ```
 
-`--jobs auto` is the native default and uses available CPU parallelism. `--jobs
-1` disables worker threads. Browser-style WASM treats automatic worker
-selection as single-threaded unless a future embedding explicitly provides
-threaded WASM support.
+`--jobs auto` is the native default and uses available CPU parallelism capped
+at six workers. `--jobs 1` disables worker threads. Explicit `--jobs N` uses the
+requested worker count. Browser-style WASM treats automatic worker selection as
+single-threaded unless a future embedding explicitly provides threaded WASM
+support.
 
 The write path keeps final archive mutation ordered:
 

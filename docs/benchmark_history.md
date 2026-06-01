@@ -54,6 +54,8 @@ Conclusion:
   can choose `--jobs 1` for low-memory or low-overhead operation.
 - A follow-up 2026-06-01 stage-timing sweep on larger fixtures is recorded in
   `docs/native_threading_report_2026_05_31.md`.
+- Based on that sweep, native `--jobs auto` is capped at six workers while
+  explicit `--jobs N` remains uncapped.
 
 ## 2026-05-21 - Current Lockbox vs GPG Archive Comparison
 
