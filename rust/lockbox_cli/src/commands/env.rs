@@ -23,10 +23,11 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
             }
         }
         "export" => {
+            let format = EnvExportFormat::parse(&args[2..])?;
             let lb = open_existing(lockbox_path, access)?;
             lb.visit_env(|name, value| match value {
                 EnvValueRef::Normal(value) => {
-                    println!("{name}={}", shell_quote(value));
+                    println!("{}", format.format_assignment(name.as_str(), value));
                     Ok(())
                 }
                 EnvValueRef::Secret(_) => Ok(()),
@@ -284,6 +285,65 @@ enum ValueSource {
     FromEnv(String),
 }
 
+enum EnvExportFormat {
+    Posix,
+    PowerShell,
+    Cmd,
+    Json,
+}
+
+impl EnvExportFormat {
+    fn parse(args: &[String]) -> CliResult<Self> {
+        let mut format = Self::Posix;
+        let mut index = 0;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--format" => {
+                    index += 1;
+                    format = match args.get(index).map(String::as_str) {
+                        Some("posix") => Self::Posix,
+                        Some("powershell") => Self::PowerShell,
+                        Some("cmd") => Self::Cmd,
+                        Some("json") => Self::Json,
+                        Some(value) => {
+                            return Err(Error::InvalidInput(format!(
+                                "unsupported env export format: {value}"
+                            ))
+                            .into());
+                        }
+                        None => {
+                            return Err(Error::InvalidInput(
+                                "missing --format argument".to_string(),
+                            )
+                            .into());
+                        }
+                    };
+                }
+                _ => {
+                    return Err(
+                        Error::InvalidInput("unexpected env export argument".to_string()).into(),
+                    );
+                }
+            }
+            index += 1;
+        }
+        Ok(format)
+    }
+
+    fn format_assignment(&self, name: &str, value: &str) -> String {
+        match self {
+            Self::Posix => format!("{name}={}", posix_quote(value)),
+            Self::PowerShell => format!("$env:{name} = {}", powershell_quote(value)),
+            Self::Cmd => format!("set \"{name}={}\"", cmd_quote_value(value)),
+            Self::Json => format!(
+                "{{\"name\":{},\"value\":{}}}",
+                json_quote(name),
+                json_quote(value)
+            ),
+        }
+    }
+}
+
 fn set_source(target: &mut Option<ValueSource>, source: ValueSource) -> CliResult<()> {
     if target.is_some() {
         return Err(
@@ -294,6 +354,36 @@ fn set_source(target: &mut Option<ValueSource>, source: ValueSource) -> CliResul
     Ok(())
 }
 
-fn shell_quote(value: &str) -> String {
+fn posix_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn cmd_quote_value(value: &str) -> String {
+    value.replace('"', "\"\"")
+}
+
+fn json_quote(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            ch if ch < ' ' => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", ch as u32);
+            }
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }

@@ -43,10 +43,23 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_success(&env_help);
     let env_help = String::from_utf8_lossy(&env_help.stdout);
     assert!(env_help.contains("Print one stored environment value by name."));
-    assert!(env_help.contains("Print shell assignments for all non-secret environment values."));
+    assert!(env_help.contains("Print all non-secret environment values in an importable format."));
     assert!(env_help.contains("Normal values are printed by `env get`"));
     assert!(env_help.contains("Secret values are encrypted the same way"));
     assert!(env_help.contains("require `env get --secret` to print"));
+
+    let env_get_help = run_output(bin, &["env", "get", "--help"]);
+    assert_success(&env_get_help);
+    let env_get_help = String::from_utf8_lossy(&env_get_help.stdout);
+    assert!(env_get_help.contains("lockbox env get secrets.lbox APP_MODE"));
+    assert!(env_get_help.contains("lockbox env get --secret secrets.lbox API_TOKEN"));
+
+    let env_export_help = run_output(bin, &["env", "export", "--help"]);
+    assert_success(&env_export_help);
+    let env_export_help = String::from_utf8_lossy(&env_export_help.stdout);
+    assert!(env_export_help.contains("--format <posix|powershell|cmd|json>"));
+    assert!(env_export_help.contains("eval \"$(lockbox env export secrets.lbox)\""));
+    assert!(env_export_help.contains("Use shell redirection to write it to a file."));
 }
 
 #[test]
@@ -200,6 +213,23 @@ fn content_key_create_does_not_mirror_empty_key_directory() {
 }
 
 #[test]
+fn create_refuses_to_overwrite_existing_lockbox() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("create-no-overwrite");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("safe.lbox");
+
+    run(bin, &["create", lockbox.to_str().unwrap()]);
+    let original = fs::read(&lockbox).unwrap();
+    let output = run_output(bin, &["create", lockbox.to_str().unwrap()]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
+    assert_eq!(fs::read(&lockbox).unwrap(), original);
+}
+
+#[test]
 fn add_accepts_jobs_option_for_large_files() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("jobs-add");
@@ -284,6 +314,48 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     assert!(export.contains("APP_MODE='prod'"));
     assert!(!export.contains("API_TOKEN"));
     assert!(!export.contains("file-secret"));
+
+    let powershell_export = run_output(
+        bin,
+        &[
+            "env",
+            "export",
+            "--format",
+            "powershell",
+            lockbox.to_str().unwrap(),
+        ],
+    );
+    assert_success(&powershell_export);
+    let powershell_export = String::from_utf8_lossy(&powershell_export.stdout);
+    assert!(powershell_export.contains("$env:APP_MODE = 'prod'"));
+
+    let cmd_export = run_output(
+        bin,
+        &[
+            "env",
+            "export",
+            "--format",
+            "cmd",
+            lockbox.to_str().unwrap(),
+        ],
+    );
+    assert_success(&cmd_export);
+    let cmd_export = String::from_utf8_lossy(&cmd_export.stdout);
+    assert!(cmd_export.contains("set \"APP_MODE=prod\""));
+
+    let json_export = run_output(
+        bin,
+        &[
+            "env",
+            "export",
+            "--format",
+            "json",
+            lockbox.to_str().unwrap(),
+        ],
+    );
+    assert_success(&json_export);
+    let json_export = String::from_utf8_lossy(&json_export.stdout);
+    assert!(json_export.contains("{\"name\":\"APP_MODE\",\"value\":\"prod\"}"));
 
     let secret_get = run_output(
         bin,

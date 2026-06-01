@@ -29,6 +29,9 @@ pub(crate) fn command(verbose: bool) -> Command {
         )
         .subcommands([
             archive_command("create", "Create a new encrypted lockbox.")
+                .after_help(
+                    "By default, create prompts for a new lockbox password. Password and recipient lockboxes cache unlock access in the local agent and may ask for the local vault password to store key recovery metadata.\n\nExamples:\n  lockbox create secrets.lbox\n  lockbox create --recipient alice secrets.lbox",
+                )
                 .arg(
                     Arg::new("recipient")
                         .long("recipient")
@@ -236,7 +239,7 @@ fn env_command() -> Command {
         "Store, retrieve, list, export, or remove environment values.",
     )
     .after_help(
-        "Normal values are printed by `env get` and included by `env export` as shell assignments.\nSecret values are encrypted the same way, but are redacted from `env export` and require `env get --secret` to print.",
+        "Normal values are printed by `env get` and included by `env export`.\nSecret values are encrypted the same way, but are redacted from `env export` and require `env get --secret` to print.",
     )
     .subcommand_required(true)
     .arg_required_else_help(true)
@@ -297,6 +300,9 @@ fn env_command() -> Command {
     .subcommand(
         Command::new("get")
             .about("Print one stored environment value by name.")
+            .after_help(
+                "Examples:\n  lockbox env get secrets.lbox APP_MODE\n  lockbox env get --secret secrets.lbox API_TOKEN",
+            )
             .arg(required("lockbox", "Lockbox path."))
             .arg(
                 Arg::new("secret")
@@ -314,7 +320,17 @@ fn env_command() -> Command {
     )
     .subcommand(
         Command::new("export")
-            .about("Print shell assignments for all non-secret environment values.")
+            .about("Print all non-secret environment values in an importable format.")
+            .after_help(
+                "Examples:\n  eval \"$(lockbox env export secrets.lbox)\"\n  lockbox env export --format posix secrets.lbox > env.sh\n  lockbox env export --format powershell secrets.lbox | Invoke-Expression\n\nFormats:\n  posix       NAME='value' lines for sh, bash, and zsh. Default.\n  powershell  $env:NAME = 'value' lines for PowerShell.\n  cmd         set \"NAME=value\" lines for cmd.exe.\n  json        One JSON object per line with name and value fields.\n\n`env export` writes to stdout. Use shell redirection to write it to a file.",
+            )
+            .arg(
+                Arg::new("format")
+                    .long("format")
+                    .value_name("posix|powershell|cmd|json")
+                    .default_value("posix")
+                    .help("Output format."),
+            )
             .arg(required("lockbox", "Lockbox path.")),
     )
     .subcommand(

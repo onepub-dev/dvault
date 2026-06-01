@@ -255,10 +255,15 @@ impl FileStore {
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .open(&path)
-            .map_err(|err| Error::Io(format!("create {}: {err}", path.display())))?;
+            .map_err(|err| {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    Error::AlreadyExists(path.display().to_string())
+                } else {
+                    Error::Io(format!("create {}: {err}", path.display()))
+                }
+            })?;
         file.write_all(initial_bytes)
             .map_err(|err| Error::Io(format!("write {}: {err}", path.display())))?;
         file.sync_data()

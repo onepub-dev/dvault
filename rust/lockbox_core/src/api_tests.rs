@@ -91,6 +91,23 @@ fn create_path_writes_file_backed_lockbox() {
 }
 
 #[test]
+fn create_path_refuses_to_overwrite_existing_file() {
+    let path = std::env::temp_dir().join(format!(
+        "lockbox-create-existing-path-{}.lbx",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    std::fs::write(&path, b"existing").unwrap();
+
+    let result = Lockbox::create_path(&path, KEY);
+
+    assert!(matches!(result, Err(Error::AlreadyExists(_))));
+    assert_eq!(std::fs::read(&path).unwrap(), b"existing");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn small_files_are_staged_until_commit_then_packed() {
     let mut lb = Lockbox::create(KEY);
     let before = lb.to_bytes().len();

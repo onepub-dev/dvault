@@ -209,7 +209,8 @@ fn env_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "secret", "-s");
             args.push(value(sub, "name"));
         }
-        "list" | "export" => {}
+        "list" => {}
+        "export" => push_option(&mut args, sub, "format", "--format"),
         "rm" => args.push(value(sub, "name")),
         _ => return Err(Error::InvalidInput(format!("unknown env command: {command}")).into()),
     }
