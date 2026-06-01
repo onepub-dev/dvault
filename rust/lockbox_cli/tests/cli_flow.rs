@@ -87,6 +87,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(vault_key_help.contains("Manage vault recipient keys."));
     assert!(vault_key_help.contains("create"));
     assert!(vault_key_help.contains("export"));
+    assert!(!vault_key_help.contains("  help"));
 
     let recipient_help = run_output(bin, &["recipient", "--help"]);
     assert_success(&recipient_help);
@@ -94,6 +95,14 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(recipient_help.contains("Manage recipient access for a lockbox."));
     assert!(recipient_help.contains("add"));
     assert!(recipient_help.contains("remove"));
+    assert!(!recipient_help.contains("  help"));
+
+    let vault_help = run_output(bin, &["vault", "--help"]);
+    assert_success(&vault_help);
+    let vault_help = String::from_utf8_lossy(&vault_help.stdout);
+    assert!(vault_help.contains("Manage your private keys and trusted public keys."));
+    assert!(vault_help.contains("open"));
+    assert!(!vault_help.contains("  help"));
 }
 
 #[test]
@@ -141,11 +150,17 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
     assert_success(&verbose_help);
     let verbose_help = String::from_utf8_lossy(&verbose_help.stderr);
     assert!(verbose_help.contains("Advanced global options:"));
-    assert!(verbose_help.contains("add-recipient   Share a lockbox with another public key."));
-    assert!(verbose_help.contains("list-keys       List keys that can unlock a lockbox."));
-    assert!(verbose_help.contains("remove-key      Remove a key from a lockbox."));
+    assert!(!verbose_help.contains("add-recipient   Share a lockbox with another public key."));
+    assert!(!verbose_help.contains("list-keys       List keys that can unlock a lockbox."));
+    assert!(!verbose_help.contains("remove-key      Remove a key from a lockbox."));
     assert!(verbose_help.contains("keygen          Generate raw recipient key files."));
     assert!(verbose_help.contains("LOCKBOX_KEY=<raw-content-key>"));
+
+    for removed in ["add-recipient", "list-keys", "remove-key"] {
+        let output = run_output(bin, &[removed, "--help"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
+    }
 }
 
 #[test]
@@ -447,7 +462,8 @@ fn removing_last_lockbox_key_has_cli_guidance() {
     run_in(
         bin,
         &[
-            "add-recipient",
+            "recipient",
+            "add",
             lockbox.to_str().unwrap(),
             public_key.to_str().unwrap(),
         ],
@@ -457,7 +473,7 @@ fn removing_last_lockbox_key_has_cli_guidance() {
 
     let keys = run_output_in(
         bin,
-        &["list-keys", lockbox.to_str().unwrap()],
+        &["recipient", "list", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
@@ -471,7 +487,7 @@ fn removing_last_lockbox_key_has_cli_guidance() {
 
     let output = run_output_in(
         bin,
-        &["remove-key", lockbox.to_str().unwrap(), &slot_id],
+        &["recipient", "remove", lockbox.to_str().unwrap(), &slot_id],
         &vault_root,
         &agent_root,
     );

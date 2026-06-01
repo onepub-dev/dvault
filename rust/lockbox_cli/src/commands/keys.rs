@@ -88,7 +88,11 @@ fn lockbox_is_open(lockbox_path: &str) -> bool {
         return false;
     };
     list_open_lockboxes()
-        .map(|ids| ids.iter().any(|id| id == &lockbox_id.to_string()))
+        .map(|lockboxes| {
+            lockboxes
+                .iter()
+                .any(|lockbox| lockbox.id == lockbox_id.to_string())
+        })
         .unwrap_or(false)
 }
 
@@ -97,8 +101,12 @@ pub(crate) fn list_open() -> CliResult<()> {
     if ids.is_empty() {
         println!("empty");
     } else {
-        for id in ids {
-            println!("open\t{id}");
+        for lockbox in ids {
+            if let Some(path) = lockbox.path {
+                println!("open\t{path}\t{}", lockbox.id);
+            } else {
+                println!("open\t{}", lockbox.id);
+            }
         }
     }
     Ok(())

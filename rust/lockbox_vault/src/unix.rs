@@ -1,7 +1,7 @@
 use super::{
     encode_forget, encode_forget_all, encode_get, encode_key_response, encode_list,
     encode_list_response, encode_put, encode_response_line, max_message_bytes, parse_request,
-    parse_response, AgentRequest, AgentResponse, SecretVec, DEFAULT_TTL_SECONDS,
+    parse_response, AgentRequest, AgentResponse, CachedLockbox, SecretVec, DEFAULT_TTL_SECONDS,
 };
 use lockbox_core::LockboxId;
 use std::collections::BTreeMap;
@@ -19,6 +19,7 @@ const IDLE_EXIT_SECONDS: u64 = 10 * 60;
 
 struct CacheEntry {
     key: SecretVec,
+    path: Option<String>,
     expires_at: Instant,
 }
 
@@ -69,8 +70,8 @@ pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
     }
 }
 
-pub(crate) fn put(lockbox_id: LockboxId, key: &SecretVec) -> io::Result<()> {
-    expect_ok(request(&encode_put(lockbox_id, key)?)?)
+pub(crate) fn put(lockbox_id: LockboxId, key: &SecretVec, path: Option<&str>) -> io::Result<()> {
+    expect_ok(request(&encode_put(lockbox_id, key, path)?)?)
 }
 
 pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
@@ -87,7 +88,7 @@ pub(crate) fn forget_all() -> io::Result<()> {
     expect_ok(request(&encode_forget_all()?)?)
 }
 
-pub(crate) fn list() -> io::Result<Vec<String>> {
+pub(crate) fn list() -> io::Result<Vec<CachedLockbox>> {
     if UnixStream::connect(socket_path()).is_err() {
         return Ok(Vec::new());
     }
@@ -156,11 +157,12 @@ fn handle_client(
                 _ => encode_response_line(b"MISS\n")?,
             }
         }
-        Ok(AgentRequest::Put(lockbox_id, key)) => {
+        Ok(AgentRequest::Put(lockbox_id, key, path)) => {
             cache.insert(
-                lockbox_id,
+                lockbox_id.clone(),
                 CacheEntry {
                     key,
+                    path,
                     expires_at: Instant::now() + Duration::from_secs(DEFAULT_TTL_SECONDS),
                 },
             );
@@ -174,7 +176,12 @@ fn handle_client(
             cache.clear();
             encode_response_line(b"OK\n")?
         }
-        Ok(AgentRequest::List) => encode_list_response(cache.keys().cloned())?,
+        Ok(AgentRequest::List) => {
+            encode_list_response(cache.iter().map(|(id, entry)| CachedLockbox {
+                id: id.clone(),
+                path: entry.path.clone(),
+            }))?
+        }
         Err(_) => encode_response_line(b"ERR invalid request\n")?,
     };
     response

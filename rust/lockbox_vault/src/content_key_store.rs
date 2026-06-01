@@ -1,4 +1,5 @@
 use lockbox_core::{LockboxId, Result, SecretVec};
+use std::path::Path;
 
 /// Storage backend for unlocked Lockbox content keys.
 ///
@@ -12,6 +13,16 @@ pub trait ContentKeyStore {
 
     /// Stores the unlocked content key for `lockbox_id`.
     fn put_content_key(&self, lockbox_id: LockboxId, key: SecretVec) -> Result<()>;
+
+    /// Stores the unlocked content key with a display path for diagnostics.
+    fn put_content_key_for_path(
+        &self,
+        lockbox_id: LockboxId,
+        key: SecretVec,
+        _path: &Path,
+    ) -> Result<()> {
+        self.put_content_key(lockbox_id, key)
+    }
 
     /// Removes the cached content key for `lockbox_id`.
     fn forget_content_key(&self, lockbox_id: LockboxId) -> Result<()>;

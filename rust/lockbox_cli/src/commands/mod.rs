@@ -50,13 +50,6 @@ pub(crate) fn run() -> CliResult<()> {
         "lock" => keys::lock(&lock_args(command_matches))?,
         "keygen" => keys::keygen(&two_args(command_matches, "private-key", "public-key"))?,
         "open-key" => keys::open_key(&open_key_args(command_matches))?,
-        "add-recipient" => {
-            keys::add_recipient(&two_args(command_matches, "lockbox", "recipient"), &access)?
-        }
-        "list-keys" => keys::list_keys(&one_arg(command_matches, "lockbox"), &access)?,
-        "remove-key" => {
-            keys::remove_key(&two_args(command_matches, "lockbox", "slot-id"), &access)?
-        }
         "recipient" => keys::recipient(&recipient_args(command_matches)?, &access)?,
         "vault" => vault::run(&vault_args(command_matches)?)?,
         "add" => files::add(

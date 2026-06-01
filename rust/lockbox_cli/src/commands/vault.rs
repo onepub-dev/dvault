@@ -292,8 +292,12 @@ fn list_open() -> CliResult<()> {
     if ids.is_empty() {
         println!("empty");
     } else {
-        for id in ids {
-            println!("open\t{id}");
+        for lockbox in ids {
+            if let Some(path) = lockbox.path {
+                println!("open\t{path}\t{}", lockbox.id);
+            } else {
+                println!("open\t{}", lockbox.id);
+            }
         }
     }
     Ok(())

@@ -1,7 +1,8 @@
 use lockbox_core::{Error, LockboxId, Result, SecretVec};
 use std::io;
+use std::path::Path;
 
-use crate::ContentKeyStore;
+use crate::{CachedLockbox, ContentKeyStore};
 
 #[cfg(unix)]
 use crate::unix as platform;
@@ -29,7 +30,11 @@ mod platform {
         Ok(None)
     }
 
-    pub(crate) fn put(_lockbox_id: LockboxId, _key: &SecretVec) -> io::Result<()> {
+    pub(crate) fn put(
+        _lockbox_id: LockboxId,
+        _key: &SecretVec,
+        _path: Option<&str>,
+    ) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "lockbox agent is not supported on this platform",
@@ -44,7 +49,7 @@ mod platform {
         Ok(())
     }
 
-    pub(crate) fn list() -> io::Result<Vec<String>> {
+    pub(crate) fn list() -> io::Result<Vec<CachedLockbox>> {
         Ok(Vec::new())
     }
 
@@ -67,7 +72,16 @@ impl ContentKeyStore for AgentClient {
     }
 
     fn put_content_key(&self, lockbox_id: LockboxId, key: SecretVec) -> Result<()> {
-        platform::put(lockbox_id, &key).map_err(io_to_core)
+        platform::put(lockbox_id, &key, None).map_err(io_to_core)
+    }
+
+    fn put_content_key_for_path(
+        &self,
+        lockbox_id: LockboxId,
+        key: SecretVec,
+        path: &Path,
+    ) -> Result<()> {
+        platform::put(lockbox_id, &key, Some(&path.display().to_string())).map_err(io_to_core)
     }
 
     fn forget_content_key(&self, lockbox_id: LockboxId) -> Result<()> {
@@ -107,7 +121,7 @@ pub fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
 /// Stores a content key in the platform agent.
 pub fn put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<()> {
     let key = SecretVec::try_from_slice(key).map_err(io::Error::other)?;
-    platform::put(lockbox_id, &key)
+    platform::put(lockbox_id, &key, None)
 }
 
 /// Removes one content key from the platform agent.
@@ -120,8 +134,8 @@ pub fn forget_all() -> io::Result<()> {
     platform::forget_all()
 }
 
-/// Lists cached lockbox ids known to the platform agent.
-pub fn list() -> io::Result<Vec<String>> {
+/// Lists cached lockboxes known to the platform agent.
+pub fn list() -> io::Result<Vec<CachedLockbox>> {
     platform::list()
 }
 

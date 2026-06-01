@@ -7,6 +7,7 @@ pub(crate) fn command(verbose: bool) -> Command {
     Command::new("lockbox")
         .about(ABOUT)
         .disable_version_flag(true)
+        .disable_help_subcommand(true)
         .arg_required_else_help(true)
         .subcommand_required(true)
         .subcommand_help_heading("Available commands")
@@ -139,20 +140,6 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .arg(required("to", "New path inside the lockbox.")),
             env_command(),
             recipient_command(),
-            sharing_command("add-recipient", "Share a lockbox with another public key.")
-                .hide(!verbose)
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required(
-                    "recipient",
-                    "Public key path or trusted recipient name.",
-                )),
-            sharing_command("list-keys", "List keys that can unlock a lockbox.")
-                .hide(!verbose)
-                .arg(required("lockbox", "Lockbox path.")),
-            sharing_command("remove-key", "Remove a key from a lockbox.")
-                .hide(!verbose)
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("slot-id", "Key slot id.")),
             vault_command(verbose),
             developer_command("visualize", "Print internal lockbox structure.")
                 .visible_alias("visualise")
@@ -213,9 +200,6 @@ Advanced command options:
   lockbox add --jobs auto|1|N <lockbox> <source> <lockbox-path>
 
 Developer and compatibility commands:
-  add-recipient   Share a lockbox with another public key.
-  list-keys       List keys that can unlock a lockbox.
-  remove-key      Remove a key from a lockbox.
   keygen          Generate raw recipient key files.
   open-key        Unlock using a vault private key.
   visualize       Print internal lockbox structure.
@@ -253,7 +237,9 @@ fn developer_command(name: &'static str, about: &'static str) -> Command {
 }
 
 fn base_command(name: &'static str, about: &'static str) -> Command {
-    Command::new(name).about(about)
+    Command::new(name)
+        .about(about)
+        .disable_help_subcommand(true)
 }
 
 fn env_command() -> Command {
@@ -498,6 +484,7 @@ fn vault_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("trust")
                 .about("Store a trusted recipient public key.")
+                .disable_help_subcommand(true)
                 .subcommand(
                     Command::new("add")
                         .about("Store a trusted recipient public key.")
@@ -561,6 +548,7 @@ fn vault_command(verbose: bool) -> Command {
 fn vault_key_command(verbose: bool) -> Command {
     Command::new("key")
         .about("Manage vault recipient keys.")
+        .disable_help_subcommand(true)
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(

@@ -70,16 +70,17 @@ impl<S: ContentKeyStore> Vault<S> {
                 let store_key = key.try_clone()?;
                 let lockbox = Lockbox::create_file(path, LockboxProtection::ContentKey(key))?;
                 self.store
-                    .put_content_key(lockbox.lockbox_id(), store_key)?;
+                    .put_content_key_for_path(lockbox.lockbox_id(), store_key, path)?;
                 Ok(lockbox)
             }
             LockboxProtection::Password(password) => {
                 let lockbox = Lockbox::create_file(path, LockboxProtection::Password(password))?;
                 let unlocked = VaultUnlock::path_with_password(path, password)?;
-                if let Err(err) = self
-                    .store
-                    .put_content_key(unlocked.lockbox_id, unlocked.try_clone_key()?)
-                {
+                if let Err(err) = self.store.put_content_key_for_path(
+                    unlocked.lockbox_id,
+                    unlocked.try_clone_key()?,
+                    path,
+                ) {
                     if !matches!(err, Error::Io(_)) {
                         return Err(err);
                     }
@@ -123,19 +124,25 @@ impl<S: ContentKeyStore> Vault<S> {
                 let store_key = key.try_clone()?;
                 let lockbox = Lockbox::open_file(path, LockboxUnlock::ContentKey(key))?;
                 self.store
-                    .put_content_key(lockbox.lockbox_id(), store_key)?;
+                    .put_content_key_for_path(lockbox.lockbox_id(), store_key, path)?;
                 Ok(lockbox)
             }
             LockboxUnlock::Password(password) => {
                 let unlocked = unlock_path_or_backup_with_password(path, password)?;
-                self.store
-                    .put_content_key(unlocked.lockbox_id, unlocked.try_clone_key()?)?;
+                self.store.put_content_key_for_path(
+                    unlocked.lockbox_id,
+                    unlocked.try_clone_key()?,
+                    path,
+                )?;
                 unlocked.open_path(path)
             }
             LockboxUnlock::RecipientKeyPair(recipient) => {
                 let unlocked = unlock_path_or_backup_with_recipient(path, &recipient)?;
-                self.store
-                    .put_content_key(unlocked.lockbox_id, unlocked.try_clone_key()?)?;
+                self.store.put_content_key_for_path(
+                    unlocked.lockbox_id,
+                    unlocked.try_clone_key()?,
+                    path,
+                )?;
                 unlocked.open_path(path)
             }
         }

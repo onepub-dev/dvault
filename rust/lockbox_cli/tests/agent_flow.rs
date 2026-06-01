@@ -55,7 +55,21 @@ fn open_populates_cache_and_lock_clears_it() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("open\t"));
+    let open_list = String::from_utf8_lossy(&output.stdout);
+    assert!(open_list.contains("open\t"));
+    assert!(open_list.contains(vault.to_str().unwrap()));
+
+    let output = run_output(bin, &agent_dir, &vault_dir, &["vault", "open"]);
+    assert!(
+        output.status.success(),
+        "command failed: {bin} vault open\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let vault_open = String::from_utf8_lossy(&output.stdout);
+    assert!(vault_open.contains("open\t"));
+    assert!(vault_open.contains(vault.to_str().unwrap()));
 
     run(
         bin,
