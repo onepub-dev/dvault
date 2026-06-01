@@ -176,7 +176,7 @@ impl VaultDirectory {
         lockbox_id: LockboxId,
         key_directory: &[u8],
     ) -> Result<()> {
-        self.put_record(&key_directory_backup_record_path(lockbox_id), key_directory)
+        self.put_record_replace(&key_directory_backup_record_path(lockbox_id), key_directory)
     }
 
     /// Loads the key-directory backup for `lockbox_id`.
@@ -196,8 +196,22 @@ impl VaultDirectory {
     }
 
     fn put_record(&self, path: &LockboxPath, bytes: &[u8]) -> Result<()> {
+        self.put_record_with_replace(path, bytes, false)
+    }
+
+    fn put_record_replace(&self, path: &LockboxPath, bytes: &[u8]) -> Result<()> {
+        self.put_record_with_replace(path, bytes, true)
+    }
+
+    fn put_record_with_replace(
+        &self,
+        path: &LockboxPath,
+        bytes: &[u8],
+        replace: bool,
+    ) -> Result<()> {
         let mut lockbox = self.lockbox.borrow_mut();
-        lockbox.add_file(path, bytes, false)?;
+        let replace = replace && lockbox.stat(path).is_some();
+        lockbox.add_file(path, bytes, replace)?;
         lockbox.commit()?;
         set_private_file_permissions(&self.path)?;
         Ok(())

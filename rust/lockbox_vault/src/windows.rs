@@ -80,7 +80,7 @@ pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
     }
 }
 
-pub(crate) fn put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<()> {
+pub(crate) fn put(lockbox_id: LockboxId, key: &SecretVec) -> io::Result<()> {
     expect_ok(request(&encode_put(lockbox_id, key)?)?)
 }
 

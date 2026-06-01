@@ -14,7 +14,7 @@ impl ContentKeyStore for NoopStore {
         Ok(None)
     }
 
-    fn put_content_key(&self, _lockbox_id: LockboxId, _key: &[u8]) -> Result<()> {
+    fn put_content_key(&self, _lockbox_id: LockboxId, _key: SecretVec) -> Result<()> {
         Ok(())
     }
 

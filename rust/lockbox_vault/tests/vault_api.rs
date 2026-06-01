@@ -34,10 +34,41 @@ impl ContentKeyStore for MemoryStore {
             .map_err(Into::into)
     }
 
-    fn put_content_key(&self, lockbox_id: lockbox_core::LockboxId, key: &[u8]) -> Result<()> {
+    fn put_content_key(&self, lockbox_id: lockbox_core::LockboxId, key: SecretVec) -> Result<()> {
+        let key = key.with_bytes(|key| key.to_vec())?;
+        self.keys.borrow_mut().insert(lockbox_id.to_string(), key);
+        Ok(())
+    }
+
+    fn forget_content_key(&self, lockbox_id: lockbox_core::LockboxId) -> Result<()> {
+        self.keys.borrow_mut().remove(&lockbox_id.to_string());
+        Ok(())
+    }
+
+    fn forget_all_content_keys(&self) -> Result<()> {
+        self.keys.borrow_mut().clear();
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct SecureCloneStore {
+    keys: RefCell<BTreeMap<String, SecretVec>>,
+}
+
+impl ContentKeyStore for SecureCloneStore {
+    fn get_content_key(&self, lockbox_id: lockbox_core::LockboxId) -> Result<Option<SecretVec>> {
         self.keys
-            .borrow_mut()
-            .insert(lockbox_id.to_string(), key.to_vec());
+            .borrow()
+            .get(&lockbox_id.to_string())
+            .map(SecretVec::try_clone)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    fn put_content_key(&self, lockbox_id: lockbox_core::LockboxId, key: SecretVec) -> Result<()> {
+        let key = key.try_clone()?;
+        self.keys.borrow_mut().insert(lockbox_id.to_string(), key);
         Ok(())
     }
 
@@ -76,6 +107,38 @@ fn vault_create_open_and_lock_with_content_key() {
     ));
 
     let _ = fs::remove_file(path);
+}
+
+#[test]
+fn vault_password_create_and_unlock_cache_keys_outside_secure_read_access() {
+    let path = unique_path("password-secure-cache");
+    let vault = Vault::new(SecureCloneStore::default());
+    let password = SecretString::try_from_slice(b"password").unwrap();
+
+    let mut lockbox = vault
+        .create_lockbox_with_password(&path, &password)
+        .unwrap();
+    lockbox
+        .add_file(&p("/docs/a.txt"), b"alpha", false)
+        .unwrap();
+    lockbox.commit().unwrap();
+
+    let cached = vault.open_lockbox(&path).unwrap();
+    assert_eq!(cached.get_file(&p("/docs/a.txt")).unwrap(), b"alpha");
+
+    vault.lock_lockbox(&path).unwrap();
+    assert!(matches!(
+        vault.open_lockbox(&path),
+        Err(Error::VaultUnavailable(_))
+    ));
+
+    let unlocked = vault
+        .unlock_lockbox_with_password(&path, &password)
+        .unwrap();
+    assert_eq!(unlocked.get_file(&p("/docs/a.txt")).unwrap(), b"alpha");
+
+    let recached = vault.open_lockbox(&path).unwrap();
+    assert_eq!(recached.get_file(&p("/docs/a.txt")).unwrap(), b"alpha");
 }
 
 #[test]
@@ -140,12 +203,16 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
     vault
         .store_key_directory_backup(lockbox.lockbox_id(), &backup)
         .unwrap();
+    vault
+        .store_key_directory_backup(lockbox.lockbox_id(), &backup)
+        .unwrap();
     assert_eq!(
         vault
             .load_key_directory_backup(lockbox.lockbox_id())
             .unwrap(),
         backup
     );
+    assert_eq!(vault.key_directory_backup_count().unwrap(), 1);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -279,6 +346,12 @@ fn vault_directory_public_crud_helpers_flow() {
     let mut lockbox =
         Lockbox::create_file(&lockbox_path, LockboxProtection::Password(&password)).unwrap();
     lockbox.commit().unwrap();
+    vault
+        .store_key_directory_backup(
+            lockbox.lockbox_id(),
+            &VaultUnlock::export_key_directory_backup(&lockbox).unwrap(),
+        )
+        .unwrap();
     vault
         .store_key_directory_backup(
             lockbox.lockbox_id(),

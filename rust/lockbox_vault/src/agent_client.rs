@@ -29,7 +29,7 @@ mod platform {
         Ok(None)
     }
 
-    pub(crate) fn put(_lockbox_id: LockboxId, _key: &[u8]) -> io::Result<()> {
+    pub(crate) fn put(_lockbox_id: LockboxId, _key: &SecretVec) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "lockbox agent is not supported on this platform",
@@ -58,8 +58,8 @@ impl ContentKeyStore for AgentClient {
         get(lockbox_id).map_err(io_to_core)
     }
 
-    fn put_content_key(&self, lockbox_id: LockboxId, key: &[u8]) -> Result<()> {
-        put(lockbox_id, key).map_err(io_to_core)
+    fn put_content_key(&self, lockbox_id: LockboxId, key: SecretVec) -> Result<()> {
+        platform::put(lockbox_id, &key).map_err(io_to_core)
     }
 
     fn forget_content_key(&self, lockbox_id: LockboxId) -> Result<()> {
@@ -98,7 +98,8 @@ pub fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
 
 /// Stores a content key in the platform agent.
 pub fn put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<()> {
-    platform::put(lockbox_id, key)
+    let key = SecretVec::try_from_slice(key).map_err(io::Error::other)?;
+    platform::put(lockbox_id, &key)
 }
 
 /// Removes one content key from the platform agent.

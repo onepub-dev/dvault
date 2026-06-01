@@ -24,7 +24,7 @@ pub(crate) fn encode_get(lockbox_id: LockboxId) -> io::Result<SecretVec> {
     secure_message(format!("{PROTOCOL_VERSION} GET {lockbox_id}\n").as_bytes())
 }
 
-pub(crate) fn encode_put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<SecretVec> {
+pub(crate) fn encode_put(lockbox_id: LockboxId, key: &SecretVec) -> io::Result<SecretVec> {
     let mut message = SecretVec::new();
     message
         .try_extend_from_slice(
@@ -32,7 +32,7 @@ pub(crate) fn encode_put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<Secret
         )
         .map_err(io::Error::other)?;
     message
-        .try_extend_from_slice(key)
+        .try_extend_from_secure(key)
         .map_err(io::Error::other)?;
     Ok(message)
 }

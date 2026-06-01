@@ -68,6 +68,15 @@ pub enum LockboxUnlock<'a> {
 }
 
 impl UnlockedContentKey {
+    /// Clone the decrypted content key into a new secure allocation.
+    ///
+    /// This lets vault integrations hand a copy to an external key cache
+    /// without borrowing the original key under a secure read guard.
+    #[cfg(feature = "vault-bridge")]
+    pub fn try_clone_key(&self) -> Result<SecretVec> {
+        self.key.try_clone().map_err(Into::into)
+    }
+
     /// Borrow the decrypted content key for the duration of the callback.
     ///
     /// Returns `Error::SecurityLimitExceeded` if secure memory access fails.

@@ -11,7 +11,7 @@ pub trait ContentKeyStore {
     fn get_content_key(&self, lockbox_id: LockboxId) -> Result<Option<SecretVec>>;
 
     /// Stores the unlocked content key for `lockbox_id`.
-    fn put_content_key(&self, lockbox_id: LockboxId, key: &[u8]) -> Result<()>;
+    fn put_content_key(&self, lockbox_id: LockboxId, key: SecretVec) -> Result<()>;
 
     /// Removes the cached content key for `lockbox_id`.
     fn forget_content_key(&self, lockbox_id: LockboxId) -> Result<()>;
