@@ -62,6 +62,30 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(env_export_help.contains("--format <posix|powershell|cmd|json>"));
     assert!(env_export_help.contains("eval \"$(lockbox env export secrets.lbox)\""));
     assert!(env_export_help.contains("Use shell redirection to write it to a file."));
+
+    let vault_init_help = run_output(bin, &["vault", "init", "--help"]);
+    assert_success(&vault_init_help);
+    let vault_init_help = String::from_utf8_lossy(&vault_init_help.stdout);
+    assert!(vault_init_help.contains("A new vault also gets a default recipient key."));
+    assert!(vault_init_help.contains("--verify"));
+    assert!(vault_init_help.contains("--overwrite"));
+
+    let vault_keygen_help = run_output(bin, &["vault", "keygen", "--help"]);
+    assert_success(&vault_keygen_help);
+    let vault_keygen_help = String::from_utf8_lossy(&vault_keygen_help.stdout);
+    assert!(vault_keygen_help.contains("Vault recipient keys let you create and open lockboxes"));
+    assert!(vault_keygen_help.contains("uses the default key name: default"));
+}
+
+#[test]
+fn clap_errors_are_not_double_prefixed() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+
+    let output = run_output(bin, &["vault", "create"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: unrecognized subcommand 'create'"));
+    assert!(!stderr.contains("error: error:"));
 }
 
 #[test]
@@ -211,6 +235,14 @@ fn content_key_create_does_not_mirror_empty_key_directory() {
     );
 
     assert!(lockbox.exists());
+    let listing = run_output_in(
+        bin,
+        &["list", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&listing);
+    assert_eq!(String::from_utf8_lossy(&listing.stdout).trim(), "empty");
     assert!(!vault_root.join("local-vault.lbox").exists());
 }
 
@@ -229,6 +261,152 @@ fn create_refuses_to_overwrite_existing_lockbox() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
     assert_eq!(fs::read(&lockbox).unwrap(), original);
+}
+
+#[test]
+fn password_create_requires_explicit_vault_init() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("create-vault-init");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let lockbox = dir.join("password.lbox");
+
+    let create_without_vault = run_output_without_content_key(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!create_without_vault.status.success());
+    assert!(String::from_utf8_lossy(&create_without_vault.stderr)
+        .contains("local vault is not initialized"));
+    assert!(!lockbox.exists());
+
+    let init = run_output_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    assert_success(&init);
+    let init = String::from_utf8_lossy(&init.stdout);
+    assert!(init.contains("This will create the local Lockbox vault."));
+    assert!(init.contains("Vault created successfully."));
+    assert!(init.contains("Generated default private/public key: default"));
+    assert!(vault_root.join("local-vault.lbox").exists());
+
+    let vault_list =
+        run_output_without_content_key(bin, &["vault", "list"], &vault_root, &agent_root);
+    assert_success(&vault_list);
+    let vault_list = String::from_utf8_lossy(&vault_list.stdout);
+    assert!(vault_list.contains("private\tdefault"));
+    assert!(vault_list.contains("public\tdefault"));
+
+    run_without_content_key(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(lockbox.exists());
+}
+
+#[test]
+fn vault_init_existing_is_noop_unless_verify_is_requested() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-init-existing");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+
+    let existing =
+        run_output_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    assert_success(&existing);
+    let existing = String::from_utf8_lossy(&existing.stdout);
+    assert!(existing.contains("Local vault already exists."));
+    assert!(existing.contains("Path:"));
+    assert!(existing.contains("No changes made."));
+    assert!(existing.contains("Use `lockbox vault init --verify`"));
+    assert!(!existing.contains("Vault opened successfully."));
+    assert!(!existing.contains("Directory:"));
+
+    let verified = run_output_without_content_key(
+        bin,
+        &["vault", "init", "--verify"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&verified);
+    let verified = String::from_utf8_lossy(&verified.stdout);
+    assert!(verified.contains("Local vault already exists."));
+    assert!(verified.contains("Vault opened successfully."));
+    assert!(verified.contains("Directory:"));
+}
+
+#[test]
+fn vault_init_overwrite_replaces_existing_vault_with_warning() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-init-overwrite");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(bin, &["vault", "keygen", "extra"], &vault_root, &agent_root);
+
+    let before = run_output_without_content_key(bin, &["vault", "list"], &vault_root, &agent_root);
+    assert_success(&before);
+    assert!(String::from_utf8_lossy(&before.stdout).contains("private\textra"));
+
+    let overwritten = run_output_without_content_key(
+        bin,
+        &["vault", "init", "--overwrite"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&overwritten);
+    let overwritten = String::from_utf8_lossy(&overwritten.stdout);
+    assert!(overwritten.contains("WARNING: replacing it will remove"));
+    assert!(overwritten.contains("Vault replaced successfully."));
+    assert!(overwritten.contains("Generated default private/public key: default"));
+
+    let after = run_output_without_content_key(bin, &["vault", "list"], &vault_root, &agent_root);
+    assert_success(&after);
+    let after = String::from_utf8_lossy(&after.stdout);
+    assert!(after.contains("private\tdefault"));
+    assert!(after.contains("public\tdefault"));
+    assert!(!after.contains("extra"));
+}
+
+#[test]
+fn vault_keygen_output_names_default_and_public_key_path() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-keygen-output");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    let output =
+        run_output_without_content_key(bin, &["vault", "keygen"], &vault_root, &agent_root);
+    assert_success(&output);
+    let output = String::from_utf8_lossy(&output.stdout);
+    assert!(output.contains("Using default vault key name: default"));
+    assert!(output.contains("Generated vault private key: default"));
+    assert!(output.contains("lockbox vault export-public default <public-key-output>"));
+
+    let public_key = dir.join("named.pub");
+    let named = run_output_without_content_key(
+        bin,
+        &["vault", "keygen", "named", public_key.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&named);
+    let named = String::from_utf8_lossy(&named.stdout);
+    assert!(named.contains("Generated vault private key: named"));
+    assert!(named.contains(&format!("Public key written: {}", public_key.display())));
 }
 
 #[test]
@@ -587,6 +765,11 @@ fn run_in(bin: &str, args: &[&str], vault_root: &PathBuf, agent_root: &PathBuf) 
     assert_success(&output);
 }
 
+fn run_without_content_key(bin: &str, args: &[&str], vault_root: &PathBuf, agent_root: &PathBuf) {
+    let output = run_output_without_content_key(bin, args, vault_root, agent_root);
+    assert_success(&output);
+}
+
 fn run_output(bin: &str, args: &[&str]) -> Output {
     run_output_in(
         bin,
@@ -600,6 +783,22 @@ fn run_output_in(bin: &str, args: &[&str], vault_root: &PathBuf, agent_root: &Pa
     Command::new(bin)
         .args(args)
         .env("LOCKBOX_KEY", "test-key")
+        .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
+        .env("LOCKBOX_AGENT_DIR", agent_root)
+        .env("LOCKBOX_VAULT_DIR", vault_root)
+        .output()
+        .unwrap()
+}
+
+fn run_output_without_content_key(
+    bin: &str,
+    args: &[&str],
+    vault_root: &PathBuf,
+    agent_root: &PathBuf,
+) -> Output {
+    Command::new(bin)
+        .args(args)
+        .env("LOCKBOX_PASSWORD", "test-lockbox-password")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
         .env("LOCKBOX_AGENT_DIR", agent_root)
         .env("LOCKBOX_VAULT_DIR", vault_root)

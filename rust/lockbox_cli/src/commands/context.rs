@@ -5,9 +5,9 @@ use lockbox_core::{
     SecretVec,
 };
 use lockbox_vault::{
-    forget_platform_vault_password, get_platform_vault_password, import_public_key, local_vault,
-    platform_secret_store_disabled, put_platform_vault_password, NoopStore, SecretString, Vault,
-    VaultDirectory,
+    default_vault_path, forget_platform_vault_password, get_platform_vault_password,
+    import_public_key, local_vault, platform_secret_store_disabled, put_platform_vault_password,
+    NoopStore, SecretString, Vault, VaultDirectory,
 };
 use std::path::Path;
 
@@ -82,6 +82,34 @@ pub(crate) fn read_new_password() -> CliResult<SecretString> {
     Ok(password)
 }
 
+pub(crate) fn read_vault_password(prompt: &str) -> CliResult<SecretString> {
+    if let Some(password) = SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
+        return Ok(password);
+    }
+    Ok(prompt_secret(prompt)?)
+}
+
+pub(crate) fn read_new_vault_password() -> CliResult<SecretString> {
+    if let Some(password) = SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
+        return Ok(password);
+    }
+    let password = prompt_secret("New vault password: ")?;
+    let mut confirm = prompt_secret("Confirm vault password: ")?;
+    if password != confirm {
+        confirm.zeroize()?;
+        return Err(Error::InvalidInput("passwords do not match".to_string()).into());
+    }
+    confirm.zeroize()?;
+    Ok(password)
+}
+
+pub(crate) fn remember_default_vault_password(password: &SecretString) -> Result<(), Error> {
+    if !platform_secret_store_disabled()? {
+        let _ = put_platform_vault_password(password);
+    }
+    Ok(())
+}
+
 pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
     if let Some(password) = SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
         return VaultDirectory::open_default(&password);
@@ -107,10 +135,20 @@ pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
     Ok(vault)
 }
 
+pub(crate) fn ensure_default_vault_initialized() -> Result<(), Error> {
+    if default_vault_path()?.exists() {
+        return Ok(());
+    }
+    Err(Error::VaultUnavailable(
+        "local vault is not initialized; run `lockbox vault init` first".to_string(),
+    ))
+}
+
 pub(crate) fn mirror_key_directory(lockbox: &Lockbox) -> Result<(), Error> {
     if lockbox.list_key_slots().is_empty() {
         return Ok(());
     }
+    ensure_default_vault_initialized()?;
     let vault = default_vault()?;
     let backup = VaultUnlock::export_key_directory_backup(lockbox)?;
     vault.store_key_directory_backup(lockbox.lockbox_id(), &backup)

@@ -72,9 +72,14 @@ pub(crate) fn list(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let path = LockboxPath::new(args.get(1).map(String::as_str).unwrap_or("/"))?;
     let lb = open_existing(lockbox_path, access)?;
+    let mut printed = false;
     for entry in lb.list(ListOptions::new(&path))? {
         let entry = entry?;
         println!("{}\t{}\t{}", kind_name(&entry.kind), entry.len, entry.path);
+        printed = true;
+    }
+    if !printed {
+        println!("empty");
     }
     Ok(())
 }

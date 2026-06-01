@@ -225,7 +225,11 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
         .ok_or_else(|| Error::InvalidInput("missing vault command".to_string()))?;
     let mut args = vec![command.to_string()];
     match command {
-        "init" | "list" | "path" => {}
+        "init" => {
+            push_flag(&mut args, sub, "verify", "--verify");
+            push_flag(&mut args, sub, "overwrite", "--overwrite");
+        }
+        "list" | "path" => {}
         "keygen" => {
             push_flag(&mut args, sub, "overwrite", "--overwrite");
             push_optional(&mut args, sub, "name");

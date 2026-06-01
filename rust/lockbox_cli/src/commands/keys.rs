@@ -1,6 +1,7 @@
 use super::context::{
-    load_private_key_from_arg, load_recipient_from_arg, mirror_key_directory, open_existing,
-    read_new_password, read_password, require_arg, Access, CliResult,
+    default_vault, ensure_default_vault_initialized, load_private_key_from_arg,
+    load_recipient_from_arg, mirror_key_directory, open_existing, read_new_password, read_password,
+    require_arg, Access, CliResult,
 };
 use lockbox_core::{Error, LockboxProtection, LockboxUnlock, RecipientKeyPair};
 use lockbox_vault::{
@@ -10,6 +11,8 @@ use std::fs;
 
 pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
     if args.first().map(String::as_str) == Some("--recipient") {
+        ensure_default_vault_initialized()?;
+        let _vault = default_vault()?;
         let recipient_name = require_arg(args, 1, "recipient")?;
         let lockbox_path = require_arg(args, 2, "lockbox")?;
         let recipient = load_recipient_from_arg(recipient_name)?;
@@ -30,6 +33,8 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
             mirror_key_directory(&lb)?;
         }
         Access::PromptPassword => {
+            ensure_default_vault_initialized()?;
+            let _vault = default_vault()?;
             let password = read_new_password()?;
             let lb = local_vault().create_lockbox_with_password(lockbox_path, &password)?;
             mirror_key_directory(&lb)?;

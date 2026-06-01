@@ -30,7 +30,7 @@ pub(crate) fn command(verbose: bool) -> Command {
         .subcommands([
             archive_command("create", "Create a new encrypted lockbox.")
                 .after_help(
-                    "By default, create prompts for a new lockbox password. Password and recipient lockboxes cache unlock access in the local agent and may ask for the local vault password to store key recovery metadata.\n\nExamples:\n  lockbox create secrets.lbox\n  lockbox create --recipient alice secrets.lbox",
+                    "By default, create prompts for a new lockbox password. Password and recipient lockboxes use the local vault for key recovery metadata, so run `lockbox vault init` first.\n\nExamples:\n  lockbox vault init\n  lockbox create secrets.lbox\n  lockbox create --recipient alice secrets.lbox",
                 )
                 .arg(
                     Arg::new("recipient")
@@ -358,7 +358,27 @@ fn vault_command(verbose: bool) -> Command {
     base_command("vault", "Manage your private keys and trusted public keys.")
         .subcommand_required(true)
         .arg_required_else_help(true)
-        .subcommand(Command::new("init").about("Create or open the local vault."))
+        .subcommand(
+            Command::new("init")
+                .about("Create or open the local vault.")
+                .after_help(
+                    "The local vault stores private keys, trusted public keys, and key-directory backups. A new vault also gets a default recipient key. Keep the vault password backed up; Lockbox cannot recover private keys from the vault without it.\n\nIf the vault already exists, init reports the path and makes no changes. Use --verify to validate the password, or --overwrite only when replacing the vault and losing records stored only there.",
+                )
+                .arg(
+                    Arg::new("verify")
+                        .long("verify")
+                        .conflicts_with("overwrite")
+                        .action(ArgAction::SetTrue)
+                        .help("Ask for the vault password and verify the existing vault opens."),
+                )
+                .arg(
+                    Arg::new("overwrite")
+                        .long("overwrite")
+                        .conflicts_with("verify")
+                        .action(ArgAction::SetTrue)
+                        .help("Replace an existing local vault."),
+                ),
+        )
         .subcommand(Command::new("list").about("List local vault records."))
         .subcommand(
             Command::new("path")
@@ -367,7 +387,10 @@ fn vault_command(verbose: bool) -> Command {
         )
         .subcommand(
             Command::new("keygen")
-                .about("Generate a private key in the local vault.")
+                .about("Generate a recipient key in the local vault.")
+                .after_help(
+                    "Vault recipient keys let you create and open lockboxes without sharing passwords. The private key stays in the local vault. Share the public key so other users can create lockboxes for you, or export it with `lockbox vault export-public`.\n\nIf no name is supplied, Lockbox uses the default key name: default.",
+                )
                 .arg(
                     Arg::new("overwrite")
                         .long("overwrite")
