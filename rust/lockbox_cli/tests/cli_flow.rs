@@ -81,6 +81,9 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_success(&vault_identity_create_help);
     let vault_identity_create_help = String::from_utf8_lossy(&vault_identity_create_help.stdout);
     assert!(vault_identity_create_help.contains("Create one of your identities."));
+    assert!(vault_identity_create_help.contains("creates the `default` identity"));
+    assert!(vault_identity_create_help.contains("public key output path is optional"));
+    assert!(vault_identity_create_help.contains("lockbox vault identity create laptop\n"));
 
     let vault_identity_help = run_output(bin, &["vault", "identity", "--help"]);
     assert_success(&vault_identity_help);
@@ -97,8 +100,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_contact_help = run_output(bin, &["vault", "contact", "--help"]);
     assert_success(&vault_contact_help);
     let vault_contact_help = String::from_utf8_lossy(&vault_contact_help.stdout);
-    assert!(vault_contact_help
-        .contains("Manage contacts that can be given access to a lockbox."));
+    assert!(vault_contact_help.contains("Manage contacts that can be given access to a lockbox."));
     assert!(vault_contact_help.contains("Contacts are saved public keys"));
     assert!(vault_contact_help.contains("list"));
     assert!(vault_contact_help.contains("add"));

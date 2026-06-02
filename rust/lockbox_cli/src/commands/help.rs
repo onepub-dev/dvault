@@ -643,7 +643,7 @@ fn vault_identity_command(verbose: bool) -> Command {
         .about("Manage identities that can unlock lockboxes on this machine.")
         .disable_help_subcommand(true)
         .after_help(
-            "An identity is one of your local unlock identities. It includes private key material, so it can unlock lockboxes that grant access to it. To save someone else's public key, use `lockbox vault contact add`.\n\nExamples:\n  lockbox vault identity list\n  lockbox vault identity create laptop ./laptop.pub\n  lockbox vault identity export-public laptop ./laptop.pub",
+            "An identity is one of your local unlock identities. It includes private key material, so it can unlock lockboxes that grant access to it. To save someone else's public key, use `lockbox vault contact add`.\n\nExamples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity export-public laptop ./laptop.pub",
         )
         .subcommand_required(true)
         .arg_required_else_help(true)
@@ -660,7 +660,7 @@ fn vault_identity_command(verbose: bool) -> Command {
             Command::new("create")
                 .about("Create one of your identities.")
                 .after_help(
-                    "Examples:\n  lockbox vault identity create\n  lockbox vault identity create laptop ./laptop.pub",
+                    "With no name, Lockbox creates the `default` identity. The public key output path is optional; use it when you want a shareable public key file immediately.\n\nExamples:\n  lockbox vault identity create\n  lockbox vault identity create laptop\n  lockbox vault identity create laptop ./laptop.pub",
                 )
                 .arg(
                     Arg::new("overwrite")
