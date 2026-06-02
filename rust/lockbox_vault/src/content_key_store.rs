@@ -24,6 +24,17 @@ pub trait ContentKeyStore {
         self.put_content_key(lockbox_id, key)
     }
 
+    /// Stores the unlocked content key with an explicit cache lifetime.
+    fn put_content_key_for_path_with_ttl(
+        &self,
+        lockbox_id: LockboxId,
+        key: SecretVec,
+        path: &Path,
+        _ttl_seconds: u64,
+    ) -> Result<()> {
+        self.put_content_key_for_path(lockbox_id, key, path)
+    }
+
     /// Removes the cached content key for `lockbox_id`.
     fn forget_content_key(&self, lockbox_id: LockboxId) -> Result<()>;
 

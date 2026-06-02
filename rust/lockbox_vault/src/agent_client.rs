@@ -12,6 +12,7 @@ use crate::windows as platform;
 
 #[cfg(not(any(unix, windows)))]
 mod platform {
+    use super::{CachedLockbox, SecretVec};
     use lockbox_core::LockboxId;
     use std::io;
 
@@ -34,6 +35,7 @@ mod platform {
         _lockbox_id: LockboxId,
         _key: &SecretVec,
         _path: Option<&str>,
+        _ttl_seconds: Option<u64>,
     ) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -46,6 +48,10 @@ mod platform {
     }
 
     pub(crate) fn forget_all() -> io::Result<()> {
+        Ok(())
+    }
+
+    pub(crate) fn stop() -> io::Result<()> {
         Ok(())
     }
 
@@ -72,7 +78,7 @@ impl ContentKeyStore for AgentClient {
     }
 
     fn put_content_key(&self, lockbox_id: LockboxId, key: SecretVec) -> Result<()> {
-        platform::put(lockbox_id, &key, None).map_err(io_to_core)
+        platform::put(lockbox_id, &key, None, None).map_err(io_to_core)
     }
 
     fn put_content_key_for_path(
@@ -81,7 +87,23 @@ impl ContentKeyStore for AgentClient {
         key: SecretVec,
         path: &Path,
     ) -> Result<()> {
-        platform::put(lockbox_id, &key, Some(&path.display().to_string())).map_err(io_to_core)
+        platform::put(lockbox_id, &key, Some(&path.display().to_string()), None).map_err(io_to_core)
+    }
+
+    fn put_content_key_for_path_with_ttl(
+        &self,
+        lockbox_id: LockboxId,
+        key: SecretVec,
+        path: &Path,
+        ttl_seconds: u64,
+    ) -> Result<()> {
+        platform::put(
+            lockbox_id,
+            &key,
+            Some(&path.display().to_string()),
+            Some(ttl_seconds),
+        )
+        .map_err(io_to_core)
     }
 
     fn forget_content_key(&self, lockbox_id: LockboxId) -> Result<()> {
@@ -121,7 +143,7 @@ pub fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
 /// Stores a content key in the platform agent.
 pub fn put(lockbox_id: LockboxId, key: &[u8]) -> io::Result<()> {
     let key = SecretVec::try_from_slice(key).map_err(io::Error::other)?;
-    platform::put(lockbox_id, &key, None)
+    platform::put(lockbox_id, &key, None, None)
 }
 
 /// Removes one content key from the platform agent.
@@ -132,6 +154,11 @@ pub fn forget(lockbox_id: LockboxId) -> io::Result<()> {
 /// Removes all content keys from the platform agent.
 pub fn forget_all() -> io::Result<()> {
     platform::forget_all()
+}
+
+/// Stops the platform agent after clearing all cached content keys.
+pub fn stop() -> io::Result<()> {
+    platform::stop()
 }
 
 /// Lists cached lockboxes known to the platform agent.

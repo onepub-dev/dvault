@@ -3,6 +3,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+use std::time::Duration;
 
 static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -78,7 +80,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_keygen_help = run_output(bin, &["vault", "keygen", "--help"]);
     assert_success(&vault_keygen_help);
     let vault_keygen_help = String::from_utf8_lossy(&vault_keygen_help.stdout);
-    assert!(vault_keygen_help.contains("Vault recipient keys let you create and open lockboxes"));
+    assert!(vault_keygen_help.contains("Vault recipient keys let you create and unlock lockboxes"));
     assert!(vault_keygen_help.contains("uses the default key name: default"));
 
     let vault_key_help = run_output(bin, &["vault", "key", "--help"]);
@@ -101,8 +103,39 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_success(&vault_help);
     let vault_help = String::from_utf8_lossy(&vault_help.stdout);
     assert!(vault_help.contains("Manage your private keys and trusted public keys."));
-    assert!(vault_help.contains("open"));
+    assert!(vault_help.contains("sessions"));
+    assert!(vault_help.contains("sessions"));
+    assert!(!vault_help.contains("credentials"));
+    assert!(!vault_help.contains("platform-store"));
+    assert!(!vault_help.contains("  open"));
     assert!(!vault_help.contains("  help"));
+
+    let sessions_help = run_output(bin, &["vault", "sessions", "--help"]);
+    assert_success(&sessions_help);
+    let sessions_help = String::from_utf8_lossy(&sessions_help.stdout);
+    assert!(sessions_help.contains("Manage unlocked lockbox sessions."));
+    assert!(sessions_help.contains("lock"));
+    assert!(sessions_help.contains("lock-all"));
+    assert!(sessions_help.contains("auto-unlock"));
+    assert!(sessions_help.contains("stop"));
+
+    let auto_unlock_help = run_output(bin, &["vault", "sessions", "auto-unlock", "--help"]);
+    assert_success(&auto_unlock_help);
+    let auto_unlock_help = String::from_utf8_lossy(&auto_unlock_help.stdout);
+    assert!(auto_unlock_help.contains("Manage vault password reuse"));
+    assert!(auto_unlock_help.contains("status"));
+    assert!(auto_unlock_help.contains("enable"));
+    assert!(auto_unlock_help.contains("disable"));
+    assert!(auto_unlock_help.contains("forget"));
+
+    let unlock_help = run_output(bin, &["unlock", "--help"]);
+    assert_success(&unlock_help);
+    let unlock_help = String::from_utf8_lossy(&unlock_help.stdout);
+    assert!(unlock_help.contains("--duration <DURATION>"));
+    assert!(unlock_help.contains("--password-env <NAME>"));
+    assert!(unlock_help.contains("--password-file <FILE>"));
+    assert!(unlock_help.contains("--password-stdin"));
+    assert!(!unlock_help.contains("--list"));
 }
 
 #[test]
@@ -117,6 +150,15 @@ fn clap_errors_are_not_double_prefixed() {
 }
 
 #[test]
+fn unlock_list_flag_is_not_supported() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+
+    let output = run_output(bin, &["unlock", "--list"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--list'"));
+}
+
+#[test]
 fn top_level_help_pins_command_groups_and_hidden_commands() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
 
@@ -128,7 +170,7 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
         &[
             "Archives",
             "  create",
-            "  open",
+            "  unlock",
             "Files",
             "  add",
             "  extract",
@@ -283,7 +325,12 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
         &vault_root,
         &agent_root,
     );
-    let list = run_output_without_content_key(bin, &["vault", "ls"], &vault_root, &agent_root);
+    let list = run_output_without_content_key(
+        bin,
+        &["vault", "ls", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
     assert_success(&list);
     assert!(String::from_utf8_lossy(&list.stdout).contains("trusted\tfriend"));
 
@@ -299,7 +346,12 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
         &vault_root,
         &agent_root,
     );
-    let list = run_output_without_content_key(bin, &["vault", "list"], &vault_root, &agent_root);
+    let list = run_output_without_content_key(
+        bin,
+        &["vault", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
     assert_success(&list);
     let list = String::from_utf8_lossy(&list.stdout);
     assert!(!list.contains("trusted\tfriend"));
@@ -473,7 +525,13 @@ fn removing_last_lockbox_key_has_cli_guidance() {
 
     let keys = run_output_in(
         bin,
-        &["recipient", "list", lockbox.to_str().unwrap()],
+        &[
+            "recipient",
+            "list",
+            "--format",
+            "tsv",
+            lockbox.to_str().unwrap(),
+        ],
         &vault_root,
         &agent_root,
     );
@@ -500,7 +558,7 @@ fn removing_last_lockbox_key_has_cli_guidance() {
 }
 
 #[test]
-fn doctor_and_vault_open_report_agent_state() {
+fn doctor_and_vault_sessions_report_agent_state() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("agent-reporting");
     let vault_root = dir.join("vault");
@@ -513,9 +571,36 @@ fn doctor_and_vault_open_report_agent_state() {
     assert!(doctor.contains("running: no"));
     assert!(!doctor.contains("running: unknown"));
 
-    let open = run_output_in(bin, &["vault", "open"], &vault_root, &agent_root);
-    assert_success(&open);
-    assert_eq!(String::from_utf8_lossy(&open.stdout).trim(), "empty");
+    let unlocked = run_output_in(bin, &["vault", "sessions"], &vault_root, &agent_root);
+    assert_success(&unlocked);
+    assert_eq!(String::from_utf8_lossy(&unlocked.stdout).trim(), "empty");
+
+    let stop = run_output_in(
+        bin,
+        &["vault", "sessions", "stop"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&stop);
+    assert!(String::from_utf8_lossy(&stop.stdout).contains("agent stopped"));
+
+    let auto_unlock = run_output_in(
+        bin,
+        &[
+            "vault",
+            "sessions",
+            "auto-unlock",
+            "status",
+            "--format",
+            "tsv",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&auto_unlock);
+    let auto_unlock = String::from_utf8_lossy(&auto_unlock.stdout);
+    assert!(auto_unlock.contains("backend\t"));
+    assert!(auto_unlock.contains("supported\t"));
 }
 
 #[test]
@@ -593,9 +678,15 @@ fn cli_env_rename_and_visualize_flow() {
     );
     run(
         bin,
-        &["vault", "trust", "default", vault_public.to_str().unwrap()],
+        &[
+            "vault",
+            "trust",
+            "add",
+            "default",
+            vault_public.to_str().unwrap(),
+        ],
     );
-    let vault_list = run_output(bin, &["vault", "list"]);
+    let vault_list = run_output(bin, &["vault", "list", "--format", "tsv"]);
     assert_success(&vault_list);
     let vault_list = String::from_utf8_lossy(&vault_list.stdout);
     assert!(vault_list.contains("private\tdefault"));
@@ -645,6 +736,105 @@ fn cli_env_rename_and_visualize_flow() {
     let doctor = String::from_utf8_lossy(&doctor.stdout);
     assert!(doctor.contains("Local vault"));
     assert!(doctor.contains("local-vault.lbox"));
+}
+
+#[test]
+fn list_commands_support_table_tsv_and_json_formats() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("output-formats");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("formats.lbox");
+    let source = dir.join("source.txt");
+    fs::write(&source, "alpha").unwrap();
+
+    run(
+        bin,
+        &[
+            "add",
+            lockbox.to_str().unwrap(),
+            source.to_str().unwrap(),
+            "/docs/a.txt",
+        ],
+    );
+
+    let table = run_output(bin, &["list", lockbox.to_str().unwrap()]);
+    assert_success(&table);
+    let table = String::from_utf8_lossy(&table.stdout);
+    assert!(table.lines().next().unwrap_or("").contains("kind"));
+    assert!(table.contains("/docs/a.txt"));
+
+    let tsv = run_output(bin, &["list", "--format", "tsv", lockbox.to_str().unwrap()]);
+    assert_success(&tsv);
+    assert!(String::from_utf8_lossy(&tsv.stdout).contains("file\t5\t/docs/a.txt"));
+
+    let json = run_output(
+        bin,
+        &["list", "--format", "json", lockbox.to_str().unwrap()],
+    );
+    assert_success(&json);
+    assert!(String::from_utf8_lossy(&json.stdout)
+        .contains("{\"kind\":\"file\",\"len\":\"5\",\"path\":\"/docs/a.txt\"}"));
+}
+
+#[test]
+fn recover_reports_and_writes_recovered_lockbox() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("recover-write");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let damaged = dir.join("damaged.lbox");
+    let recovered = dir.join("recovered.lbox");
+    let source = dir.join("source.txt");
+    fs::write(&source, "alpha").unwrap();
+
+    run(
+        bin,
+        &[
+            "add",
+            damaged.to_str().unwrap(),
+            source.to_str().unwrap(),
+            "/docs/a.txt",
+        ],
+    );
+    let mut bytes = fs::read(&damaged).unwrap();
+    bytes[0] ^= 0xff;
+    fs::write(&damaged, bytes).unwrap();
+
+    let report = run_output(
+        bin,
+        &[
+            "recover",
+            "--report",
+            "--format",
+            "json",
+            damaged.to_str().unwrap(),
+        ],
+    );
+    assert_success(&report);
+    assert!(String::from_utf8_lossy(&report.stdout).contains("\"field\":\"intact_file_count\""));
+
+    let output = run_output(
+        bin,
+        &[
+            "recover",
+            damaged.to_str().unwrap(),
+            "--output",
+            recovered.to_str().unwrap(),
+            "--format",
+            "tsv",
+        ],
+    );
+    assert_success(&output);
+    assert!(recovered.exists());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("output\t"));
+
+    let listing = run_output(
+        bin,
+        &["list", "--format", "tsv", recovered.to_str().unwrap()],
+    );
+    assert_success(&listing);
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("/docs/a.txt"));
 }
 
 #[test]
@@ -839,7 +1029,13 @@ fn recipient_subcommand_aliases_manage_lockbox_access() {
 
     let recipients = run_output_in(
         bin,
-        &["recipient", "ls", lockbox.to_str().unwrap()],
+        &[
+            "recipient",
+            "ls",
+            "--format",
+            "tsv",
+            lockbox.to_str().unwrap(),
+        ],
         &vault_root,
         &agent_root,
     );
@@ -889,8 +1085,12 @@ fn password_create_requires_explicit_vault_init() {
     assert!(init.contains("Generated default private/public key: default"));
     assert!(vault_root.join("local-vault.lbox").exists());
 
-    let vault_list =
-        run_output_without_content_key(bin, &["vault", "list"], &vault_root, &agent_root);
+    let vault_list = run_output_without_content_key(
+        bin,
+        &["vault", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
     assert_success(&vault_list);
     let vault_list = String::from_utf8_lossy(&vault_list.stdout);
     assert!(vault_list.contains("private\tdefault"));
@@ -924,7 +1124,7 @@ fn vault_init_existing_is_noop_unless_verify_is_requested() {
     assert!(existing.contains("Path:"));
     assert!(existing.contains("No changes made."));
     assert!(existing.contains("Use `lockbox vault init --verify`"));
-    assert!(!existing.contains("Vault opened successfully."));
+    assert!(!existing.contains("Vault unlocked successfully."));
     assert!(!existing.contains("Directory:"));
 
     let verified = run_output_without_content_key(
@@ -936,7 +1136,7 @@ fn vault_init_existing_is_noop_unless_verify_is_requested() {
     assert_success(&verified);
     let verified = String::from_utf8_lossy(&verified.stdout);
     assert!(verified.contains("Local vault already exists."));
-    assert!(verified.contains("Vault opened successfully."));
+    assert!(verified.contains("Vault unlocked successfully."));
     assert!(verified.contains("Directory:"));
 }
 
@@ -952,7 +1152,12 @@ fn vault_init_overwrite_replaces_existing_vault_with_warning() {
     run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
     run_without_content_key(bin, &["vault", "keygen", "extra"], &vault_root, &agent_root);
 
-    let before = run_output_without_content_key(bin, &["vault", "list"], &vault_root, &agent_root);
+    let before = run_output_without_content_key(
+        bin,
+        &["vault", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
     assert_success(&before);
     assert!(String::from_utf8_lossy(&before.stdout).contains("private\textra"));
 
@@ -968,7 +1173,12 @@ fn vault_init_overwrite_replaces_existing_vault_with_warning() {
     assert!(overwritten.contains("Vault replaced successfully."));
     assert!(overwritten.contains("Generated default private/public key: default"));
 
-    let after = run_output_without_content_key(bin, &["vault", "list"], &vault_root, &agent_root);
+    let after = run_output_without_content_key(
+        bin,
+        &["vault", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
     assert_success(&after);
     let after = String::from_utf8_lossy(&after.stdout);
     assert!(after.contains("private\tdefault"));
@@ -1036,7 +1246,12 @@ fn vault_key_remove_requires_confirmation_and_force_bypasses_it() {
         String::from_utf8_lossy(&refused.stdout).contains("Vault private key not removed: temp")
     );
 
-    let list = run_output_without_content_key(bin, &["vault", "ls"], &vault_root, &agent_root);
+    let list = run_output_without_content_key(
+        bin,
+        &["vault", "ls", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
     assert_success(&list);
     assert!(String::from_utf8_lossy(&list.stdout).contains("private\ttemp"));
 
@@ -1079,9 +1294,9 @@ fn vault_key_export_reports_missing_output_for_named_key() {
 }
 
 #[test]
-fn open_list_and_lock_report_empty_cache_and_already_closed_state() {
+fn vault_sessions_and_lock_report_empty_cache_and_already_locked_state() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
-    let dir = unique_dir_named("open-list-lock");
+    let dir = unique_dir_named("unlock-list-lock");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let vault_root = dir.join("vault");
@@ -1095,19 +1310,37 @@ fn open_list_and_lock_report_empty_cache_and_already_closed_state() {
         &vault_root,
         &agent_root,
     );
-    let open_list =
-        run_output_without_content_key(bin, &["open", "--list"], &vault_root, &agent_root);
-    assert_success(&open_list);
-    assert_eq!(String::from_utf8_lossy(&open_list.stdout).trim(), "empty");
+    let unlock_list =
+        run_output_without_content_key(bin, &["vault", "sessions"], &vault_root, &agent_root);
+    assert_success(&unlock_list);
+    assert_eq!(String::from_utf8_lossy(&unlock_list.stdout).trim(), "empty");
 
-    let closed = run_output_without_content_key(
+    let locked = run_output_without_content_key(
         bin,
-        &["close", lockbox.to_str().unwrap()],
+        &["lock", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
-    assert_success(&closed);
-    assert!(String::from_utf8_lossy(&closed.stdout).contains("already closed"));
+    assert_success(&locked);
+    assert!(String::from_utf8_lossy(&locked.stdout).contains("already locked"));
+
+    let session_lock = run_output_without_content_key(
+        bin,
+        &["vault", "sessions", "lock", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&session_lock);
+    assert!(String::from_utf8_lossy(&session_lock.stdout).contains("session locked"));
+
+    let lock_all = run_output_without_content_key(
+        bin,
+        &["vault", "sessions", "lock-all"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&lock_all);
+    assert!(String::from_utf8_lossy(&lock_all.stdout).contains("sessions locked"));
 
     let listing = run_output_without_content_key(
         bin,
@@ -1116,9 +1349,112 @@ fn open_list_and_lock_report_empty_cache_and_already_closed_state() {
         &agent_root,
     );
     assert!(!listing.status.success());
-    assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is closed"));
+    assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is locked"));
     assert!(!String::from_utf8_lossy(&listing.stderr).contains("Unlock the lockbox"));
     assert!(!String::from_utf8_lossy(&listing.stderr).contains("use the API intended"));
+}
+
+#[test]
+fn unlock_accepts_password_sources_and_session_duration() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = short_target_dir("unlockpw");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let lockbox = dir.join("session.lbox");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(bin, &["lock", "--all"], &vault_root, &agent_root);
+
+    let env_unlock = run_output_without_lockbox_password(
+        bin,
+        &[
+            "unlock",
+            "--password-env",
+            "LBX_TEST_PASSWORD",
+            lockbox.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    )
+    .env("LBX_TEST_PASSWORD", "test-lockbox-password")
+    .output()
+    .unwrap();
+    if String::from_utf8_lossy(&env_unlock.stderr).contains("lockbox agent did not start") {
+        eprintln!("skipping agent session assertions: lockbox agent did not start");
+        return;
+    }
+    assert_success(&env_unlock);
+    run_without_content_key(
+        bin,
+        &["lock", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+
+    let password_file = dir.join("password.txt");
+    fs::write(&password_file, "test-lockbox-password\n").unwrap();
+    let file_unlock = run_output_without_lockbox_password(
+        bin,
+        &[
+            "unlock",
+            "--password-file",
+            password_file.to_str().unwrap(),
+            lockbox.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    )
+    .output()
+    .unwrap();
+    assert_success(&file_unlock);
+    run_without_content_key(
+        bin,
+        &["lock", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+
+    let stdin_unlock = run_output_without_lockbox_password_with_stdin(
+        bin,
+        &[
+            "unlock",
+            "--password-stdin",
+            "--duration",
+            "1s",
+            lockbox.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+        "test-lockbox-password\n",
+    );
+    assert_success(&stdin_unlock);
+
+    let sessions = run_output_without_content_key(
+        bin,
+        &["vault", "sessions", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&sessions);
+    assert!(String::from_utf8_lossy(&sessions.stdout).contains(lockbox.to_str().unwrap()));
+
+    thread::sleep(Duration::from_secs(2));
+    let listing = run_output_without_content_key(
+        bin,
+        &["list", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!listing.status.success());
+    assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is locked"));
 }
 
 #[test]
@@ -1194,7 +1530,10 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
         ],
     );
 
-    let listing = run_output(bin, &["env", "list", lockbox.to_str().unwrap()]);
+    let listing = run_output(
+        bin,
+        &["env", "list", "--format", "tsv", lockbox.to_str().unwrap()],
+    );
     assert_success(&listing);
     let listing = String::from_utf8_lossy(&listing.stdout);
     assert!(listing.contains("APP_MODE"));
@@ -1420,6 +1759,7 @@ fn vault_key_import_export_formats_are_accepted_by_cli() {
             &[
                 "vault",
                 "trust",
+                "add",
                 &format!("trusted-{name}"),
                 path.to_str().unwrap(),
             ],
@@ -1450,6 +1790,7 @@ fn vault_key_import_export_formats_are_accepted_by_cli() {
         &[
             "vault",
             "trust",
+            "add",
             "invalid",
             invalid_public.to_str().unwrap(),
         ],
@@ -1458,7 +1799,12 @@ fn vault_key_import_export_formats_are_accepted_by_cli() {
     );
     assert!(!output.status.success());
 
-    let vault_list = run_output_in(bin, &["vault", "list"], &vault_root, &agent_root);
+    let vault_list = run_output_in(
+        bin,
+        &["vault", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
     assert_success(&vault_list);
     let vault_list = String::from_utf8_lossy(&vault_list.stdout);
     for name in ["pem", "jwk", "jwks", "raw"] {
@@ -1555,6 +1901,43 @@ fn run_output_without_content_key(
         .unwrap()
 }
 
+fn run_output_without_lockbox_password(
+    bin: &str,
+    args: &[&str],
+    vault_root: &PathBuf,
+    agent_root: &PathBuf,
+) -> Command {
+    let mut command = Command::new(bin);
+    command
+        .args(args)
+        .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
+        .env("LOCKBOX_AGENT_DIR", agent_root)
+        .env("LOCKBOX_VAULT_DIR", vault_root);
+    command
+}
+
+fn run_output_without_lockbox_password_with_stdin(
+    bin: &str,
+    args: &[&str],
+    vault_root: &PathBuf,
+    agent_root: &PathBuf,
+    stdin: &str,
+) -> Output {
+    let mut child = run_output_without_lockbox_password(bin, args, vault_root, agent_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
 fn run_output_without_content_key_with_stdin(
     bin: &str,
     args: &[&str],
@@ -1617,4 +2000,11 @@ fn unique_dir_named(label: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../target/test-tmp")
         .join(format!("lockbox-{label}-{}-{counter}", std::process::id()))
+}
+
+fn short_target_dir(label: &str) -> PathBuf {
+    let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::SeqCst);
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/t")
+        .join(format!("lb-{label}-{}-{counter}", std::process::id()))
 }

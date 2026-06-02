@@ -50,6 +50,15 @@ impl RecoveryScanner {
     pub fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
         salvage_bytes(bytes, key)
     }
+
+    /// Salvage a damaged lockbox using a content key held in secure memory.
+    pub fn salvage_bytes_with_secret_key(
+        bytes: Vec<u8>,
+        key: &crate::SecretVec,
+    ) -> Result<Lockbox> {
+        let key_bytes = Zeroizing::new(key.with_bytes(|key| key.to_vec())?);
+        salvage_bytes(bytes, &*key_bytes)
+    }
 }
 
 fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {

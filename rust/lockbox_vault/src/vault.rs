@@ -54,6 +54,25 @@ impl<S: ContentKeyStore> Vault<S> {
         self.unlock_lockbox(path, LockboxUnlock::Password(password))
     }
 
+    /// Unlocks a password-protected lockbox and caches its content key for the
+    /// requested number of seconds.
+    pub fn unlock_lockbox_with_password_for_duration(
+        &self,
+        path: impl AsRef<Path>,
+        password: &SecretString,
+        ttl_seconds: u64,
+    ) -> Result<Lockbox> {
+        let path = path.as_ref();
+        let unlocked = unlock_path_or_backup_with_password(path, password)?;
+        self.store.put_content_key_for_path_with_ttl(
+            unlocked.lockbox_id,
+            unlocked.try_clone_key()?,
+            path,
+            ttl_seconds,
+        )?;
+        unlocked.open_path(path)
+    }
+
     /// Creates a lockbox with the supplied protection mode.
     ///
     /// Content-key and password modes cache the unlocked content key after the

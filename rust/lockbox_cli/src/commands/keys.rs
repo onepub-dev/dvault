@@ -3,13 +3,16 @@ use super::context::{
     load_recipient_from_arg, mirror_key_directory, open_existing, read_new_password, read_password,
     require_arg, Access, CliResult,
 };
+use super::output::{output_format_from_args, print_records};
 use lockbox_core::vault_bridge::VaultUnlock;
 use lockbox_core::{Error, LockboxProtection, LockboxUnlock, RecipientKeyPair};
 use lockbox_vault::{
     encode_hex, export_private_key, list as list_open_lockboxes, local_vault, KeyFormat, NoopStore,
     SecretVec, Vault,
 };
+use std::env;
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
@@ -53,31 +56,35 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
     Ok(())
 }
 
-pub(crate) fn open(args: &[String]) -> CliResult<()> {
-    if args.first().map(String::as_str) == Some("--list") {
-        list_open()?;
-        return Ok(());
-    }
-    let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let password = read_password("Password: ")?;
-    let lb = local_vault().unlock_lockbox_with_password(lockbox_path, &password)?;
+pub(crate) fn unlock(args: &[String]) -> CliResult<()> {
+    let options = OpenOptions::parse(args)?;
+    let password = options.read_password()?;
+    let lb = if let Some(ttl_seconds) = options.ttl_seconds {
+        local_vault().unlock_lockbox_with_password_for_duration(
+            &options.lockbox_path,
+            &password,
+            ttl_seconds,
+        )?
+    } else {
+        local_vault().unlock_lockbox_with_password(&options.lockbox_path, &password)?
+    };
     mirror_key_directory(&lb)?;
-    println!("Lockbox opened: {lockbox_path}");
+    println!("Lockbox unlocked: {}", options.lockbox_path);
     Ok(())
 }
 
 pub(crate) fn lock(args: &[String]) -> CliResult<()> {
     if args.first().map(String::as_str) == Some("--all") {
         local_vault().lock_all()?;
-        println!("All lockboxes closed.");
+        println!("All lockboxes locked.");
     } else {
         let lockbox_path = require_arg(args, 0, "lockbox")?;
         let was_open = lockbox_is_open(lockbox_path);
         local_vault().lock_lockbox(lockbox_path)?;
         if was_open {
-            println!("Lockbox closed: {lockbox_path}");
+            println!("Lockbox locked: {lockbox_path}");
         } else {
-            println!("Lockbox was already closed: {lockbox_path}");
+            println!("Lockbox was already locked: {lockbox_path}");
         }
     }
     Ok(())
@@ -96,22 +103,6 @@ fn lockbox_is_open(lockbox_path: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn list_open() -> CliResult<()> {
-    let ids = list_open_lockboxes()?;
-    if ids.is_empty() {
-        println!("empty");
-    } else {
-        for lockbox in ids {
-            if let Some(path) = lockbox.path {
-                println!("open\t{path}\t{}", lockbox.id);
-            } else {
-                println!("open\t{}", lockbox.id);
-            }
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn keygen(args: &[String]) -> CliResult<()> {
     let private_path = require_arg(args, 0, "private key path")?;
     let public_path = require_arg(args, 1, "public key path")?;
@@ -124,7 +115,7 @@ pub(crate) fn keygen(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
-pub(crate) fn open_key(args: &[String]) -> CliResult<()> {
+pub(crate) fn unlock_key(args: &[String]) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let keypair = load_private_key_from_arg(args.get(1).map(String::as_str))?;
     let lb =
@@ -145,11 +136,18 @@ pub(crate) fn add_recipient(args: &[String], access: &Access) -> CliResult<()> {
 }
 
 pub(crate) fn list_keys(args: &[String], access: &Access) -> CliResult<()> {
-    let lockbox_path = require_arg(args, 0, "lockbox")?;
+    let (args, format) = output_format_from_args(args)?;
+    let lockbox_path = require_arg(&args, 0, "lockbox")?;
     let lb = open_existing(lockbox_path, access)?;
+    let mut rows = Vec::new();
     for slot in lb.list_key_slots() {
-        println!("{}\t{:?}\t{}", slot.id, slot.protection, slot.algorithm);
+        rows.push(vec![
+            slot.id.to_string(),
+            format!("{:?}", slot.protection),
+            slot.algorithm.to_string(),
+        ]);
     }
+    print_records(&["slot", "protection", "algorithm"], rows, format)?;
     Ok(())
 }
 
@@ -205,6 +203,206 @@ fn ensure_new_lockbox_path(path: &Path) -> CliResult<()> {
         return Err(Error::AlreadyExists(path.display().to_string()).into());
     }
     Ok(())
+}
+
+struct OpenOptions {
+    lockbox_path: String,
+    ttl_seconds: Option<u64>,
+    password_source: PasswordSource,
+}
+
+enum PasswordSource {
+    Prompt,
+    Env(String),
+    File(String),
+    Stdin,
+}
+
+impl OpenOptions {
+    fn parse(args: &[String]) -> CliResult<Self> {
+        let mut positional = Vec::new();
+        let mut ttl_seconds = None;
+        let mut password_source = PasswordSource::Prompt;
+        let mut index = 0usize;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--duration" => {
+                    index += 1;
+                    let Some(value) = args.get(index).map(String::as_str) else {
+                        return Err(
+                            Error::InvalidInput("missing --duration value".to_string()).into()
+                        );
+                    };
+                    ttl_seconds = Some(parse_duration(value)?);
+                }
+                "--password-env" => {
+                    ensure_prompt_password_source(&password_source)?;
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        return Err(Error::InvalidInput(
+                            "missing --password-env value".to_string(),
+                        )
+                        .into());
+                    };
+                    password_source = PasswordSource::Env(value.clone());
+                }
+                "--password-file" => {
+                    ensure_prompt_password_source(&password_source)?;
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        return Err(Error::InvalidInput(
+                            "missing --password-file value".to_string(),
+                        )
+                        .into());
+                    };
+                    password_source = PasswordSource::File(value.clone());
+                }
+                "--password-stdin" => {
+                    ensure_prompt_password_source(&password_source)?;
+                    password_source = PasswordSource::Stdin;
+                }
+                value => positional.push(value.to_string()),
+            }
+            index += 1;
+        }
+        let lockbox_path = positional
+            .first()
+            .cloned()
+            .ok_or_else(|| Error::InvalidInput("missing lockbox".to_string()))?;
+        if positional.len() > 1 {
+            return Err(Error::InvalidInput(format!(
+                "unexpected unlock argument: {}",
+                positional[1]
+            ))
+            .into());
+        }
+        if ttl_seconds.is_none() {
+            ttl_seconds = default_session_duration()?;
+        }
+        Ok(Self {
+            lockbox_path,
+            ttl_seconds,
+            password_source,
+        })
+    }
+
+    fn read_password(&self) -> CliResult<lockbox_vault::SecretString> {
+        match &self.password_source {
+            PasswordSource::Prompt => read_password("Password: "),
+            PasswordSource::Env(name) => {
+                let value = env::var(name).map_err(|_| {
+                    Error::InvalidInput(format!("environment variable is not set: {name}"))
+                })?;
+                lockbox_vault::SecretString::try_from_bytes(value.into_bytes()).map_err(Into::into)
+            }
+            PasswordSource::File(path) => secret_from_bytes(
+                fs::read(path)
+                    .map_err(|err| Error::Io(format!("read password file {path}: {err}")))?,
+            ),
+            PasswordSource::Stdin => {
+                let mut bytes = Vec::new();
+                io::stdin().read_to_end(&mut bytes)?;
+                secret_from_bytes(bytes)
+            }
+        }
+    }
+}
+
+fn ensure_prompt_password_source(source: &PasswordSource) -> CliResult<()> {
+    if matches!(source, PasswordSource::Prompt) {
+        Ok(())
+    } else {
+        Err(
+            Error::InvalidInput("choose only one password source for lockbox unlock".to_string())
+                .into(),
+        )
+    }
+}
+
+fn secret_from_bytes(mut bytes: Vec<u8>) -> CliResult<lockbox_vault::SecretString> {
+    while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+        bytes.pop();
+    }
+    lockbox_vault::SecretString::try_from_bytes(bytes).map_err(Into::into)
+}
+
+fn default_session_duration() -> CliResult<Option<u64>> {
+    if let Ok(value) = env::var("LOCKBOX_UNLOCK_DURATION") {
+        return Ok(Some(parse_duration(&value)?));
+    }
+    let Some(path) = session_config_path() else {
+        return Ok(None);
+    };
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if matches!(key.trim(), "unlock_duration" | "session_duration") {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            return Ok(Some(parse_duration(value)?));
+        }
+    }
+    Ok(None)
+}
+
+fn session_config_path() -> Option<PathBuf> {
+    if let Ok(path) = env::var("LOCKBOX_CONFIG") {
+        return Some(PathBuf::from(path));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join("Library/Application Support/Lockbox/config.yaml"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|path| path.join("Lockbox").join("config.yaml"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(path) = env::var_os("XDG_CONFIG_HOME") {
+            return Some(PathBuf::from(path).join("lockbox").join("config.yaml"));
+        }
+        return env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".config/lockbox/config.yaml"));
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+fn parse_duration(value: &str) -> CliResult<u64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(Error::InvalidInput("duration cannot be empty".to_string()).into());
+    }
+    let split_at = value
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(value.len());
+    let (number, unit) = value.split_at(split_at);
+    let amount = number
+        .parse::<u64>()
+        .map_err(|_| Error::InvalidInput(format!("invalid duration: {value}")))?;
+    if amount == 0 {
+        return Err(Error::InvalidInput("duration must be greater than zero".to_string()).into());
+    }
+    let multiplier = match unit {
+        "" | "s" | "sec" | "secs" => 1,
+        "m" | "min" | "mins" => 60,
+        "h" | "hr" | "hrs" => 60 * 60,
+        "d" | "day" | "days" => 24 * 60 * 60,
+        _ => return Err(Error::InvalidInput(format!("invalid duration unit: {unit}")).into()),
+    };
+    amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| Error::InvalidInput(format!("duration is too large: {value}")).into())
 }
 
 #[cfg(unix)]

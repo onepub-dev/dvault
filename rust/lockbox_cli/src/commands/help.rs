@@ -40,17 +40,40 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Create the lockbox for a vault key or trusted recipient."),
                 )
                 .arg(required("lockbox", "Lockbox path.")),
-            archive_command("open", "Unlock a lockbox for later commands.")
-                .arg(
-                    Arg::new("list")
-                        .long("list")
-                        .action(ArgAction::SetTrue)
-                        .conflicts_with("lockbox")
-                        .help("List lockboxes currently cached as open."),
+            archive_command("unlock", "Unlock a lockbox for later commands.")
+                .after_help(
+                    "Unlocking a lockbox prompts for its password, caches unlock access in the local agent, and lets later commands use the lockbox without prompting again.\n\nExamples:\n  lockbox unlock secrets.lbox\n  lockbox unlock --duration 30m secrets.lbox\n  LOCKBOX_PASSWORD=secret lockbox unlock secrets.lbox\n  printf '%s\\n' \"$LOCKBOX_PASSWORD\" | lockbox unlock --password-stdin secrets.lbox",
                 )
-                .arg(optional("lockbox", "Lockbox path.").required_unless_present("list")),
+                .arg(
+                    Arg::new("duration")
+                        .short('d')
+                        .long("duration")
+                        .value_name("DURATION")
+                        .help("Keep the lockbox unlocked for this session duration, such as 30s, 30m, 2h, or 1d."),
+                )
+                .arg(
+                    Arg::new("password-env")
+                        .long("password-env")
+                        .value_name("NAME")
+                        .conflicts_with_all(["password-file", "password-stdin"])
+                        .help("Read the lockbox password from this environment variable."),
+                )
+                .arg(
+                    Arg::new("password-file")
+                        .long("password-file")
+                        .value_name("FILE")
+                        .conflicts_with_all(["password-env", "password-stdin"])
+                        .help("Read the lockbox password from a file."),
+                )
+                .arg(
+                    Arg::new("password-stdin")
+                        .long("password-stdin")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["password-env", "password-file"])
+                        .help("Read the lockbox password from stdin."),
+                )
+                .arg(required("lockbox", "Lockbox path.")),
             archive_command("lock", "Forget cached unlock access.")
-                .visible_alias("close")
                 .arg(
                     Arg::new("all")
                         .long("all")
@@ -63,11 +86,41 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .required_unless_present("all")
                         .conflicts_with("all"),
                 ),
-            archive_command(
-                "recover",
-                "Recover readable entries from a damaged lockbox.",
-            )
-            .arg(required("lockbox", "Lockbox path.")),
+            archive_command("recover", "Recover readable entries from a damaged lockbox.")
+                .after_help(
+                    "Recovery writes a new lockbox containing readable entries. Use --report or --dry-run to inspect what can be recovered without writing an output file.\n\nExamples:\n  lockbox recover damaged.lbox --output recovered.lbox\n  lockbox recover --report --format table damaged.lbox",
+                )
+                .arg(required("lockbox", "Damaged lockbox path."))
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .short('o')
+                        .value_name("RECOVERED_LOCKBOX")
+                        .required_unless_present_any(["report", "dry-run"])
+                        .help("Write recovered entries to this new lockbox."),
+                )
+                .arg(
+                    Arg::new("overwrite")
+                        .long("overwrite")
+                        .requires("output")
+                        .action(ArgAction::SetTrue)
+                        .help("Replace the recovered lockbox output file if it already exists."),
+                )
+                .arg(
+                    Arg::new("report")
+                        .long("report")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["output", "overwrite"])
+                        .help("Print a recovery report without writing a recovered lockbox."),
+                )
+                .arg(
+                    Arg::new("dry-run")
+                        .long("dry-run")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["output", "overwrite", "report"])
+                        .help("Alias for --report."),
+                )
+                .arg(output_format_arg()),
             archive_command("doctor", "Show local vault and agent diagnostics."),
             file_command("add", "Add a file or directory to a lockbox.")
                 .arg(
@@ -120,6 +173,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .arg(required("lockbox-path", "Path inside the lockbox.")),
             file_command("list", "List stored entries.")
                 .visible_alias("ls")
+                .arg(output_format_arg())
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(optional("path", "Path inside the lockbox.")),
             file_command("rm", "Remove a stored entry.")
@@ -147,7 +201,7 @@ pub(crate) fn command(verbose: bool) -> Command {
             developer_command("keygen", "Generate raw recipient key files.")
                 .arg(required("private-key", "Private key output path."))
                 .arg(required("public-key", "Public key output path.")),
-            developer_command("open-key", "Unlock using a vault private key.")
+            developer_command("unlock-key", "Unlock using a vault private key.")
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(optional("vault-key", "Vault private key name.")),
         ])
@@ -167,7 +221,7 @@ Available commands:
 
 Archives
   create          Create a new encrypted lockbox.
-  open            Unlock a lockbox for later commands.
+  unlock          Unlock a lockbox for later commands.
   lock            Forget cached unlock access.
   recover         Recover readable entries from a damaged lockbox.
   doctor          Show local vault and agent diagnostics.
@@ -201,12 +255,13 @@ Advanced command options:
 
 Developer and compatibility commands:
   keygen          Generate raw recipient key files.
-  open-key        Unlock using a vault private key.
+  unlock-key      Unlock using a vault private key.
   visualize       Print internal lockbox structure.
 
 Environment variables:
   LOCKBOX_KEY=<raw-content-key> lockbox <command> ...
-  LOCKBOX_PASSWORD=<password> lockbox open <lockbox>
+    LOCKBOX_PASSWORD=<password> lockbox unlock <lockbox>
+  LOCKBOX_UNLOCK_DURATION=30m lockbox unlock <lockbox>
   LOCKBOX_VAULT_PASSWORD=<password> lockbox vault <command>
   LOCKBOX_PLATFORM_SECRET_STORE=auto|disabled lockbox vault <command>
   LOCKBOX_AGENT_DIR=<dir> lockbox <command> ...
@@ -339,6 +394,7 @@ fn env_command() -> Command {
         Command::new("list")
             .about("List environment values.")
             .visible_alias("ls")
+            .arg(output_format_arg())
             .arg(required("lockbox", "Lockbox path.")),
     )
     .subcommand(
@@ -380,8 +436,9 @@ fn recipient_command() -> Command {
         )
         .subcommand(
             Command::new("list")
-                .about("List recipients that can open a lockbox.")
+                .about("List recipients that can unlock a lockbox.")
                 .visible_alias("ls")
+                .arg(output_format_arg())
                 .arg(required("lockbox", "Lockbox path.")),
         )
         .subcommand(
@@ -399,7 +456,7 @@ fn vault_command(verbose: bool) -> Command {
         .arg_required_else_help(true)
         .subcommand(
             Command::new("init")
-                .about("Create or open the local vault.")
+                .about("Create or unlock the local vault.")
                 .after_help(
                     "The local vault stores private keys, trusted public keys, and key-directory backups. A new vault also gets a default recipient key. Keep the vault password backed up; Lockbox cannot recover private keys from the vault without it.\n\nIf the vault already exists, init reports the path and makes no changes. Use --verify to validate the password, or --overwrite only when replacing the vault and losing records stored only there.",
                 )
@@ -408,7 +465,7 @@ fn vault_command(verbose: bool) -> Command {
                         .long("verify")
                         .conflicts_with("overwrite")
                         .action(ArgAction::SetTrue)
-                        .help("Ask for the vault password and verify the existing vault opens."),
+                        .help("Ask for the vault password and verify the existing vault unlocks."),
                 )
                 .arg(
                     Arg::new("overwrite")
@@ -421,9 +478,48 @@ fn vault_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("list")
                 .about("List local vault records.")
-                .visible_alias("ls"),
+                .visible_alias("ls")
+                .arg(output_format_arg()),
         )
-        .subcommand(Command::new("open").about("List lockboxes currently cached as open."))
+        .subcommand(
+            Command::new("sessions")
+                .about("Manage unlocked lockbox sessions.")
+                .disable_help_subcommand(true)
+                .arg_required_else_help(false)
+                .after_help(
+                    "With no subcommand, sessions lists lockboxes currently cached as unlocked.",
+                )
+                .arg(output_format_arg())
+                .subcommand(
+                    Command::new("lock")
+                        .about("Lock one unlocked lockbox session.")
+                        .arg(required("lockbox", "Lockbox path.")),
+                )
+                .subcommand(
+                    Command::new("lock-all").about("Lock every unlocked lockbox session."),
+                )
+                .subcommand(
+                    Command::new("stop")
+                        .about("Lock every unlocked session and stop the local agent."),
+                )
+                .subcommand(
+                    Command::new("auto-unlock")
+                        .about("Manage vault password reuse through the operating system secret store.")
+                        .disable_help_subcommand(true)
+                        .arg_required_else_help(false)
+                        .after_help(
+                            "Auto-unlock stores the vault password in the operating system secret store, so future commands can unlock the local vault after the user session is unlocked.",
+                        )
+                        .subcommand(
+                            Command::new("status")
+                                .about("Show auto-unlock status.")
+                                .arg(output_format_arg()),
+                        )
+                        .subcommand(Command::new("enable").about("Enable auto-unlock when the platform supports it."))
+                        .subcommand(Command::new("disable").about("Disable auto-unlock."))
+                        .subcommand(Command::new("forget").about("Forget the stored auto-unlock secret.")),
+                ),
+        )
         .subcommand(
             Command::new("path")
                 .about("Print the local vault directory.")
@@ -435,7 +531,7 @@ fn vault_command(verbose: bool) -> Command {
                 .about("Generate a recipient key in the local vault.")
                 .hide(!verbose)
                 .after_help(
-                    "Vault recipient keys let you create and open lockboxes without sharing passwords. The private key stays in the local vault. Share the public key so other users can create lockboxes for you, or export it with `lockbox vault export-public`.\n\nIf no name is supplied, Lockbox uses the default key name: default.",
+                    "Vault recipient keys let you create and unlock lockboxes without sharing passwords. The private key stays in the local vault. Share the public key so other users can create lockboxes for you, or export it with `lockbox vault export-public`.\n\nIf no name is supplied, Lockbox uses the default key name: default.",
                 )
                 .arg(
                     Arg::new("overwrite")
@@ -485,6 +581,8 @@ fn vault_command(verbose: bool) -> Command {
             Command::new("trust")
                 .about("Store a trusted recipient public key.")
                 .disable_help_subcommand(true)
+                .subcommand_required(true)
+                .arg_required_else_help(true)
                 .subcommand(
                     Command::new("add")
                         .about("Store a trusted recipient public key.")
@@ -503,25 +601,6 @@ fn vault_command(verbose: bool) -> Command {
                         .about("Remove a trusted recipient public key.")
                         .visible_alias("rm")
                         .arg(required("name", "Trusted recipient name.")),
-                )
-                .arg(
-                    Arg::new("overwrite")
-                        .long("overwrite")
-                        .hide(!verbose)
-                        .action(ArgAction::SetTrue)
-                        .help("Replace an existing trusted recipient."),
-                )
-                .arg(optional("name", "Trusted recipient name."))
-                .arg(optional("public-key", "Public key path.")),
-        )
-        .subcommand(
-            Command::new("platform-store")
-                .about("Manage platform secret-store integration.")
-                .arg(
-                    Arg::new("command")
-                        .value_name("status|enable|disable|forget")
-                        .default_value("status")
-                        .help("Platform secret-store command."),
                 ),
         )
         .subcommand(
@@ -616,6 +695,14 @@ fn format_arg(verbose: bool) -> Arg {
         .hide(!verbose)
         .value_name("lockbox-pem|jwk|jwks|raw-hex")
         .help("Select the key file format.")
+}
+
+fn output_format_arg() -> Arg {
+    Arg::new("format")
+        .long("format")
+        .value_name("table|tsv|json")
+        .default_value("table")
+        .help("Output format.")
 }
 
 fn required(name: &'static str, help: &'static str) -> Arg {

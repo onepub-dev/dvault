@@ -18,12 +18,10 @@ use std::fs;
 use std::path::Path;
 
 impl Lockbox {
-    #[cfg(test)]
     pub fn try_to_bytes(&self) -> Result<Vec<u8>> {
         self.bytes()
     }
 
-    #[cfg(test)]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.try_to_bytes()
             .expect("failed to materialize lockbox bytes")

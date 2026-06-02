@@ -1,4 +1,5 @@
 use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
+use super::output::{output_format_from_args, print_records};
 use lockbox_core::{
     Error, ExtractPolicy, ListOptions, Lockbox, LockboxPath, WorkerPolicy, WorkloadProfile,
 };
@@ -72,20 +73,22 @@ pub(crate) fn cat(args: &[String], access: &Access) -> CliResult<()> {
 }
 
 pub(crate) fn list(args: &[String], access: &Access) -> CliResult<()> {
-    let lockbox_path = require_arg(args, 0, "lockbox")?;
+    let (args, format) = output_format_from_args(args)?;
+    let lockbox_path = require_arg(&args, 0, "lockbox")?;
     let path = LockboxPath::new(args.get(1).map(String::as_str).unwrap_or("/"))?;
     let lb = open_existing(lockbox_path, access)?;
     let mut options = ListOptions::new(&path);
     options.recursive = true;
-    let mut printed = false;
+    let mut rows = Vec::new();
     for entry in lb.list(options)? {
         let entry = entry?;
-        println!("{}\t{}\t{}", kind_name(&entry.kind), entry.len, entry.path);
-        printed = true;
+        rows.push(vec![
+            kind_name(&entry.kind).to_string(),
+            entry.len.to_string(),
+            entry.path.to_string(),
+        ]);
     }
-    if !printed {
-        println!("empty");
-    }
+    print_records(&["kind", "len", "path"], rows, format)?;
     Ok(())
 }
 

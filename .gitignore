@@ -20,3 +20,5 @@ rust/perf.data*
 rust/fuzz/target
 .bench-baseline
 .bench-target
+rust/lockbox_cli/testbox
+rust/lockbox_cli/testbox.lbox

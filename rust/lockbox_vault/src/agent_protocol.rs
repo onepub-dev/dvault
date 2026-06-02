@@ -14,9 +14,10 @@ pub struct CachedLockbox {
 
 pub(crate) enum AgentRequest {
     Get(String),
-    Put(String, SecretVec, Option<String>),
+    Put(String, SecretVec, Option<String>, Option<u64>),
     Forget(String),
     ForgetAll,
+    Stop,
     List,
 }
 
@@ -36,15 +37,18 @@ pub(crate) fn encode_put(
     lockbox_id: LockboxId,
     key: &SecretVec,
     path: Option<&str>,
+    ttl_seconds: Option<u64>,
 ) -> io::Result<SecretVec> {
     let path = path.unwrap_or("");
+    let ttl_seconds = ttl_seconds.unwrap_or(DEFAULT_TTL_SECONDS);
     let mut message = SecretVec::new();
     message
         .try_extend_from_slice(
             format!(
-                "{PROTOCOL_VERSION} PUT {lockbox_id} {} {}\n",
+                "{PROTOCOL_VERSION} PUT {lockbox_id} {} {} {}\n",
                 key.len(),
-                path.len()
+                path.len(),
+                ttl_seconds
             )
             .as_bytes(),
         )
@@ -64,6 +68,10 @@ pub(crate) fn encode_forget(lockbox_id: LockboxId) -> io::Result<SecretVec> {
 
 pub(crate) fn encode_forget_all() -> io::Result<SecretVec> {
     secure_message(b"LBX1 FORGET_ALL\n")
+}
+
+pub(crate) fn encode_stop() -> io::Result<SecretVec> {
+    secure_message(b"LBX1 STOP\n")
 }
 
 pub(crate) fn encode_list() -> io::Result<SecretVec> {
@@ -110,7 +118,14 @@ pub(crate) fn parse_request(request: &SecretVec) -> io::Result<AgentRequest> {
         .map_err(io::Error::other)??;
     match parsed {
         ParsedHeader::Get(lockbox_id) => Ok(AgentRequest::Get(lockbox_id)),
-        ParsedHeader::Put(lockbox_id, body_offset, body_len, path_offset, path_len) => {
+        ParsedHeader::Put(
+            lockbox_id,
+            body_offset,
+            body_len,
+            path_offset,
+            path_len,
+            ttl_seconds,
+        ) => {
             let key = request
                 .try_clone_range(body_offset, body_len)
                 .map_err(io::Error::other)?;
@@ -137,10 +152,11 @@ pub(crate) fn parse_request(request: &SecretVec) -> io::Result<AgentRequest> {
                     .map_err(io::Error::other)??;
                 path
             };
-            Ok(AgentRequest::Put(lockbox_id, key, path))
+            Ok(AgentRequest::Put(lockbox_id, key, path, ttl_seconds))
         }
         ParsedHeader::Forget(lockbox_id) => Ok(AgentRequest::Forget(lockbox_id)),
         ParsedHeader::ForgetAll => Ok(AgentRequest::ForgetAll),
+        ParsedHeader::Stop => Ok(AgentRequest::Stop),
         ParsedHeader::List => Ok(AgentRequest::List),
     }
 }
@@ -179,9 +195,10 @@ fn secure_message(bytes: &[u8]) -> io::Result<SecretVec> {
 
 enum ParsedHeader {
     Get(String),
-    Put(String, usize, usize, usize, usize),
+    Put(String, usize, usize, usize, usize, Option<u64>),
     Forget(String),
     ForgetAll,
+    Stop,
     List,
 }
 
@@ -217,6 +234,7 @@ fn parse_header(bytes: &[u8]) -> io::Result<ParsedHeader> {
                 key_len,
                 body_end,
                 0,
+                None,
             ))
         }
         [version, "PUT", lockbox_id, key_len, path_len] if *version == PROTOCOL_VERSION => {
@@ -242,12 +260,48 @@ fn parse_header(bytes: &[u8]) -> io::Result<ParsedHeader> {
                 key_len,
                 body_end,
                 path_len,
+                None,
+            ))
+        }
+        [version, "PUT", lockbox_id, key_len, path_len, ttl_seconds]
+            if *version == PROTOCOL_VERSION =>
+        {
+            let key_len = key_len
+                .parse::<usize>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid key length"))?;
+            let path_len = path_len
+                .parse::<usize>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid path length"))?;
+            let ttl_seconds = ttl_seconds
+                .parse::<u64>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid ttl"))?;
+            if ttl_seconds == 0 {
+                return invalid_data("ttl must be positive");
+            }
+            let body_offset = newline + 1;
+            let body_end = body_offset
+                .checked_add(key_len)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "key length overflow"))?;
+            let path_end = body_end.checked_add(path_len).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "path length overflow")
+            })?;
+            if path_end != bytes.len() {
+                return invalid_data("request key/path length does not match body");
+            }
+            Ok(ParsedHeader::Put(
+                (*lockbox_id).to_string(),
+                body_offset,
+                key_len,
+                body_end,
+                path_len,
+                Some(ttl_seconds),
             ))
         }
         [version, "FORGET", lockbox_id] if *version == PROTOCOL_VERSION => {
             Ok(ParsedHeader::Forget((*lockbox_id).to_string()))
         }
         [version, "FORGET_ALL"] if *version == PROTOCOL_VERSION => Ok(ParsedHeader::ForgetAll),
+        [version, "STOP"] if *version == PROTOCOL_VERSION => Ok(ParsedHeader::Stop),
         [version, "LIST"] if *version == PROTOCOL_VERSION => Ok(ParsedHeader::List),
         _ => invalid_data("invalid agent request"),
     }
@@ -394,17 +448,28 @@ mod tests {
     fn protocol_parses_put_and_forget_all() {
         let request = SecretVec::try_from_slice(b"LBX1 PUT vault 3 11\nabc/tmp/a.lbox").unwrap();
         match parse_request(&request).unwrap() {
-            AgentRequest::Put(lockbox_id, key, path) => {
+            AgentRequest::Put(lockbox_id, key, path, ttl_seconds) => {
                 assert_eq!(lockbox_id, "vault");
                 key.with_bytes(|key| assert_eq!(key, b"abc")).unwrap();
                 assert_eq!(path.as_deref(), Some("/tmp/a.lbox"));
+                assert_eq!(ttl_seconds, None);
             }
+            _ => panic!("expected PUT"),
+        }
+        let request = SecretVec::try_from_slice(b"LBX1 PUT vault 3 11 30\nabc/tmp/a.lbox").unwrap();
+        match parse_request(&request).unwrap() {
+            AgentRequest::Put(_, _, _, ttl_seconds) => assert_eq!(ttl_seconds, Some(30)),
             _ => panic!("expected PUT"),
         }
         let request = SecretVec::try_from_slice(b"LBX1 FORGET_ALL\n").unwrap();
         assert!(matches!(
             parse_request(&request).unwrap(),
             AgentRequest::ForgetAll
+        ));
+        let request = SecretVec::try_from_slice(b"LBX1 STOP\n").unwrap();
+        assert!(matches!(
+            parse_request(&request).unwrap(),
+            AgentRequest::Stop
         ));
         let request = SecretVec::try_from_slice(b"LBX1 LIST\n").unwrap();
         assert!(matches!(

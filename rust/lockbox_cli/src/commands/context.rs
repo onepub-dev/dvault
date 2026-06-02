@@ -43,13 +43,13 @@ pub(crate) fn open_existing(path: &str, access: &Access) -> CliResult<Lockbox> {
         Access::ContentKey(key) => Ok(Vault::new(NoopStore)
             .unlock_lockbox(path, LockboxUnlock::ContentKey(key.try_clone()?))?),
         Access::PromptPassword => Err(cli_error(
-            "password prompting is only used when creating a new lockbox; pass --key or open through the local vault",
+            "password prompting is only used when creating a new lockbox; pass --key or unlock through the local vault",
         )),
         Access::CacheOnly => match local_vault().open_lockbox(path) {
             Ok(lockbox) => Ok(lockbox),
             Err(Error::VaultUnavailable(message)) if message.contains("no cached content key") => {
                 Err(cli_error(format!(
-                    "lockbox is closed: {path}. Run `lockbox open {path}` first."
+                    "lockbox is locked: {path}. Run `lockbox unlock {path}` first."
                 )))
             }
             Err(err) => Err(err.into()),

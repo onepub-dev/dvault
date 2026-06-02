@@ -7,6 +7,7 @@ use lockbox_core::{EnvName, EnvSensitivity, EnvValueRef, Error, SecretString};
 
 use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
 use super::help::usage;
+use super::output::{output_format_from_args, print_records};
 use crate::secret_prompt::prompt_secret;
 
 pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
@@ -16,14 +17,23 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
         "set" => set_env(lockbox_path, &args[2..], access)?,
         "get" => get_env(lockbox_path, &args[2..], access)?,
         "list" => {
-            let lb = open_existing(lockbox_path, access)?;
-            for (name, sensitivity) in lb.list_env()? {
-                if sensitivity == EnvSensitivity::Secret {
-                    println!("{name}\tsecret");
-                } else {
-                    println!("{name}");
-                }
+            let (args, format) = output_format_from_args(&args[2..])?;
+            if !args.is_empty() {
+                return Err(Error::InvalidInput(format!(
+                    "unexpected env list argument: {}",
+                    args[0]
+                ))
+                .into());
             }
+            let lb = open_existing(lockbox_path, access)?;
+            let mut rows = Vec::new();
+            for (name, sensitivity) in lb.list_env()? {
+                rows.push(vec![
+                    name.to_string(),
+                    sensitivity_name(sensitivity).to_string(),
+                ]);
+            }
+            print_records(&["name", "sensitivity"], rows, format)?;
         }
         "export" => {
             let format = EnvExportFormat::parse(&args[2..])?;
@@ -451,6 +461,13 @@ fn set_source(target: &mut Option<ValueSource>, source: ValueSource) -> CliResul
     }
     *target = Some(source);
     Ok(())
+}
+
+fn sensitivity_name(sensitivity: EnvSensitivity) -> &'static str {
+    match sensitivity {
+        EnvSensitivity::Normal => "normal",
+        EnvSensitivity::Secret => "secret",
+    }
 }
 
 fn posix_quote(value: &str) -> String {

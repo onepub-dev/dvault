@@ -1,7 +1,8 @@
 use super::{
     encode_forget, encode_forget_all, encode_get, encode_key_response, encode_list,
-    encode_list_response, encode_put, encode_response_line, max_message_bytes, parse_request,
-    parse_response, AgentRequest, AgentResponse, CachedLockbox, SecretVec, DEFAULT_TTL_SECONDS,
+    encode_list_response, encode_put, encode_response_line, encode_stop, max_message_bytes,
+    parse_request, parse_response, AgentRequest, AgentResponse, CachedLockbox, SecretVec,
+    DEFAULT_TTL_SECONDS,
 };
 use lockbox_core::LockboxId;
 use std::collections::BTreeMap;
@@ -20,6 +21,7 @@ const IDLE_EXIT_SECONDS: u64 = 10 * 60;
 struct CacheEntry {
     key: SecretVec,
     path: Option<String>,
+    ttl_seconds: u64,
     expires_at: Instant,
 }
 
@@ -39,7 +41,10 @@ pub(crate) fn serve_agent() -> io::Result<()> {
         match listener.accept() {
             Ok((stream, _)) => {
                 last_activity = Instant::now();
-                let _ = handle_client(stream, &mut cache);
+                if handle_client(stream, &mut cache).unwrap_or(false) {
+                    let _ = fs::remove_file(&socket);
+                    return Ok(());
+                }
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                 if cache.is_empty()
@@ -70,8 +75,13 @@ pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
     }
 }
 
-pub(crate) fn put(lockbox_id: LockboxId, key: &SecretVec, path: Option<&str>) -> io::Result<()> {
-    expect_ok(request(&encode_put(lockbox_id, key, path)?)?)
+pub(crate) fn put(
+    lockbox_id: LockboxId,
+    key: &SecretVec,
+    path: Option<&str>,
+    ttl_seconds: Option<u64>,
+) -> io::Result<()> {
+    expect_ok(request(&encode_put(lockbox_id, key, path, ttl_seconds)?)?)
 }
 
 pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
@@ -86,6 +96,13 @@ pub(crate) fn forget_all() -> io::Result<()> {
         return Ok(());
     }
     expect_ok(request(&encode_forget_all()?)?)
+}
+
+pub(crate) fn stop() -> io::Result<()> {
+    if UnixStream::connect(socket_path()).is_err() {
+        return Ok(());
+    }
+    expect_ok(request(&encode_stop()?)?)
 }
 
 pub(crate) fn list() -> io::Result<Vec<CachedLockbox>> {
@@ -141,29 +158,32 @@ fn ensure_agent() -> io::Result<()> {
 fn handle_client(
     mut stream: UnixStream,
     cache: &mut BTreeMap<String, CacheEntry>,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let request = read_secure(stream.try_clone()?, max_message_bytes())?;
     if request.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
+    let mut stop = false;
     let response = match parse_request(&request) {
         Ok(AgentRequest::Get(lockbox_id)) => {
             let now = Instant::now();
             match cache.get_mut(&lockbox_id) {
                 Some(entry) if entry.expires_at > now => {
-                    entry.expires_at = now + Duration::from_secs(DEFAULT_TTL_SECONDS);
+                    entry.expires_at = now + Duration::from_secs(entry.ttl_seconds);
                     encode_key_response(&entry.key)?
                 }
                 _ => encode_response_line(b"MISS\n")?,
             }
         }
-        Ok(AgentRequest::Put(lockbox_id, key, path)) => {
+        Ok(AgentRequest::Put(lockbox_id, key, path, ttl_seconds)) => {
+            let ttl_seconds = ttl_seconds.unwrap_or(DEFAULT_TTL_SECONDS);
             cache.insert(
                 lockbox_id.clone(),
                 CacheEntry {
                     key,
                     path,
-                    expires_at: Instant::now() + Duration::from_secs(DEFAULT_TTL_SECONDS),
+                    ttl_seconds,
+                    expires_at: Instant::now() + Duration::from_secs(ttl_seconds),
                 },
             );
             encode_response_line(b"OK\n")?
@@ -174,6 +194,11 @@ fn handle_client(
         }
         Ok(AgentRequest::ForgetAll) => {
             cache.clear();
+            encode_response_line(b"OK\n")?
+        }
+        Ok(AgentRequest::Stop) => {
+            cache.clear();
+            stop = true;
             encode_response_line(b"OK\n")?
         }
         Ok(AgentRequest::List) => {
@@ -187,7 +212,7 @@ fn handle_client(
     response
         .with_bytes(|response| stream.write_all(response))
         .map_err(io::Error::other)??;
-    Ok(())
+    Ok(stop)
 }
 
 fn prune_expired(cache: &mut BTreeMap<String, CacheEntry>) {

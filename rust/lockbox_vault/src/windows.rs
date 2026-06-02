@@ -1,7 +1,8 @@
 use super::{
     encode_forget, encode_forget_all, encode_get, encode_key_response, encode_list,
-    encode_list_response, encode_put, encode_response_line, max_message_bytes, parse_request,
-    parse_response, AgentRequest, AgentResponse, CachedLockbox, SecretVec, DEFAULT_TTL_SECONDS,
+    encode_list_response, encode_put, encode_response_line, encode_stop, max_message_bytes,
+    parse_request, parse_response, AgentRequest, AgentResponse, CachedLockbox, SecretVec,
+    DEFAULT_TTL_SECONDS,
 };
 use lockbox_core::LockboxId;
 use std::collections::BTreeMap;
@@ -41,6 +42,7 @@ const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
 struct CacheEntry {
     key: SecretVec,
     path: Option<String>,
+    ttl_seconds: u64,
     expires_at: Instant,
 }
 
@@ -62,8 +64,11 @@ pub(crate) fn serve_agent() -> io::Result<()> {
         }
 
         last_activity = Instant::now();
-        let _ = handle_client(pipe.as_raw(), &current_user_sid, &mut cache);
+        let stop = handle_client(pipe.as_raw(), &current_user_sid, &mut cache).unwrap_or(false);
         disconnect_pipe(pipe.as_raw());
+        if stop {
+            return Ok(());
+        }
     }
 }
 
@@ -84,8 +89,13 @@ pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
     }
 }
 
-pub(crate) fn put(lockbox_id: LockboxId, key: &SecretVec, path: Option<&str>) -> io::Result<()> {
-    expect_ok(request(&encode_put(lockbox_id, key, path)?)?)
+pub(crate) fn put(
+    lockbox_id: LockboxId,
+    key: &SecretVec,
+    path: Option<&str>,
+    ttl_seconds: Option<u64>,
+) -> io::Result<()> {
+    expect_ok(request(&encode_put(lockbox_id, key, path, ttl_seconds)?)?)
 }
 
 pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
@@ -100,6 +110,13 @@ pub(crate) fn forget_all() -> io::Result<()> {
         return Ok(());
     }
     expect_ok(request(&encode_forget_all()?)?)
+}
+
+pub(crate) fn stop() -> io::Result<()> {
+    if open_pipe(&wide_pipe_name()).is_err() {
+        return Ok(());
+    }
+    expect_ok(request(&encode_stop()?)?)
 }
 
 pub(crate) fn list() -> io::Result<Vec<CachedLockbox>> {
@@ -322,32 +339,35 @@ fn handle_client(
     pipe: HANDLE,
     current_user_sid: &[u8],
     cache: &mut BTreeMap<String, CacheEntry>,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let request = read_frame(pipe, max_message_bytes())?;
     if request.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     if !client_matches_current_user(pipe, current_user_sid)? {
-        return Ok(());
+        return Ok(false);
     }
+    let mut stop = false;
     let response = match parse_request(&request) {
         Ok(AgentRequest::Get(lockbox_id)) => {
             let now = Instant::now();
             match cache.get_mut(&lockbox_id) {
                 Some(entry) if entry.expires_at > now => {
-                    entry.expires_at = now + Duration::from_secs(DEFAULT_TTL_SECONDS);
+                    entry.expires_at = now + Duration::from_secs(entry.ttl_seconds);
                     encode_key_response(&entry.key)?
                 }
                 _ => encode_response_line(b"MISS\n")?,
             }
         }
-        Ok(AgentRequest::Put(lockbox_id, key, path)) => {
+        Ok(AgentRequest::Put(lockbox_id, key, path, ttl_seconds)) => {
+            let ttl_seconds = ttl_seconds.unwrap_or(DEFAULT_TTL_SECONDS);
             cache.insert(
                 lockbox_id.clone(),
                 CacheEntry {
                     key,
                     path,
-                    expires_at: Instant::now() + Duration::from_secs(DEFAULT_TTL_SECONDS),
+                    ttl_seconds,
+                    expires_at: Instant::now() + Duration::from_secs(ttl_seconds),
                 },
             );
             encode_response_line(b"OK\n")?
@@ -360,6 +380,11 @@ fn handle_client(
             cache.clear();
             encode_response_line(b"OK\n")?
         }
+        Ok(AgentRequest::Stop) => {
+            cache.clear();
+            stop = true;
+            encode_response_line(b"OK\n")?
+        }
         Ok(AgentRequest::List) => {
             encode_list_response(cache.iter().map(|(id, entry)| CachedLockbox {
                 id: id.clone(),
@@ -370,7 +395,8 @@ fn handle_client(
     };
     response
         .with_bytes(|response| write_all(pipe, response))
-        .map_err(io::Error::other)?
+        .map_err(io::Error::other)??;
+    Ok(stop)
 }
 
 fn client_matches_current_user(pipe: HANDLE, current_user_sid: &[u8]) -> io::Result<bool> {

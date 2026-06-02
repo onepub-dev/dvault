@@ -9,7 +9,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
-fn open_populates_cache_and_lock_clears_it() {
+fn unlock_populates_cache_and_lock_clears_it() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir();
     let _ = fs::remove_dir_all(&dir);
@@ -29,47 +29,53 @@ fn open_populates_cache_and_lock_clears_it() {
         &vault_dir,
         &["create", vault.to_str().unwrap()],
     );
-    let open = run_output(
+    let unlock = run_output(
         bin,
         &agent_dir,
         &vault_dir,
-        &["open", vault.to_str().unwrap()],
+        &["unlock", vault.to_str().unwrap()],
     );
-    if String::from_utf8_lossy(&open.stderr).contains("lockbox agent did not start") {
+    if String::from_utf8_lossy(&unlock.stderr).contains("lockbox agent did not start") {
         eprintln!("skipping agent cache assertions: lockbox agent did not start");
         return;
     }
     assert!(
-        open.status.success(),
-        "command failed: {bin} open {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        unlock.status.success(),
+        "command failed: {bin} unlock {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         vault.display(),
-        open.status,
-        String::from_utf8_lossy(&open.stdout),
-        String::from_utf8_lossy(&open.stderr)
+        unlock.status,
+        String::from_utf8_lossy(&unlock.stdout),
+        String::from_utf8_lossy(&unlock.stderr)
     );
-    let output = run_output(bin, &agent_dir, &vault_dir, &["open", "--list"]);
+    let output = run_output(
+        bin,
+        &agent_dir,
+        &vault_dir,
+        &["vault", "sessions", "--format", "tsv"],
+    );
     assert!(
         output.status.success(),
-        "command failed: {bin} open --list\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        "command failed: {bin} vault sessions --format tsv\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let open_list = String::from_utf8_lossy(&output.stdout);
-    assert!(open_list.contains("open\t"));
-    assert!(open_list.contains(vault.to_str().unwrap()));
+    let unlocked_list = String::from_utf8_lossy(&output.stdout);
+    assert!(unlocked_list.contains("unlocked\t"));
+    assert!(unlocked_list.contains(vault.to_str().unwrap()));
 
-    let output = run_output(bin, &agent_dir, &vault_dir, &["vault", "open"]);
+    let output = run_output(bin, &agent_dir, &vault_dir, &["vault", "sessions"]);
     assert!(
         output.status.success(),
-        "command failed: {bin} vault open\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        "command failed: {bin} vault sessions\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let vault_open = String::from_utf8_lossy(&output.stdout);
-    assert!(vault_open.contains("open\t"));
-    assert!(vault_open.contains(vault.to_str().unwrap()));
+    let vault_unlocked = String::from_utf8_lossy(&output.stdout);
+    assert!(vault_unlocked.contains("state"));
+    assert!(vault_unlocked.contains("unlocked"));
+    assert!(vault_unlocked.contains(vault.to_str().unwrap()));
 
     run(
         bin,
@@ -112,12 +118,12 @@ fn open_populates_cache_and_lock_clears_it() {
         &["list", vault.to_str().unwrap(), "/docs"],
     );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("lockbox is closed"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("lockbox is locked"));
 
-    let output = run_output(bin, &agent_dir, &vault_dir, &["open", "--list"]);
+    let output = run_output(bin, &agent_dir, &vault_dir, &["vault", "sessions"]);
     assert!(
         output.status.success(),
-        "command failed: {bin} open --list\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        "command failed: {bin} vault sessions\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

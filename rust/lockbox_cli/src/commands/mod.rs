@@ -4,6 +4,7 @@ mod env;
 mod files;
 mod help;
 mod keys;
+mod output;
 mod recovery;
 mod vault;
 mod visualize;
@@ -46,10 +47,10 @@ pub(crate) fn run() -> CliResult<()> {
     match command {
         "create" => keys::create(&create_args(command_matches), &access)?,
         "doctor" => doctor::run()?,
-        "open" => keys::open(&open_args(command_matches))?,
+        "unlock" => keys::unlock(&unlock_args(command_matches))?,
         "lock" => keys::lock(&lock_args(command_matches))?,
         "keygen" => keys::keygen(&two_args(command_matches, "private-key", "public-key"))?,
-        "open-key" => keys::open_key(&open_key_args(command_matches))?,
+        "unlock-key" => keys::unlock_key(&unlock_key_args(command_matches))?,
         "recipient" => keys::recipient(&recipient_args(command_matches)?, &access)?,
         "vault" => vault::run(&vault_args(command_matches)?)?,
         "add" => files::add(
@@ -69,7 +70,7 @@ pub(crate) fn run() -> CliResult<()> {
             &access,
         )?,
         "env" => env::run(&env_args(command_matches)?, &access)?,
-        "recover" => recovery::run(&one_arg(command_matches, "lockbox"), &access)?,
+        "recover" => recovery::run(&recover_args(command_matches)?, &access)?,
         "visualize" => visualize::run(&one_arg(command_matches, "lockbox"), &access)?,
         _ => return Err(Error::InvalidInput(format!("unknown command: {command}")).into()),
     }
@@ -141,12 +142,24 @@ fn lock_args(matches: &ArgMatches) -> Vec<String> {
     }
 }
 
-fn open_args(matches: &ArgMatches) -> Vec<String> {
-    if matches.get_flag("list") {
-        vec!["--list".to_string()]
-    } else {
-        one_arg(matches, "lockbox")
+fn unlock_args(matches: &ArgMatches) -> Vec<String> {
+    let mut args = one_arg(matches, "lockbox");
+    push_option(&mut args, matches, "duration", "--duration");
+    push_option(&mut args, matches, "password-env", "--password-env");
+    push_option(&mut args, matches, "password-file", "--password-file");
+    push_flag(&mut args, matches, "password-stdin", "--password-stdin");
+    args
+}
+
+fn recover_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    let mut args = one_arg(matches, "lockbox");
+    push_option(&mut args, matches, "output", "--output");
+    push_flag(&mut args, matches, "overwrite", "--overwrite");
+    if matches.get_flag("report") || matches.get_flag("dry-run") {
+        args.push("--report".to_string());
     }
+    push_option(&mut args, matches, "format", "--format");
+    Ok(args)
 }
 
 fn add_args(matches: &ArgMatches) -> Vec<String> {
@@ -157,7 +170,7 @@ fn add_args(matches: &ArgMatches) -> Vec<String> {
     args
 }
 
-fn open_key_args(matches: &ArgMatches) -> Vec<String> {
+fn unlock_key_args(matches: &ArgMatches) -> Vec<String> {
     let mut args = one_arg(matches, "lockbox");
     if let Some(key) = matches.get_one::<String>("vault-key") {
         args.push(key.clone());
@@ -188,6 +201,7 @@ fn extract_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
 
 fn list_args(matches: &ArgMatches) -> Vec<String> {
     let mut args = one_arg(matches, "lockbox");
+    push_option(&mut args, matches, "format", "--format");
     if let Some(path) = matches.get_one::<String>("path") {
         args.push(path.clone());
     }
@@ -224,7 +238,7 @@ fn env_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "overwrite", "--overwrite");
             args.push(value(sub, "name"));
         }
-        "list" | "ls" => {}
+        "list" | "ls" => push_option(&mut args, sub, "format", "--format"),
         "export" => push_option(&mut args, sub, "format", "--format"),
         "rm" | "remove" => args.push(value(sub, "name")),
         _ => return Err(Error::InvalidInput(format!("unknown env command: {command}")).into()),
@@ -242,8 +256,33 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "verify", "--verify");
             push_flag(&mut args, sub, "overwrite", "--overwrite");
         }
-        "list" | "ls" | "path" => {}
-        "open" => {}
+        "list" | "ls" => push_option(&mut args, sub, "format", "--format"),
+        "path" => {}
+        "sessions" => {
+            if let Some((session_command, session_sub)) = sub.subcommand() {
+                args.push(session_command.to_string());
+                match session_command {
+                    "lock" => args.push(value(session_sub, "lockbox")),
+                    "lock-all" | "stop" => {}
+                    "auto-unlock" => {
+                        let (auto_command, auto_sub) =
+                            session_sub.subcommand().unwrap_or(("status", session_sub));
+                        args.push(auto_command.to_string());
+                        if auto_command == "status" {
+                            push_option(&mut args, auto_sub, "format", "--format");
+                        }
+                    }
+                    _ => {
+                        return Err(Error::InvalidInput(format!(
+                            "unknown vault sessions command: {session_command}"
+                        ))
+                        .into())
+                    }
+                }
+            } else {
+                push_option(&mut args, sub, "format", "--format");
+            }
+        }
         "key" => {
             let (key_command, key_sub) = sub
                 .subcommand()
@@ -312,22 +351,13 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     }
                 }
             } else {
-                push_flag(&mut args, sub, "overwrite", "--overwrite");
-                args.push(optional_value(sub, "name").ok_or_else(|| {
-                    Error::InvalidInput(
-                        "missing trusted recipient name; use `lockbox vault trust add <name> <public-key>`"
-                            .to_string(),
-                    )
-                })?);
-                args.push(optional_value(sub, "public-key").ok_or_else(|| {
-                    Error::InvalidInput(
-                        "missing public key path; use `lockbox vault trust add <name> <public-key>`"
-                            .to_string(),
-                    )
-                })?);
+                return Err(Error::InvalidInput(
+                    "missing vault trust command; use `lockbox vault trust add <name> <public-key>` or `lockbox vault trust remove <name>`"
+                        .to_string(),
+                )
+                .into());
             }
         }
-        "platform-store" => args.push(value(sub, "command")),
         "remove-key" => {
             push_flag(&mut args, sub, "force", "--force");
             push_optional(&mut args, sub, "name");
@@ -345,7 +375,7 @@ fn recipient_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let mut args = vec![command.to_string(), value(sub, "lockbox")];
     match command {
         "add" => args.push(value(sub, "recipient")),
-        "list" | "ls" => {}
+        "list" | "ls" => push_option(&mut args, sub, "format", "--format"),
         "remove" | "rm" => args.push(value(sub, "slot-id")),
         _ => {
             return Err(Error::InvalidInput(format!("unknown recipient command: {command}")).into())
@@ -375,10 +405,6 @@ fn value(matches: &ArgMatches, name: &str) -> String {
         .get_one::<String>(name)
         .unwrap_or_else(|| panic!("clap did not provide required argument {name}"))
         .clone()
-}
-
-fn optional_value(matches: &ArgMatches, name: &str) -> Option<String> {
-    matches.get_one::<String>(name).cloned()
 }
 
 fn push_optional(args: &mut Vec<String>, matches: &ArgMatches, name: &str) {

@@ -2,12 +2,14 @@ use super::context::{
     default_vault, read_new_vault_password, read_vault_password, remember_default_vault_password,
     require_arg, CliResult,
 };
+use super::output::{output_format_from_args, print_records};
 use lockbox_core::{Error, RecipientKeyPair};
 use lockbox_vault::{
     default_vault_dir, default_vault_path, disable_platform_secret_store,
     enable_platform_secret_store, export_private_key, export_public_key,
     forget_platform_vault_password, import_private_key_file, import_public_key,
-    list as list_open_lockboxes, platform_secret_store_status, KeyFormat, VaultDirectory,
+    list as list_open_lockboxes, local_vault, platform_secret_store_status, stop as stop_agent,
+    KeyFormat, VaultDirectory,
 };
 use std::fs;
 use std::io::{self, Write};
@@ -23,9 +25,8 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "trust" => trust_command(&args[1..]),
         "remove-key" => remove_key(&args[1..]),
         "remove-trusted" => remove_trusted(&args[1..]),
-        "platform-store" => platform_store(&args[1..]),
-        "list" | "ls" => list(),
-        "open" => list_open(),
+        "list" | "ls" => list(&args[1..]),
+        "sessions" => sessions(&args[1..]),
         "export-key" => export_key(&args[1..]),
         "export-public" => export_public(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
@@ -48,38 +49,53 @@ fn trust_command(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
         Some("add") => trust(&args[1..]),
         Some("remove" | "rm") => remove_trusted(&args[1..]),
-        _ => trust(args),
+        _ => Err(Error::InvalidInput(
+            "missing vault trust command; use `lockbox vault trust add <name> <public-key>` or `lockbox vault trust remove <name>`"
+                .to_string(),
+        )
+        .into()),
     }
 }
 
-fn platform_store(args: &[String]) -> CliResult<()> {
+fn auto_unlock(args: &[String]) -> CliResult<()> {
     let command = args.first().map(String::as_str).unwrap_or("status");
     match command {
-        "status" => platform_store_status(),
+        "status" => auto_unlock_status(&args[1..]),
         "enable" => {
             enable_platform_secret_store()?;
-            platform_store_status()
+            auto_unlock_status(&[])
         }
         "disable" => {
             disable_platform_secret_store()?;
-            platform_store_status()
+            auto_unlock_status(&[])
         }
         "forget" => {
             forget_platform_vault_password()?;
             Ok(())
         }
-        _ => Err(
-            Error::InvalidInput(format!("unknown vault platform-store command: {command}")).into(),
-        ),
+        _ => Err(Error::InvalidInput(format!(
+            "unknown vault sessions auto-unlock command: {command}"
+        ))
+        .into()),
     }
 }
 
-fn platform_store_status() -> CliResult<()> {
+fn auto_unlock_status(args: &[String]) -> CliResult<()> {
+    let (_, format) = output_format_from_args(args)?;
     let status = platform_secret_store_status()?;
-    println!("backend\t{}", status.backend);
-    println!("supported\t{}", yes_no(status.supported));
-    println!("disabled\t{}", yes_no(status.disabled));
-    println!("item\t{}", status.item);
+    print_records(
+        &["setting", "value"],
+        vec![
+            vec!["backend".to_string(), status.backend.to_string()],
+            vec![
+                "supported".to_string(),
+                yes_no(status.supported).to_string(),
+            ],
+            vec!["disabled".to_string(), yes_no(status.disabled).to_string()],
+            vec!["item".to_string(), status.item],
+        ],
+        format,
+    )?;
     Ok(())
 }
 
@@ -128,7 +144,7 @@ fn init(args: &[String]) -> CliResult<()> {
             let password = read_vault_password("Vault password: ")?;
             let vault = VaultDirectory::open_default(&password)?;
             remember_default_vault_password(&password)?;
-            println!("Vault opened successfully.");
+            println!("Vault unlocked successfully.");
             println!("Directory: {}", vault.root().display());
             return Ok(());
         }
@@ -269,37 +285,55 @@ fn remove_trusted(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
-fn list() -> CliResult<()> {
+fn list(args: &[String]) -> CliResult<()> {
+    let (_, format) = output_format_from_args(args)?;
     let vault = default_vault()?;
-    let mut printed = false;
+    let mut rows = Vec::new();
     for name in vault.list_private_keys()? {
-        println!("private\t{name}");
-        println!("public\t{name}");
-        printed = true;
+        rows.push(vec!["private".to_string(), name.clone()]);
+        rows.push(vec!["public".to_string(), name]);
     }
     for recipient in vault.list_trusted_recipients()? {
-        println!("trusted\t{}", recipient.name);
-        printed = true;
+        rows.push(vec!["trusted".to_string(), recipient.name]);
     }
-    if !printed {
-        println!("empty");
-    }
+    print_records(&["kind", "name"], rows, format)?;
     Ok(())
 }
 
-fn list_open() -> CliResult<()> {
-    let ids = list_open_lockboxes()?;
-    if ids.is_empty() {
-        println!("empty");
-    } else {
-        for lockbox in ids {
-            if let Some(path) = lockbox.path {
-                println!("open\t{path}\t{}", lockbox.id);
-            } else {
-                println!("open\t{}", lockbox.id);
-            }
+fn sessions(args: &[String]) -> CliResult<()> {
+    match args.first().map(String::as_str) {
+        Some("lock") => {
+            let lockbox_path = require_arg(args, 1, "lockbox")?;
+            local_vault().lock_lockbox(lockbox_path)?;
+            println!("Lockbox session locked: {lockbox_path}");
+            return Ok(());
         }
+        Some("lock-all") => {
+            local_vault().lock_all()?;
+            println!("All lockbox sessions locked.");
+            return Ok(());
+        }
+        Some("stop") => {
+            stop_agent()?;
+            println!("Local lockbox agent stopped.");
+            return Ok(());
+        }
+        Some("auto-unlock") => return auto_unlock(&args[1..]),
+        _ => {}
     }
+    let (_, format) = output_format_from_args(args)?;
+    let ids = list_open_lockboxes()?;
+    let rows = ids
+        .into_iter()
+        .map(|lockbox| {
+            vec![
+                "unlocked".to_string(),
+                lockbox.path.unwrap_or_default(),
+                lockbox.id,
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_records(&["state", "path", "uuid"], rows, format)?;
     Ok(())
 }
 
@@ -362,7 +396,7 @@ fn export_key(args: &[String]) -> CliResult<()> {
 fn confirm_private_key_removal(name: &str) -> CliResult<bool> {
     eprintln!("Remove vault private key '{name}'?");
     eprintln!(
-        "Lockboxes that only this private key can open may become inaccessible from this vault."
+        "Lockboxes that only this private key can unlock may become inaccessible from this vault."
     );
     eprint!("Type 'yes' to remove it: ");
     io::stderr().flush()?;
