@@ -32,8 +32,8 @@ fn identity_command(args: &[String]) -> CliResult<()> {
         "list" | "ls" => list_identities(&args[1..]),
         "create" | "gen" | "generate" => keygen(&args[1..]),
         "import" => import_key(&args[1..]),
-        "export" => export_key(&args[1..]),
-        "export-public" => export_public(&args[1..]),
+        "export" => export_public(&args[1..]),
+        "export-private" => export_key(&args[1..]),
         "remove" | "rm" => remove_key(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault identity command: {command}")).into()),
     }
@@ -208,7 +208,7 @@ fn keygen(args: &[String]) -> CliResult<()> {
     }
     println!("Created vault identity: {name}");
     println!(
-        "Export its public key with: lockbox vault identity export-public {name} <public-key-output>"
+        "Export its public key with: lockbox vault identity export {name} <public-key-output>"
     );
     Ok(())
 }

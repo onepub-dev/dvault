@@ -744,8 +744,8 @@ fn vault_identity_command(verbose: bool) -> Command {
         .disable_help_subcommand(true)
         .after_help(verbose_help(
             verbose,
-            "Examples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity export-public laptop ./laptop.pub",
-            "Context:\n  An identity contains private unlock material for lockboxes that grant access to it. Export its public key and share it so someone else can add you to a lockbox access list. To save someone else's public key, use `lockbox vault contact add`.",
+            "Examples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity export laptop ./laptop.pub",
+            "Context:\n  An identity has a public key and a private key. Share the public key so someone else can grant you access to a lockbox; keep the private key secret because it unlocks lockboxes granted to that identity. To save someone else's public key, use `lockbox vault contact add`.",
         ))
         .subcommand_required(true)
         .arg_required_else_help(true)
@@ -765,15 +765,15 @@ fn vault_identity_command(verbose: bool) -> Command {
                 .about("Create one of your identities.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault identity create\n  lockbox vault identity create laptop\n  lockbox vault identity export-public laptop ./laptop.pub",
-                    "Context:\n  Identity create generates new private unlock material in your vault. With no name, Lockbox creates the `default` identity. To write a shareable public key file, create the identity first and then run `lockbox vault identity export-public`.",
+                    "Examples:\n  lockbox vault identity create\n  lockbox vault identity create laptop\n  lockbox vault identity export laptop ./laptop.pub",
+                    "Context:\n  Identity create generates a new identity in your vault. With no name, Lockbox creates the `default` identity. To share the identity, create it first and then run `lockbox vault identity export` to write its public key.",
                 ))
                 .arg(
                     Arg::new("overwrite")
                         .long("overwrite")
                         .hide(!verbose)
                         .action(ArgAction::SetTrue)
-                        .help("Replace an existing private key."),
+                        .help("Replace an existing identity."),
                 )
                 .arg(optional("name", "Identity name."))
         )
@@ -791,28 +791,11 @@ fn vault_identity_command(verbose: bool) -> Command {
         )
         .subcommand(
             Command::new("export")
-                .about("Export a private key from the local vault.")
+                .about("Export an identity public key.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault identity export ./default.private\n  lockbox vault identity export laptop ./laptop.private",
-                    "Context:\n  Identity export writes private unlock material to a file. Treat the output as highly sensitive; anyone with the private key can unlock lockboxes granted to that identity.",
-                ))
-                .arg(format_arg(verbose))
-                .arg(
-                    Arg::new("args")
-                        .value_names(["name", "private-key-output"])
-                        .num_args(1..=2)
-                        .required(true)
-                        .help("Optional identity name followed by the private key output path."),
-                ),
-        )
-        .subcommand(
-            Command::new("export-public")
-                .about("Export a public key from the local vault.")
-                .after_help(verbose_help(
-                    verbose,
-                    "Examples:\n  lockbox vault identity export-public ./default.pub\n  lockbox vault identity export-public laptop ./laptop.pub",
-                    "Context:\n  Export-public writes the shareable public part of an identity. Give this file to someone else when they need to grant you access to a lockbox.",
+                    "Examples:\n  lockbox vault identity export ./default.pub\n  lockbox vault identity export laptop ./laptop.pub",
+                    "Context:\n  Identity export writes the public key for one of your identities. Share this file with someone who needs to grant you access to a lockbox. The public key does not unlock lockboxes by itself.",
                 ))
                 .arg(format_arg(verbose))
                 .arg(
@@ -824,13 +807,30 @@ fn vault_identity_command(verbose: bool) -> Command {
                 ),
         )
         .subcommand(
+            Command::new("export-private")
+                .about("Export an identity private key.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault identity export-private ./default.private\n  lockbox vault identity export-private laptop ./laptop.private",
+                    "Context:\n  Identity export-private writes private unlock material to a file. Treat the output as highly sensitive; anyone with the private key can unlock lockboxes granted to that identity.",
+                ))
+                .arg(format_arg(verbose))
+                .arg(
+                    Arg::new("args")
+                        .value_names(["name", "private-key-output"])
+                        .num_args(1..=2)
+                        .required(true)
+                        .help("Optional identity name followed by the private key output path."),
+                ),
+        )
+        .subcommand(
             Command::new("remove")
-                .about("Remove a private key from the local vault.")
+                .about("Remove an identity.")
                 .visible_alias("rm")
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox vault identity remove laptop\n  lockbox vault identity remove --force laptop",
-                    "Context:\n  Identity remove deletes private unlock material from your vault. Lockboxes that only grant access to that identity may become inaccessible from this vault.",
+                    "Context:\n  Identity remove deletes an identity from your vault. Lockboxes that only grant access to that identity may become inaccessible from this vault.",
                 ))
                 .arg(
                     Arg::new("force")

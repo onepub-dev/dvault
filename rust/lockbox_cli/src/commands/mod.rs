@@ -299,7 +299,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     args.push(value(identity_sub, "private-key"));
                     push_optional(&mut args, identity_sub, "public-key-output");
                 }
-                "export" | "export-public" => {
+                "export" | "export-private" => {
                     push_option(&mut args, identity_sub, "format", "--format");
                     push_many(&mut args, identity_sub, "args");
                 }

@@ -446,7 +446,7 @@ lockbox vault import-key legacy alice.key alice.pub
 Export a vault-managed private key:
 
 ```bash
-lockbox vault export-key legacy legacy.key
+lockbox vault identity export-private legacy legacy.key
 ```
 
 Supported key file formats:
@@ -461,8 +461,8 @@ Supported key file formats:
 Select an export format with `--format`:
 
 ```bash
-lockbox vault export-public --format jwk default alice.jwk
-lockbox vault export-key --format lockbox-pem legacy legacy.key
+lockbox vault identity export --format jwk default alice.jwk
+lockbox vault identity export-private --format lockbox-pem legacy legacy.key
 ```
 
 Imports auto-detect native Lockbox PEM, JWK, JWKS, and raw hex.

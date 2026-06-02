@@ -86,14 +86,14 @@ lockbox create --recipient alice shared.lbox
 Export your public key:
 
 ```bash
-lockbox vault export-public default ./default.pub
+lockbox vault identity export default ./default.pub
 ```
 
 Exporting a private key is supported for backup and migration, but treat the
 output as a secret:
 
 ```bash
-lockbox vault export-key --format pem default ./default-private.pem
+lockbox vault identity export-private --format lockbox-pem default ./default-private.pem
 ```
 
 Private vault keys are stored inside the local vault as secret env records, not
