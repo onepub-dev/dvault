@@ -19,7 +19,7 @@ mod platform {
     pub(crate) fn serve_agent() -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "lockbox agent is not supported on this platform",
+            "lockbox session agent is not supported on this platform",
         ))
     }
 
@@ -39,7 +39,7 @@ mod platform {
     ) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "lockbox agent is not supported on this platform",
+            "lockbox session agent is not supported on this platform",
         ))
     }
 
@@ -64,7 +64,7 @@ mod platform {
     }
 }
 
-/// Content-key store backed by the platform lockbox agent.
+/// Content-key store backed by the platform session agent.
 ///
 /// On Unix this uses the crate's Unix-domain-socket transport. On Windows it
 /// uses the named-pipe transport. Unsupported platforms expose a client that

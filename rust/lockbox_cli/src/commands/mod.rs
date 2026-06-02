@@ -202,6 +202,7 @@ fn extract_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
 fn list_args(matches: &ArgMatches) -> Vec<String> {
     let mut args = one_arg(matches, "lockbox");
     push_option(&mut args, matches, "format", "--format");
+    push_flag(&mut args, matches, "recursive", "--recursive");
     if let Some(path) = matches.get_one::<String>("path") {
         args.push(path.clone());
     }
@@ -256,7 +257,6 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "verify", "--verify");
             push_flag(&mut args, sub, "overwrite", "--overwrite");
         }
-        "list" | "ls" => push_option(&mut args, sub, "format", "--format"),
         "path" => {}
         "sessions" => {
             if let Some((session_command, session_sub)) = sub.subcommand() {
@@ -294,6 +294,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     push_optional(&mut args, identity_sub, "name");
                     push_optional(&mut args, identity_sub, "public-key-output");
                 }
+                "list" | "ls" => push_option(&mut args, identity_sub, "format", "--format"),
                 "import" => {
                     args.push(value(identity_sub, "name"));
                     args.push(value(identity_sub, "private-key"));
@@ -324,6 +325,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                         args.push(value(contact_sub, "name"));
                         args.push(value(contact_sub, "public-key"));
                     }
+                    "list" | "ls" => push_option(&mut args, contact_sub, "format", "--format"),
                     "remove" | "rm" => args.push(value(contact_sub, "name")),
                     _ => {
                         return Err(Error::InvalidInput(format!(
@@ -334,7 +336,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 }
             } else {
                 return Err(Error::InvalidInput(
-                    "missing vault contact command; use `lockbox vault contact add <name> <public-key>` or `lockbox vault contact remove <name>`"
+                    "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact add <name> <public-key>`, or `lockbox vault contact remove <name>`"
                         .to_string(),
                 )
                 .into());

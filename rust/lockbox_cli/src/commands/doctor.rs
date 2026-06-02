@@ -36,7 +36,7 @@ pub(crate) fn run() -> CliResult<()> {
     println!("  backend: {}", auto_unlock.backend);
     println!("  vault: {}", auto_unlock.item);
     println!();
-    println!("Agent");
+    println!("Session agent");
     println!(
         "  transport security: {}",
         if verify_agent_transport_security().is_ok() {

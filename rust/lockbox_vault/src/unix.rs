@@ -151,7 +151,7 @@ fn ensure_agent() -> io::Result<()> {
     }
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
-        "lockbox agent did not start",
+        "lockbox session agent did not start",
     ))
 }
 
@@ -282,7 +282,7 @@ fn socket_path() -> PathBuf {
 }
 
 fn socket_dir() -> PathBuf {
-    if let Ok(dir) = env::var("LOCKBOX_AGENT_DIR") {
+    if let Ok(dir) = env::var("LOCKBOX_SESSION_AGENT_DIR") {
         return PathBuf::from(dir);
     }
     if let Ok(dir) = env::var("XDG_RUNTIME_DIR") {

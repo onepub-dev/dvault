@@ -85,10 +85,24 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_identity_help = run_output(bin, &["vault", "identity", "--help"]);
     assert_success(&vault_identity_help);
     let vault_identity_help = String::from_utf8_lossy(&vault_identity_help.stdout);
-    assert!(vault_identity_help.contains("Manage identities."));
+    assert!(vault_identity_help
+        .contains("Manage identities that can unlock lockboxes on this machine."));
+    assert!(vault_identity_help.contains("An identity is one of your local unlock identities."));
+    assert!(vault_identity_help.contains("lockbox vault contact add"));
+    assert!(vault_identity_help.contains("list"));
     assert!(vault_identity_help.contains("create"));
     assert!(vault_identity_help.contains("export"));
     assert!(!vault_identity_help.contains("  help"));
+
+    let vault_contact_help = run_output(bin, &["vault", "contact", "--help"]);
+    assert_success(&vault_contact_help);
+    let vault_contact_help = String::from_utf8_lossy(&vault_contact_help.stdout);
+    assert!(vault_contact_help
+        .contains("Manage contacts that can be given access to a lockbox."));
+    assert!(vault_contact_help.contains("Contacts are saved public keys"));
+    assert!(vault_contact_help.contains("list"));
+    assert!(vault_contact_help.contains("add"));
+    assert!(vault_contact_help.contains("remove"));
 
     let access_help = run_output(bin, &["access", "--help"]);
     assert_success(&access_help);
@@ -201,6 +215,7 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
     assert!(!verbose_help.contains("remove-key      Remove a key from a lockbox."));
     assert!(verbose_help.contains("keygen          Generate raw keypair files."));
     assert!(verbose_help.contains("LOCKBOX_KEY=<raw-content-key>"));
+    assert!(verbose_help.contains("LOCKBOX_SESSION_AGENT_DIR=<dir>"));
 
     for removed in ["add-recipient", "list-keys", "remove-key", "recipient"] {
         let output = run_output(bin, &[removed, "--help"]);
@@ -208,7 +223,7 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
         assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
     }
 
-    for removed in ["key", "trust"] {
+    for removed in ["key", "trust", "list", "ls"] {
         let output = run_output(bin, &["vault", removed, "--help"]);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
@@ -337,12 +352,12 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
     );
     let list = run_output_without_content_key(
         bin,
-        &["vault", "ls", "--format", "tsv"],
+        &["vault", "contact", "list", "--format", "tsv"],
         &vault_root,
         &agent_root,
     );
     assert_success(&list);
-    assert!(String::from_utf8_lossy(&list.stdout).contains("contact\tfriend"));
+    assert!(String::from_utf8_lossy(&list.stdout).contains("friend"));
 
     run_without_content_key(
         bin,
@@ -358,14 +373,22 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
     );
     let list = run_output_without_content_key(
         bin,
-        &["vault", "list", "--format", "tsv"],
+        &["vault", "identity", "list", "--format", "tsv"],
         &vault_root,
         &agent_root,
     );
     assert_success(&list);
     let list = String::from_utf8_lossy(&list.stdout);
-    assert!(!list.contains("contact\tfriend"));
-    assert!(!list.contains("identity\talias"));
+    assert!(!list.contains("alias"));
+
+    let contacts = run_output_without_content_key(
+        bin,
+        &["vault", "contact", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&contacts);
+    assert!(!String::from_utf8_lossy(&contacts.stdout).contains("friend"));
 }
 
 #[test]
@@ -453,7 +476,7 @@ fn remove_requires_confirmation_and_reports_count() {
         .contains("Remove lockbox entry '/docs/remove.txt'?"));
     assert!(String::from_utf8_lossy(&refused.stdout).contains("No entries removed."));
 
-    let listing = run_output(bin, &["list", lockbox.to_str().unwrap()]);
+    let listing = run_output(bin, &["list", "--recursive", lockbox.to_str().unwrap()]);
     assert_success(&listing);
     assert!(String::from_utf8_lossy(&listing.stdout).contains("/docs/remove.txt"));
 
@@ -577,7 +600,7 @@ fn doctor_and_vault_sessions_report_agent_state() {
     let doctor = run_output_in(bin, &["doctor"], &vault_root, &agent_root);
     assert_success(&doctor);
     let doctor = String::from_utf8_lossy(&doctor.stdout);
-    assert!(doctor.contains("Agent"));
+    assert!(doctor.contains("Session agent"));
     assert!(doctor.contains("running: no"));
     assert_contains_in_order(
         &doctor,
@@ -587,7 +610,7 @@ fn doctor_and_vault_sessions_report_agent_state() {
             "enabled:",
             "backend:",
             "vault:",
-            "Agent",
+            "Session agent",
         ],
     );
     assert!(!doctor.contains("running: unknown"));
@@ -603,7 +626,7 @@ fn doctor_and_vault_sessions_report_agent_state() {
         &agent_root,
     );
     assert_success(&stop);
-    assert!(String::from_utf8_lossy(&stop.stdout).contains("agent stopped"));
+    assert!(String::from_utf8_lossy(&stop.stdout).contains("Session agent stopped"));
 
     let auto_unlock = run_output_in(
         bin,
@@ -668,7 +691,8 @@ fn cli_env_rename_and_visualize_flow() {
     let listing = run_output(bin, &["list", lockbox.to_str().unwrap(), "/archive/docs"]);
     assert_success(&listing);
     let listing = String::from_utf8_lossy(&listing.stdout);
-    assert!(listing.contains("/archive/docs/a.txt"));
+    assert!(listing.contains("a.txt"));
+    assert!(!listing.contains("/archive/docs/a.txt"));
     assert!(!listing.contains("DATABASE_URL"));
 
     let env_get = run_output(
@@ -715,11 +739,12 @@ fn cli_env_rename_and_visualize_flow() {
             vault_public.to_str().unwrap(),
         ],
     );
-    let vault_list = run_output(bin, &["vault", "list", "--format", "tsv"]);
-    assert_success(&vault_list);
-    let vault_list = String::from_utf8_lossy(&vault_list.stdout);
-    assert!(vault_list.contains("identity\tdefault"));
-    assert!(vault_list.contains("contact\tdefault"));
+    let identity_list = run_output(bin, &["vault", "identity", "list", "--format", "tsv"]);
+    assert_success(&identity_list);
+    assert!(String::from_utf8_lossy(&identity_list.stdout).contains("default"));
+    let contact_list = run_output(bin, &["vault", "contact", "list", "--format", "tsv"]);
+    assert_success(&contact_list);
+    assert!(String::from_utf8_lossy(&contact_list.stdout).contains("default"));
 
     let vault_file = unique_dir().join("vault").join("local-vault.lbox");
     let vault_bytes = fs::read(vault_file).unwrap();
@@ -758,9 +783,12 @@ fn cli_env_rename_and_visualize_flow() {
 
     run(bin, &["vault", "contact", "remove", "default"]);
     run(bin, &["vault", "identity", "remove", "--force", "default"]);
-    let vault_list = run_output(bin, &["vault", "list"]);
-    assert_success(&vault_list);
-    assert!(!String::from_utf8_lossy(&vault_list.stdout).contains("default"));
+    let identity_list = run_output(bin, &["vault", "identity", "list"]);
+    assert_success(&identity_list);
+    assert!(!String::from_utf8_lossy(&identity_list.stdout).contains("default"));
+    let contact_list = run_output(bin, &["vault", "contact", "list"]);
+    assert_success(&contact_list);
+    assert!(!String::from_utf8_lossy(&contact_list.stdout).contains("default"));
 
     let doctor = run_output(bin, &["doctor"]);
     assert_success(&doctor);
@@ -794,11 +822,19 @@ fn list_commands_support_table_tsv_and_json_formats() {
     assert_success(&table);
     let table = String::from_utf8_lossy(&table.stdout);
     assert!(table.lines().next().unwrap_or("").contains("kind"));
-    assert!(table.contains("/docs/a.txt"));
+    assert!(table.lines().next().unwrap_or("").contains("name"));
+    assert!(table.contains("docs/"));
+    assert!(!table.contains("/docs/a.txt"));
+
+    let recursive = run_output(bin, &["list", "--recursive", lockbox.to_str().unwrap()]);
+    assert_success(&recursive);
+    let recursive = String::from_utf8_lossy(&recursive.stdout);
+    assert!(recursive.lines().next().unwrap_or("").contains("path"));
+    assert!(recursive.contains("/docs/a.txt"));
 
     let tsv = run_output(bin, &["list", "--format", "tsv", lockbox.to_str().unwrap()]);
     assert_success(&tsv);
-    assert!(String::from_utf8_lossy(&tsv.stdout).contains("file\t5\t/docs/a.txt"));
+    assert!(String::from_utf8_lossy(&tsv.stdout).contains("directory\t-\tdocs/"));
 
     let json = run_output(
         bin,
@@ -806,6 +842,20 @@ fn list_commands_support_table_tsv_and_json_formats() {
     );
     assert_success(&json);
     assert!(String::from_utf8_lossy(&json.stdout)
+        .contains("{\"kind\":\"directory\",\"len\":\"-\",\"name\":\"docs/\"}"));
+
+    let recursive_json = run_output(
+        bin,
+        &[
+            "list",
+            "--recursive",
+            "--format",
+            "json",
+            lockbox.to_str().unwrap(),
+        ],
+    );
+    assert_success(&recursive_json);
+    assert!(String::from_utf8_lossy(&recursive_json.stdout)
         .contains("{\"kind\":\"file\",\"len\":\"5\",\"path\":\"/docs/a.txt\"}"));
 }
 
@@ -863,7 +913,13 @@ fn recover_reports_and_writes_recovered_lockbox() {
 
     let listing = run_output(
         bin,
-        &["list", "--format", "tsv", recovered.to_str().unwrap()],
+        &[
+            "list",
+            "--recursive",
+            "--format",
+            "tsv",
+            recovered.to_str().unwrap(),
+        ],
     );
     assert_success(&listing);
     assert!(String::from_utf8_lossy(&listing.stdout).contains("/docs/a.txt"));
@@ -987,9 +1043,16 @@ fn add_can_default_destination_and_list_recursively() {
     let listing = run_output(bin, &["ls", lockbox.to_str().unwrap()]);
     assert_success(&listing);
     let listing = String::from_utf8_lossy(&listing.stdout);
-    assert!(listing.contains("/alpha.txt"));
-    assert!(listing.contains("/copy/one.txt"));
-    assert!(listing.contains("/copy/two.txt"));
+    assert!(listing.contains("alpha.txt"));
+    assert!(listing.contains("copy/"));
+    assert!(!listing.contains("/copy/one.txt"));
+
+    let recursive = run_output(bin, &["ls", "--recursive", lockbox.to_str().unwrap()]);
+    assert_success(&recursive);
+    let recursive = String::from_utf8_lossy(&recursive.stdout);
+    assert!(recursive.contains("/alpha.txt"));
+    assert!(recursive.contains("/copy/one.txt"));
+    assert!(recursive.contains("/copy/two.txt"));
 }
 
 #[test]
@@ -1113,13 +1176,13 @@ fn password_create_requires_explicit_vault_init() {
 
     let vault_list = run_output_without_content_key(
         bin,
-        &["vault", "list", "--format", "tsv"],
+        &["vault", "identity", "list", "--format", "tsv"],
         &vault_root,
         &agent_root,
     );
     assert_success(&vault_list);
     let vault_list = String::from_utf8_lossy(&vault_list.stdout);
-    assert!(vault_list.contains("identity\tdefault"));
+    assert!(vault_list.contains("default"));
 
     run_without_content_key(
         bin,
@@ -1180,7 +1243,7 @@ fn vault_init_verify_wrong_password_reports_vault_specific_error() {
         .args(["vault", "init", "--verify"])
         .env("LOCKBOX_PASSWORD", "test-lockbox-password")
         .env("LOCKBOX_VAULT_PASSWORD", "wrong-vault-password")
-        .env("LOCKBOX_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_SESSION_AGENT_DIR", &agent_root)
         .env("LOCKBOX_VAULT_DIR", &vault_root)
         .output()
         .unwrap();
@@ -1212,12 +1275,12 @@ fn vault_init_overwrite_replaces_existing_vault_with_warning() {
 
     let before = run_output_without_content_key(
         bin,
-        &["vault", "list", "--format", "tsv"],
+        &["vault", "identity", "list", "--format", "tsv"],
         &vault_root,
         &agent_root,
     );
     assert_success(&before);
-    assert!(String::from_utf8_lossy(&before.stdout).contains("identity\textra"));
+    assert!(String::from_utf8_lossy(&before.stdout).contains("extra"));
 
     let overwritten = run_output_without_content_key(
         bin,
@@ -1233,13 +1296,13 @@ fn vault_init_overwrite_replaces_existing_vault_with_warning() {
 
     let after = run_output_without_content_key(
         bin,
-        &["vault", "list", "--format", "tsv"],
+        &["vault", "identity", "list", "--format", "tsv"],
         &vault_root,
         &agent_root,
     );
     assert_success(&after);
     let after = String::from_utf8_lossy(&after.stdout);
-    assert!(after.contains("identity\tdefault"));
+    assert!(after.contains("default"));
     assert!(!after.contains("extra"));
 }
 
@@ -1313,12 +1376,12 @@ fn vault_identity_remove_requires_confirmation_and_force_bypasses_it() {
 
     let list = run_output_without_content_key(
         bin,
-        &["vault", "ls", "--format", "tsv"],
+        &["vault", "identity", "ls", "--format", "tsv"],
         &vault_root,
         &agent_root,
     );
     assert_success(&list);
-    assert!(String::from_utf8_lossy(&list.stdout).contains("identity\ttemp"));
+    assert!(String::from_utf8_lossy(&list.stdout).contains("temp"));
 
     let forced = run_output_without_content_key(
         bin,
@@ -1452,8 +1515,8 @@ fn unlock_accepts_password_sources_and_session_duration() {
     .env("LBX_TEST_PASSWORD", "test-lockbox-password")
     .output()
     .unwrap();
-    if String::from_utf8_lossy(&env_unlock.stderr).contains("lockbox agent did not start") {
-        eprintln!("skipping agent session assertions: lockbox agent did not start");
+    if String::from_utf8_lossy(&env_unlock.stderr).contains("lockbox session agent did not start") {
+        eprintln!("skipping session agent assertions: lockbox session agent did not start");
         return;
     }
     assert_success(&env_unlock);
@@ -1867,17 +1930,25 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
     );
     assert!(!output.status.success());
 
-    let vault_list = run_output_in(
+    let identity_list = run_output_in(
         bin,
-        &["vault", "list", "--format", "tsv"],
+        &["vault", "identity", "list", "--format", "tsv"],
         &vault_root,
         &agent_root,
     );
-    assert_success(&vault_list);
-    let vault_list = String::from_utf8_lossy(&vault_list.stdout);
+    assert_success(&identity_list);
+    let identity_list = String::from_utf8_lossy(&identity_list.stdout);
+    let contact_list = run_output_in(
+        bin,
+        &["vault", "contact", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&contact_list);
+    let contact_list = String::from_utf8_lossy(&contact_list.stdout);
     for name in ["pem", "jwk", "jwks", "raw"] {
-        assert!(vault_list.contains(&format!("identity\timported-{name}")));
-        assert!(vault_list.contains(&format!("contact\tcontact-{name}")));
+        assert!(identity_list.contains(&format!("imported-{name}")));
+        assert!(contact_list.contains(&format!("contact-{name}")));
     }
 }
 
@@ -1910,7 +1981,7 @@ fn run_output_in(bin: &str, args: &[&str], vault_root: &PathBuf, agent_root: &Pa
         .args(args)
         .env("LOCKBOX_KEY", "test-key")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
-        .env("LOCKBOX_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
         .env("LOCKBOX_VAULT_DIR", vault_root)
         .output()
         .unwrap()
@@ -1937,7 +2008,7 @@ fn run_output_in_with_stdin(
         .args(args)
         .env("LOCKBOX_KEY", "test-key")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
-        .env("LOCKBOX_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
         .env("LOCKBOX_VAULT_DIR", vault_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1963,7 +2034,7 @@ fn run_output_without_content_key(
         .args(args)
         .env("LOCKBOX_PASSWORD", "test-lockbox-password")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
-        .env("LOCKBOX_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
         .env("LOCKBOX_VAULT_DIR", vault_root)
         .output()
         .unwrap()
@@ -1979,7 +2050,7 @@ fn run_output_without_lockbox_password(
     command
         .args(args)
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
-        .env("LOCKBOX_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
         .env("LOCKBOX_VAULT_DIR", vault_root);
     command
 }
@@ -2017,7 +2088,7 @@ fn run_output_without_content_key_with_stdin(
         .args(args)
         .env("LOCKBOX_PASSWORD", "test-lockbox-password")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
-        .env("LOCKBOX_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
         .env("LOCKBOX_VAULT_DIR", vault_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

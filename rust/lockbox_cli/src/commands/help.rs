@@ -26,7 +26,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .global(true)
                 .value_name("RAW_CONTENT_KEY")
                 .hide(!verbose)
-                .help("Use a raw content key for this command."),
+                .help("Developer override: unlock with a raw content key supplied out of band."),
         )
         .subcommands([
             archive_command("create", "Create a new encrypted lockbox.")
@@ -42,7 +42,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .arg(required("lockbox", "Lockbox path.")),
             archive_command("unlock", "Unlock a lockbox for later commands.")
                 .after_help(
-                    "Unlocking a lockbox prompts for its password, caches unlock access in the local agent, and lets later commands use the lockbox without prompting again.\n\nExamples:\n  lockbox unlock secrets.lbox\n  lockbox unlock --duration 30m secrets.lbox\n  LOCKBOX_PASSWORD=secret lockbox unlock secrets.lbox\n  printf '%s\\n' \"$LOCKBOX_PASSWORD\" | lockbox unlock --password-stdin secrets.lbox",
+                    "Unlocking a lockbox prompts for its password, caches unlock access in the session agent, and lets later commands use the lockbox without prompting again.\n\nExamples:\n  lockbox unlock secrets.lbox\n  lockbox unlock --duration 30m secrets.lbox\n  LOCKBOX_PASSWORD=secret lockbox unlock secrets.lbox\n  printf '%s\\n' \"$LOCKBOX_PASSWORD\" | lockbox unlock --password-stdin secrets.lbox",
                 )
                 .arg(
                     Arg::new("duration")
@@ -74,6 +74,9 @@ pub(crate) fn command(verbose: bool) -> Command {
                 )
                 .arg(required("lockbox", "Lockbox path.")),
             archive_command("lock", "Forget cached unlock access.")
+                .after_help(
+                    "Examples:\n  lockbox lock secrets.lbox\n  lockbox lock --all",
+                )
                 .arg(
                     Arg::new("all")
                         .long("all")
@@ -121,8 +124,12 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Alias for --report."),
                 )
                 .arg(output_format_arg()),
-            archive_command("doctor", "Show local vault and agent diagnostics."),
+            archive_command("doctor", "Show local vault and session agent diagnostics.")
+                .after_help("Examples:\n  lockbox doctor"),
             file_command("add", "Add a file or directory to a lockbox.")
+                .after_help(
+                    "Examples:\n  lockbox add secrets.lbox ./notes.txt\n  lockbox add secrets.lbox ./project /project\n  lockbox add secrets.lbox ./large-dir /archive",
+                )
                 .arg(
                     Arg::new("jobs")
                         .long("jobs")
@@ -137,6 +144,9 @@ pub(crate) fn command(verbose: bool) -> Command {
                     "Destination path inside the lockbox. Defaults to root.",
                 )),
             file_command("extract", "Extract files from a lockbox.")
+                .after_help(
+                    "Examples:\n  lockbox extract secrets.lbox /notes.txt ./notes.txt\n  lockbox extract --to ./restore secrets.lbox\n  lockbox extract --to ./restore --overwrite secrets.lbox",
+                )
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(
                     Arg::new("to")
@@ -169,15 +179,31 @@ pub(crate) fn command(verbose: bool) -> Command {
                 )
                 .arg(optional("destination", "Destination path.").required_unless_present("to")),
             file_command("cat", "Write a stored file to stdout.")
+                .after_help(
+                    "Examples:\n  lockbox cat secrets.lbox /notes.txt\n  lockbox cat secrets.lbox /notes.txt > notes.txt",
+                )
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("lockbox-path", "Path inside the lockbox.")),
             file_command("list", "List stored entries.")
                 .visible_alias("ls")
+                .after_help(
+                    "Examples:\n  lockbox list secrets.lbox\n  lockbox list secrets.lbox /project\n  lockbox list --recursive --format json secrets.lbox",
+                )
                 .arg(output_format_arg())
+                .arg(
+                    Arg::new("recursive")
+                        .short('R')
+                        .long("recursive")
+                        .action(ArgAction::SetTrue)
+                        .help("List entries below child directories."),
+                )
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(optional("path", "Path inside the lockbox.")),
             file_command("rm", "Remove a stored entry.")
                 .visible_alias("remove")
+                .after_help(
+                    "Examples:\n  lockbox rm secrets.lbox /notes.txt\n  lockbox rm --force secrets.lbox /old.txt",
+                )
                 .arg(
                     Arg::new("force")
                         .long("force")
@@ -189,6 +215,9 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .arg(required("lockbox-path", "Path inside the lockbox.")),
             file_command("rename", "Rename a stored entry.")
                 .visible_alias("mv")
+                .after_help(
+                    "Examples:\n  lockbox rename secrets.lbox /draft.txt /final.txt\n  lockbox mv secrets.lbox /old-dir /archive/old-dir",
+                )
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("from", "Existing path inside the lockbox."))
                 .arg(required("to", "New path inside the lockbox.")),
@@ -224,7 +253,7 @@ Archives
   unlock          Unlock a lockbox for later commands.
   lock            Forget cached unlock access.
   recover         Recover readable entries from a damaged lockbox.
-  doctor          Show local vault and agent diagnostics.
+  doctor          Show local vault and session agent diagnostics.
 
 Files
   add             Add a file or directory to a lockbox.
@@ -248,7 +277,7 @@ Vault
         eprintln!(
             "
 Advanced global options:
-    --key <raw-content-key>    Use a raw content key for this command.
+    --key <raw-content-key>    Developer override: unlock with a raw content key supplied out of band.
 
 Advanced command options:
   lockbox add --jobs auto|1|N <lockbox> <source> <lockbox-path>
@@ -264,8 +293,11 @@ Environment variables:
   LOCKBOX_UNLOCK_DURATION=30m lockbox unlock <lockbox>
   LOCKBOX_VAULT_PASSWORD=<password> lockbox vault <command>
   LOCKBOX_PLATFORM_SECRET_STORE=auto|disabled lockbox vault <command>
-  LOCKBOX_AGENT_DIR=<dir> lockbox <command> ...
-  LOCKBOX_VAULT_DIR=<dir> lockbox <command> ..."
+  LOCKBOX_SESSION_AGENT_DIR=<dir> lockbox <command> ...
+  LOCKBOX_VAULT_DIR=<dir> lockbox <command> ...
+
+Raw content keys are for developer recovery and local testing. Lockbox does not
+print or export them; normal commands should unlock through the vault session."
         );
     }
 
@@ -303,13 +335,16 @@ fn env_command() -> Command {
         "Store, retrieve, list, export, or remove environment values.",
     )
     .after_help(
-        "Normal values are printed by `env get` and included by `env export`.\nSecret values are encrypted the same way, but are redacted from `env export` and require `env get --secret` to print.",
+        "Normal values are printed by `env get` and included by `env export`.\nSecret values are encrypted the same way, but are redacted from `env export` and require `env get --secret` to print.\n\nExamples:\n  lockbox env set secrets.lbox APP_MODE production\n  lockbox env get secrets.lbox APP_MODE\n  lockbox env export secrets.lbox",
     )
     .subcommand_required(true)
     .arg_required_else_help(true)
     .subcommand(
         Command::new("set")
             .about("Store an environment value.")
+            .after_help(
+                "Examples:\n  lockbox env set secrets.lbox APP_MODE production\n  lockbox env set --secret secrets.lbox API_TOKEN --interactive\n  printf '%s' \"$TOKEN\" | lockbox env set --secret --stdin secrets.lbox API_TOKEN",
+            )
             .arg(required("lockbox", "Lockbox path."))
             .arg(
                 Arg::new("secret")
@@ -394,6 +429,9 @@ fn env_command() -> Command {
         Command::new("list")
             .about("List environment values.")
             .visible_alias("ls")
+            .after_help(
+                "Examples:\n  lockbox env list secrets.lbox\n  lockbox env list --format json secrets.lbox",
+            )
             .arg(output_format_arg())
             .arg(required("lockbox", "Lockbox path.")),
     )
@@ -416,6 +454,9 @@ fn env_command() -> Command {
         Command::new("rm")
             .about("Remove an environment value.")
             .visible_alias("remove")
+            .after_help(
+                "Examples:\n  lockbox env rm secrets.lbox APP_MODE\n  lockbox env remove secrets.lbox API_TOKEN",
+            )
             .arg(required("lockbox", "Lockbox path."))
             .arg(required("name", "Environment variable name.")),
     )
@@ -423,11 +464,17 @@ fn env_command() -> Command {
 
 fn access_command() -> Command {
     sharing_command("access", "Manage who can unlock a lockbox.")
+        .after_help(
+            "Access entries are attached to a lockbox. They name identities or contacts that can unlock that lockbox.\n\nExamples:\n  lockbox access list secrets.lbox\n  lockbox access add secrets.lbox alice\n  lockbox access remove secrets.lbox 2",
+        )
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
             Command::new("add")
                 .about("Allow an identity or contact to unlock a lockbox.")
+                .after_help(
+                    "Examples:\n  lockbox access add secrets.lbox alice\n  lockbox access add secrets.lbox ./alice.pub",
+                )
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required(
                     "identity-or-contact",
@@ -438,6 +485,9 @@ fn access_command() -> Command {
             Command::new("list")
                 .about("List who can unlock a lockbox.")
                 .visible_alias("ls")
+                .after_help(
+                    "Examples:\n  lockbox access list secrets.lbox\n  lockbox access list --format json secrets.lbox",
+                )
                 .arg(output_format_arg())
                 .arg(required("lockbox", "Lockbox path.")),
         )
@@ -445,6 +495,9 @@ fn access_command() -> Command {
             Command::new("remove")
                 .about("Remove access from a lockbox.")
                 .visible_alias("rm")
+                .after_help(
+                    "Examples:\n  lockbox access remove secrets.lbox 2\n  lockbox access rm secrets.lbox 2",
+                )
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("slot-id", "Access slot id.")),
         )
@@ -476,45 +529,61 @@ fn vault_command(verbose: bool) -> Command {
                 ),
         )
         .subcommand(
-            Command::new("list")
-                .about("List local vault records.")
-                .visible_alias("ls")
-                .arg(output_format_arg()),
-        )
-        .subcommand(
             Command::new("sessions")
                 .about("Manage unlocked lockbox sessions.")
                 .disable_help_subcommand(true)
                 .arg_required_else_help(false)
                 .after_help(
-                    "With no subcommand, sessions lists lockboxes currently cached as unlocked.",
+                    "With no subcommand, sessions lists lockboxes currently cached as unlocked.\n\nExamples:\n  lockbox vault sessions\n  lockbox vault sessions lock secrets.lbox\n  lockbox vault sessions auto-unlock status",
                 )
                 .arg(output_format_arg())
                 .subcommand(
                     Command::new("lock")
                         .about("Lock one unlocked lockbox session.")
+                        .after_help("Examples:\n  lockbox vault sessions lock secrets.lbox")
                         .arg(required("lockbox", "Lockbox path.")),
                 )
                 .subcommand(
-                    Command::new("lock-all").about("Lock every unlocked lockbox session."),
+                    Command::new("lock-all")
+                        .about("Lock every unlocked lockbox session.")
+                        .after_help("Examples:\n  lockbox vault sessions lock-all"),
                 )
                 .subcommand(
                     Command::new("stop")
-                        .about("Lock every unlocked session and stop the local agent."),
+                        .about("Lock every unlocked session and stop the session agent.")
+                        .after_help("Examples:\n  lockbox vault sessions stop"),
                 )
                 .subcommand(
                     Command::new("auto-unlock")
                         .about("Store the vault password in the operating system secret store so Lockbox can unlock the local vault automatically after your OS login session is unlocked.")
                         .disable_help_subcommand(true)
                         .arg_required_else_help(false)
+                        .after_help(
+                            "Examples:\n  lockbox vault sessions auto-unlock status\n  lockbox vault sessions auto-unlock enable\n  lockbox vault sessions auto-unlock forget",
+                        )
                         .subcommand(
                             Command::new("status")
                                 .about("Show whether auto-unlock is supported and enabled.")
+                                .after_help(
+                                    "Examples:\n  lockbox vault sessions auto-unlock status\n  lockbox vault sessions auto-unlock status --format json",
+                                )
                                 .arg(output_format_arg()),
                         )
-                        .subcommand(Command::new("enable").about("Allow Lockbox to store the vault password for auto-unlock."))
-                        .subcommand(Command::new("disable").about("Stop using auto-unlock."))
-                        .subcommand(Command::new("forget").about("Delete the stored vault password used for auto-unlock.")),
+                        .subcommand(
+                            Command::new("enable")
+                                .about("Allow Lockbox to store the vault password for auto-unlock.")
+                                .after_help("Examples:\n  lockbox vault sessions auto-unlock enable"),
+                        )
+                        .subcommand(
+                            Command::new("disable")
+                                .about("Stop using auto-unlock.")
+                                .after_help("Examples:\n  lockbox vault sessions auto-unlock disable"),
+                        )
+                        .subcommand(
+                            Command::new("forget")
+                                .about("Delete the stored vault password used for auto-unlock.")
+                                .after_help("Examples:\n  lockbox vault sessions auto-unlock forget"),
+                        ),
                 ),
         )
         .subcommand(
@@ -525,13 +594,28 @@ fn vault_command(verbose: bool) -> Command {
         .subcommand(vault_identity_command(verbose))
         .subcommand(
             Command::new("contact")
-                .about("Manage contacts.")
+                .about("Manage contacts that can be given access to a lockbox.")
                 .disable_help_subcommand(true)
+                .after_help(
+                    "Contacts are saved public keys for other people or systems. A contact can be added to a lockbox access list, but cannot unlock lockboxes on this machine unless you also have the matching private identity.\n\nExamples:\n  lockbox vault contact list\n  lockbox vault contact add alice ./alice.pub\n  lockbox vault contact remove alice",
+                )
                 .subcommand_required(true)
                 .arg_required_else_help(true)
                 .subcommand(
+                    Command::new("list")
+                        .about("List saved contacts.")
+                        .visible_alias("ls")
+                        .after_help(
+                            "Examples:\n  lockbox vault contact list\n  lockbox vault contact list --format json",
+                        )
+                        .arg(output_format_arg()),
+                )
+                .subcommand(
                     Command::new("add")
                         .about("Save a contact public key.")
+                        .after_help(
+                            "Examples:\n  lockbox vault contact add alice ./alice.pub\n  lockbox vault contact add --overwrite alice ./alice-new.pub",
+                        )
                         .arg(
                             Arg::new("overwrite")
                                 .long("overwrite")
@@ -546,6 +630,9 @@ fn vault_command(verbose: bool) -> Command {
                     Command::new("remove")
                         .about("Remove a contact.")
                         .visible_alias("rm")
+                        .after_help(
+                            "Examples:\n  lockbox vault contact remove alice\n  lockbox vault contact rm alice",
+                        )
                         .arg(required("name", "Contact name.")),
                 ),
         )
@@ -553,13 +640,28 @@ fn vault_command(verbose: bool) -> Command {
 
 fn vault_identity_command(verbose: bool) -> Command {
     Command::new("identity")
-        .about("Manage identities.")
+        .about("Manage identities that can unlock lockboxes on this machine.")
         .disable_help_subcommand(true)
+        .after_help(
+            "An identity is one of your local unlock identities. It includes private key material, so it can unlock lockboxes that grant access to it. To save someone else's public key, use `lockbox vault contact add`.\n\nExamples:\n  lockbox vault identity list\n  lockbox vault identity create laptop ./laptop.pub\n  lockbox vault identity export-public laptop ./laptop.pub",
+        )
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
+            Command::new("list")
+                .about("List local identities.")
+                .visible_alias("ls")
+                .after_help(
+                    "Examples:\n  lockbox vault identity list\n  lockbox vault identity list --format json",
+                )
+                .arg(output_format_arg()),
+        )
+        .subcommand(
             Command::new("create")
                 .about("Create one of your identities.")
+                .after_help(
+                    "Examples:\n  lockbox vault identity create\n  lockbox vault identity create laptop ./laptop.pub",
+                )
                 .arg(
                     Arg::new("overwrite")
                         .long("overwrite")
@@ -573,6 +675,9 @@ fn vault_identity_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("import")
                 .about("Import a private key into the local vault.")
+                .after_help(
+                    "Examples:\n  lockbox vault identity import laptop ./laptop.private\n  lockbox vault identity import laptop ./laptop.private ./laptop.pub",
+                )
                 .arg(required("name", "Identity name."))
                 .arg(required("private-key", "Private key path."))
                 .arg(optional("public-key-output", "Public key output path.")),
@@ -580,6 +685,9 @@ fn vault_identity_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("export")
                 .about("Export a private key from the local vault.")
+                .after_help(
+                    "Examples:\n  lockbox vault identity export ./default.private\n  lockbox vault identity export laptop ./laptop.private",
+                )
                 .arg(format_arg(verbose))
                 .arg(
                     Arg::new("args")
@@ -592,6 +700,9 @@ fn vault_identity_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("export-public")
                 .about("Export a public key from the local vault.")
+                .after_help(
+                    "Examples:\n  lockbox vault identity export-public ./default.pub\n  lockbox vault identity export-public laptop ./laptop.pub",
+                )
                 .arg(format_arg(verbose))
                 .arg(
                     Arg::new("args")
@@ -605,6 +716,9 @@ fn vault_identity_command(verbose: bool) -> Command {
             Command::new("remove")
                 .about("Remove a private key from the local vault.")
                 .visible_alias("rm")
+                .after_help(
+                    "Examples:\n  lockbox vault identity remove laptop\n  lockbox vault identity remove --force laptop",
+                )
                 .arg(
                     Arg::new("force")
                         .long("force")

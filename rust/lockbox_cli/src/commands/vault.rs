@@ -21,7 +21,6 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "path" => path(),
         "identity" => identity_command(&args[1..]),
         "contact" => contact_command(&args[1..]),
-        "list" | "ls" => list(&args[1..]),
         "sessions" => sessions(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
     }
@@ -30,6 +29,7 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
 fn identity_command(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault identity command")?;
     match command {
+        "list" | "ls" => list_identities(&args[1..]),
         "create" | "gen" | "generate" => keygen(&args[1..]),
         "import" => import_key(&args[1..]),
         "export" => export_key(&args[1..]),
@@ -41,10 +41,11 @@ fn identity_command(args: &[String]) -> CliResult<()> {
 
 fn contact_command(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
+        Some("list" | "ls") => list_contacts(&args[1..]),
         Some("add") => contact_add(&args[1..]),
         Some("remove" | "rm") => remove_contact(&args[1..]),
         _ => Err(Error::InvalidInput(
-            "missing vault contact command; use `lockbox vault contact add <name> <public-key>` or `lockbox vault contact remove <name>`"
+            "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact add <name> <public-key>`, or `lockbox vault contact remove <name>`"
                 .to_string(),
         )
         .into()),
@@ -286,17 +287,25 @@ fn remove_contact(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
-fn list(args: &[String]) -> CliResult<()> {
+fn list_identities(args: &[String]) -> CliResult<()> {
     let (_, format) = output_format_from_args(args)?;
     let vault = default_vault()?;
     let mut rows = Vec::new();
     for name in vault.list_private_keys()? {
-        rows.push(vec!["identity".to_string(), name]);
+        rows.push(vec![name]);
     }
+    print_records(&["name"], rows, format)?;
+    Ok(())
+}
+
+fn list_contacts(args: &[String]) -> CliResult<()> {
+    let (_, format) = output_format_from_args(args)?;
+    let vault = default_vault()?;
+    let mut rows = Vec::new();
     for recipient in vault.list_trusted_recipients()? {
-        rows.push(vec!["contact".to_string(), recipient.name]);
+        rows.push(vec![recipient.name]);
     }
-    print_records(&["kind", "name"], rows, format)?;
+    print_records(&["name"], rows, format)?;
     Ok(())
 }
 
@@ -315,7 +324,7 @@ fn sessions(args: &[String]) -> CliResult<()> {
         }
         Some("stop") => {
             stop_agent()?;
-            println!("Local lockbox agent stopped.");
+            println!("Session agent stopped.");
             return Ok(());
         }
         Some("auto-unlock") => return auto_unlock(&args[1..]),

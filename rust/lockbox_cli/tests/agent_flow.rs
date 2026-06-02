@@ -35,8 +35,8 @@ fn unlock_populates_cache_and_lock_clears_it() {
         &vault_dir,
         &["unlock", vault.to_str().unwrap()],
     );
-    if String::from_utf8_lossy(&unlock.stderr).contains("lockbox agent did not start") {
-        eprintln!("skipping agent cache assertions: lockbox agent did not start");
+    if String::from_utf8_lossy(&unlock.stderr).contains("lockbox session agent did not start") {
+        eprintln!("skipping session agent cache assertions: lockbox session agent did not start");
         return;
     }
     assert!(
@@ -103,7 +103,7 @@ fn unlock_populates_cache_and_lock_clears_it() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("/docs/a.txt"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("a.txt"));
 
     run(
         bin,
@@ -183,7 +183,7 @@ fn command(bin: &str, agent_dir: &PathBuf, vault_dir: &PathBuf, args: &[&str]) -
         .args(args)
         .env("LOCKBOX_PASSWORD", "test-password")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
-        .env("LOCKBOX_AGENT_DIR", agent_dir)
+        .env("LOCKBOX_SESSION_AGENT_DIR", agent_dir)
         .env("LOCKBOX_VAULT_DIR", vault_dir);
     command
 }
