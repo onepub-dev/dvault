@@ -1141,7 +1141,7 @@ fn vault_init_existing_is_noop_unless_verify_is_requested() {
     let verified = String::from_utf8_lossy(&verified.stdout);
     assert!(verified.contains("Local vault already exists."));
     assert!(verified.contains("Vault unlocked successfully."));
-    assert!(verified.contains("Directory:"));
+    assert!(!verified.contains("Directory:"));
 }
 
 #[test]

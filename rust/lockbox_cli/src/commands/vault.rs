@@ -142,8 +142,8 @@ fn init(args: &[String]) -> CliResult<()> {
         }
         if verify {
             let password = read_vault_password("Vault password: ")?;
-            let vault = match VaultDirectory::unlock_or_create_default(&password) {
-                Ok(vault) => vault,
+            match VaultDirectory::unlock_or_create_default(&password) {
+                Ok(_) => {}
                 Err(Error::InvalidKey) => {
                     return Err(cli_error(
                         "vault unlock failed: check the vault password. If the password is correct, the local vault file may be damaged",
@@ -153,7 +153,6 @@ fn init(args: &[String]) -> CliResult<()> {
             };
             remember_default_vault_password(&password)?;
             println!("Vault unlocked successfully.");
-            println!("Directory: {}", vault.root().display());
             return Ok(());
         }
         println!("No changes made. Use `lockbox vault init --verify` to validate it.");
