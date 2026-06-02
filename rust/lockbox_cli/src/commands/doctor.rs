@@ -1,5 +1,7 @@
 use super::context::CliResult;
-use lockbox_vault::{default_vault_path, is_running, verify_agent_transport_security};
+use lockbox_vault::{
+    default_vault_path, is_running, platform_secret_store_status, verify_agent_transport_security,
+};
 use std::fs::OpenOptions;
 
 pub(crate) fn run() -> CliResult<()> {
@@ -26,6 +28,13 @@ pub(crate) fn run() -> CliResult<()> {
                 .unwrap_or(false)
         })
     );
+    println!();
+    let auto_unlock = platform_secret_store_status()?;
+    println!("Auto-unlock");
+    println!("  supported: {}", yes_no(auto_unlock.supported));
+    println!("  enabled: {}", yes_no(!auto_unlock.disabled));
+    println!("  backend: {}", auto_unlock.backend);
+    println!("  vault: {}", auto_unlock.item);
     println!();
     println!("Agent");
     println!(

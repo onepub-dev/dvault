@@ -571,6 +571,17 @@ fn doctor_and_vault_sessions_report_agent_state() {
     let doctor = String::from_utf8_lossy(&doctor.stdout);
     assert!(doctor.contains("Agent"));
     assert!(doctor.contains("running: no"));
+    assert_contains_in_order(
+        &doctor,
+        &[
+            "Auto-unlock",
+            "supported:",
+            "enabled:",
+            "backend:",
+            "vault:",
+            "Agent",
+        ],
+    );
     assert!(!doctor.contains("running: unknown"));
 
     let unlocked = run_output_in(bin, &["vault", "sessions"], &vault_root, &agent_root);
@@ -739,6 +750,7 @@ fn cli_env_rename_and_visualize_flow() {
     assert_success(&doctor);
     let doctor = String::from_utf8_lossy(&doctor.stdout);
     assert!(doctor.contains("Local vault"));
+    assert!(doctor.contains("Auto-unlock"));
     assert!(doctor.contains("local-vault.lbox"));
 }
 
