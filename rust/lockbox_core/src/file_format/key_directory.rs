@@ -1,4 +1,4 @@
-use crate::key_slot::KeySlot;
+use crate::key_slot::{KeySlot, MAX_KEY_SLOT_NAME_BYTES};
 use crate::key_wrap::RecipientWrappedKey;
 use crate::lockbox_id::LockboxId;
 use crate::page::{
@@ -11,7 +11,7 @@ use crate::{CacheLimit, Error, Result};
 
 const KEY_DIR_MAGIC: &[u8; 8] = b"LBX2KEY\0";
 const KEY_DIR_HEADER_LEN: usize = 64;
-const KEY_DIR_VERSION: u16 = 4;
+const KEY_DIR_VERSION: u16 = 5;
 const MAX_KEY_DIRECTORY_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -225,9 +225,10 @@ fn encode_key_slots(slots: &[KeySlot]) -> Vec<u8> {
                 write_bytes(&mut out, salt);
                 write_bytes(&mut out, encrypted_key);
             }
-            KeySlot::MlKem1024 { id, wrapped } => {
+            KeySlot::MlKem1024 { id, name, wrapped } => {
                 out.push(2);
                 out.extend_from_slice(&id.to_le_bytes());
+                write_optional_name(&mut out, name.as_deref());
                 write_bytes(&mut out, wrapped.ciphertext_bytes());
                 write_bytes(&mut out, wrapped.encrypted_key());
             }
@@ -265,10 +266,12 @@ fn decode_key_slots(payload: &[u8]) -> Result<Vec<KeySlot>> {
                 });
             }
             2 => {
+                let name = read_optional_name(payload, &mut offset)?;
                 let ciphertext = read_bytes(payload, &mut offset)?;
                 let encrypted_key = read_bytes(payload, &mut offset)?;
                 slots.push(KeySlot::MlKem1024 {
                     id,
+                    name,
                     wrapped: Box::new(RecipientWrappedKey::from_parts(ciphertext, encrypted_key)?),
                 });
             }
@@ -281,6 +284,40 @@ fn decode_key_slots(payload: &[u8]) -> Result<Vec<KeySlot>> {
 fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(bytes);
+}
+
+fn write_optional_name(out: &mut Vec<u8>, name: Option<&str>) {
+    let bytes = name.unwrap_or("").as_bytes();
+    write_bytes(out, bytes);
+}
+
+fn read_optional_name(payload: &[u8], offset: &mut usize) -> Result<Option<String>> {
+    if *offset + 4 > payload.len() {
+        return Err(Error::CorruptHeader);
+    }
+    let len = u32::from_le_bytes(payload[*offset..*offset + 4].try_into().unwrap()) as usize;
+    *offset += 4;
+    if len > MAX_KEY_SLOT_NAME_BYTES {
+        return Err(Error::SecurityLimitExceeded(format!(
+            "key slot name exceeds {MAX_KEY_SLOT_NAME_BYTES} bytes"
+        )));
+    }
+    if *offset + len > payload.len() {
+        return Err(Error::CorruptHeader);
+    }
+    if len == 0 {
+        return Ok(None);
+    }
+    let value =
+        std::str::from_utf8(&payload[*offset..*offset + len]).map_err(|_| Error::CorruptHeader)?;
+    let valid_chars = value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if !valid_chars {
+        return Err(Error::CorruptHeader);
+    }
+    *offset += len;
+    Ok(Some(value.to_string()))
 }
 
 fn read_bytes(payload: &[u8], offset: &mut usize) -> Result<Vec<u8>> {
@@ -311,7 +348,7 @@ mod tests {
             encode_key_directory(&[], lockbox_id, 0x0102_0304_0506_0708, 0x1112_1314).unwrap();
 
         assert_eq!(&encoded[0..8], KEY_DIR_MAGIC);
-        assert_eq!(&encoded[8..10], &[0x04, 0x00]);
+        assert_eq!(&encoded[8..10], &[0x05, 0x00]);
         assert_eq!(&encoded[12..16], &[0x40, 0x00, 0x00, 0x00]);
         assert_eq!(
             &encoded[16..24],
@@ -341,6 +378,20 @@ mod tests {
         assert!(matches!(
             read_key_directory_backup(&bytes),
             Err(Error::CorruptHeader)
+        ));
+    }
+
+    #[test]
+    fn key_directory_rejects_oversized_slot_name() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.push(2);
+        payload.extend_from_slice(&1u64.to_le_bytes());
+        payload.extend_from_slice(&((MAX_KEY_SLOT_NAME_BYTES + 1) as u32).to_le_bytes());
+
+        assert!(matches!(
+            decode_key_slots(&payload),
+            Err(Error::SecurityLimitExceeded(message)) if message.contains("key slot name exceeds")
         ));
     }
 }

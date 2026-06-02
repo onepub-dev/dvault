@@ -106,9 +106,10 @@ impl<S: ContentKeyStore> Vault<S> {
                 }
                 Ok(lockbox)
             }
-            LockboxProtection::RecipientPublicKey(recipient) => {
-                Lockbox::create_file(path, LockboxProtection::RecipientPublicKey(recipient))
-            }
+            LockboxProtection::RecipientPublicKey { name, recipient } => Lockbox::create_file(
+                path,
+                LockboxProtection::RecipientPublicKey { name, recipient },
+            ),
         }
     }
 

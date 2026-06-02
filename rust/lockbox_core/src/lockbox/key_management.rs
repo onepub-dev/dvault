@@ -43,7 +43,10 @@ pub enum LockboxProtection<'a> {
     /// Generate a content key and protect it with a recipient public key.
     ///
     /// This is the public half of an ML-KEM recipient keypair.
-    RecipientPublicKey(RecipientPublicKey),
+    RecipientPublicKey {
+        name: Option<String>,
+        recipient: RecipientPublicKey,
+    },
 }
 
 /// Key material used to unlock an existing lockbox file.
@@ -129,7 +132,7 @@ impl Lockbox {
                 lockbox.add_password(password)?;
                 lockbox
             }
-            LockboxProtection::RecipientPublicKey(recipient) => {
+            LockboxProtection::RecipientPublicKey { name, recipient } => {
                 let content_key = SecretVec::try_from_slice(&random_content_key()?)?;
                 let mut lockbox = Self::create_path_with_secret_key_and_options(
                     path,
@@ -137,7 +140,14 @@ impl Lockbox {
                     LockboxId::new_random()?,
                     LockboxOptions::default(),
                 )?;
-                lockbox.add_recipient(&recipient)?;
+                match name {
+                    Some(name) => {
+                        lockbox.add_recipient_named(name, &recipient)?;
+                    }
+                    None => {
+                        lockbox.add_recipient(&recipient)?;
+                    }
+                }
                 lockbox
             }
         };
@@ -360,10 +370,31 @@ impl Lockbox {
     /// Returns `Error::SecurityLimitExceeded` if secure key access or key
     /// wrapping fails.
     pub fn add_recipient(&mut self, recipient: &RecipientPublicKey) -> Result<u64> {
+        self.add_recipient_with_name(None, recipient)
+    }
+
+    /// Add a named recipient public key to the lockbox and return its key id.
+    ///
+    /// The name is stored as lockbox metadata so access listings can show who
+    /// a recipient slot was added for. It is not used for cryptographic
+    /// authentication.
+    pub fn add_recipient_named(
+        &mut self,
+        name: impl Into<String>,
+        recipient: &RecipientPublicKey,
+    ) -> Result<u64> {
+        self.add_recipient_with_name(Some(name.into()), recipient)
+    }
+
+    fn add_recipient_with_name(
+        &mut self,
+        name: Option<String>,
+        recipient: &RecipientPublicKey,
+    ) -> Result<u64> {
         let id = next_key_slot_id(&self.key_slots);
         let slot = self
             .key
-            .with_bytes(|content_key| KeySlot::ml_kem_1024(id, recipient, content_key))??;
+            .with_bytes(|content_key| KeySlot::ml_kem_1024(id, name, recipient, content_key))??;
         self.key_slots.push(slot);
         self.mark_key_directory_dirty();
         Ok(id)

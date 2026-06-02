@@ -3,7 +3,7 @@ use crate::{
     LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotProtection,
     LockboxOptions, LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair,
     RecipientPublicKey, RecoveryReportOptions, RecoveryScanner, Result, SecretString, WorkerPolicy,
-    WorkloadProfile,
+    WorkloadProfile, MAX_KEY_SLOT_NAME_BYTES,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -416,6 +416,47 @@ fn ml_kem_wraps_for_same_recipient_do_not_share_ciphertext() {
     assert_ne!(first.ciphertext_bytes(), second.ciphertext_bytes());
     assert_eq!(key_pair.decrypt(&first).unwrap(), content_key);
     assert_eq!(key_pair.decrypt(&second).unwrap(), content_key);
+}
+
+#[test]
+fn recipient_slot_names_survive_round_trip() {
+    let alice = RecipientKeyPair::generate().unwrap();
+    let bob = RecipientKeyPair::generate().unwrap();
+    let mut lb = Lockbox::create_with_recipient(&alice.public_key()).unwrap();
+
+    lb.add_recipient_named("bob-laptop", &bob.public_key())
+        .unwrap();
+    lb.commit().unwrap();
+
+    let reopened = Lockbox::open_with_recipient(lb.to_bytes(), &bob).unwrap();
+    let named_slot = reopened
+        .list_key_slots()
+        .into_iter()
+        .find(|slot| slot.name.as_deref() == Some("bob-laptop"))
+        .expect("named recipient slot");
+
+    assert_eq!(named_slot.protection, LockboxKeySlotProtection::Recipient);
+    assert_eq!(
+        named_slot.algorithm,
+        LockboxKeySlotAlgorithm::MlKem1024ChaCha20Poly1305
+    );
+}
+
+#[test]
+fn recipient_slot_names_are_bounded() {
+    let alice = RecipientKeyPair::generate().unwrap();
+    let bob = RecipientKeyPair::generate().unwrap();
+    let mut lb = Lockbox::create_with_recipient(&alice.public_key()).unwrap();
+    let too_long = "a".repeat(MAX_KEY_SLOT_NAME_BYTES + 1);
+
+    assert!(matches!(
+        lb.add_recipient_named(too_long, &bob.public_key()),
+        Err(Error::InvalidInput(message)) if message.contains("access name exceeds")
+    ));
+    assert!(matches!(
+        lb.add_recipient_named("bob/laptop", &bob.public_key()),
+        Err(Error::InvalidInput(message)) if message.contains("ASCII letters")
+    ));
 }
 
 #[test]

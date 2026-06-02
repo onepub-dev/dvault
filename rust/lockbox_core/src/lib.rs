@@ -48,7 +48,9 @@ pub use env_name::EnvName;
 pub use env_sensitivity::EnvSensitivity;
 pub use error::{Error, Result};
 pub use extract_policy::ExtractPolicy;
-pub use key_slot::{LockboxKeySlot, LockboxKeySlotAlgorithm, LockboxKeySlotProtection};
+pub use key_slot::{
+    LockboxKeySlot, LockboxKeySlotAlgorithm, LockboxKeySlotProtection, MAX_KEY_SLOT_NAME_BYTES,
+};
 pub use key_wrap::{RecipientKeyPair, RecipientPublicKey, RecipientWrappedKey};
 pub use list_options::ListOptions;
 pub use lockbox::{

@@ -8,6 +8,9 @@ use crate::secret_vec::SecretString;
 use crate::{Error, Result};
 use std::fmt;
 
+/// Maximum UTF-8 byte length for a user-facing key slot name.
+pub const MAX_KEY_SLOT_NAME_BYTES: usize = 255;
+
 /// User-facing protection type represented by a key slot.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +52,8 @@ impl fmt::Display for LockboxKeySlotAlgorithm {
 pub struct LockboxKeySlot {
     /// Stable slot id used for deletion.
     pub id: u64,
+    /// User-facing label for this slot, when one was supplied.
+    pub name: Option<String>,
     /// User-facing protection type for this slot.
     pub protection: LockboxKeySlotProtection,
     /// Algorithm used to wrap the lockbox content key.
@@ -68,6 +73,7 @@ pub(crate) enum KeySlot {
     },
     MlKem1024 {
         id: u64,
+        name: Option<String>,
         wrapped: Box<RecipientWrappedKey>,
     },
 }
@@ -83,11 +89,13 @@ impl KeySlot {
         match self {
             KeySlot::Password { id, .. } => LockboxKeySlot {
                 id: *id,
+                name: None,
                 protection: LockboxKeySlotProtection::Password,
                 algorithm: LockboxKeySlotAlgorithm::Argon2idChaCha20Poly1305,
             },
-            KeySlot::MlKem1024 { id, .. } => LockboxKeySlot {
+            KeySlot::MlKem1024 { id, name, .. } => LockboxKeySlot {
                 id: *id,
+                name: name.clone(),
                 protection: LockboxKeySlotProtection::Recipient,
                 algorithm: LockboxKeySlotAlgorithm::MlKem1024ChaCha20Poly1305,
             },
@@ -112,11 +120,16 @@ impl KeySlot {
 
     pub(crate) fn ml_kem_1024(
         id: u64,
+        name: Option<String>,
         recipient: &RecipientPublicKey,
         content_key: &[u8],
     ) -> Result<Self> {
+        if let Some(name) = name.as_deref() {
+            validate_key_slot_name(name)?;
+        }
         Ok(Self::MlKem1024 {
             id,
+            name,
             wrapped: Box::new(recipient.encrypt(content_key)?),
         })
     }
@@ -143,6 +156,28 @@ impl KeySlot {
             _ => Err(Error::InvalidKey),
         }
     }
+}
+
+pub(crate) fn validate_key_slot_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::InvalidInput(
+            "access name must not be empty".to_string(),
+        ));
+    }
+    if name.len() > MAX_KEY_SLOT_NAME_BYTES {
+        return Err(Error::InvalidInput(format!(
+            "access name exceeds {MAX_KEY_SLOT_NAME_BYTES} bytes"
+        )));
+    }
+    let valid_chars = name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if !valid_chars {
+        return Err(Error::InvalidInput(
+            "access name must contain only ASCII letters, digits, '-' or '_'".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn encrypt_wrapped_key(wrapping_key: &[u8; 32], content_key: &[u8]) -> Result<Vec<u8>> {

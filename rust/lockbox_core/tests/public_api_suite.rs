@@ -409,7 +409,10 @@ fn public_api_password_recipient_open_file_flow() {
     let recipient = RecipientKeyPair::generate().unwrap();
     let mut by_recipient = Lockbox::create_file(
         &recipient_path,
-        LockboxProtection::RecipientPublicKey(recipient.public_key()),
+        LockboxProtection::RecipientPublicKey {
+            name: Some("recipient".to_string()),
+            recipient: recipient.public_key(),
+        },
     )
     .unwrap();
     by_recipient

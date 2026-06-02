@@ -1,7 +1,7 @@
 use super::context::{
     cli_error, default_vault, ensure_default_vault_initialized, load_private_key_from_arg,
-    load_recipient_from_arg, mirror_key_directory, open_existing, read_new_password, read_password,
-    require_arg, Access, CliResult,
+    load_recipient_file, load_recipient_from_arg, mirror_key_directory, open_existing,
+    read_new_password, read_password, require_arg, Access, CliResult,
 };
 use super::output::{output_format_from_args, print_records};
 use lockbox_core::vault_bridge::VaultUnlock;
@@ -26,7 +26,10 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
         println!("Creating lockbox: {}", lockbox_path.display());
         let lb = Vault::new(NoopStore).create_lockbox(
             &lockbox_path,
-            LockboxProtection::RecipientPublicKey(recipient),
+            LockboxProtection::RecipientPublicKey {
+                name: recipient.name,
+                recipient: recipient.public_key,
+            },
         )?;
         mirror_key_directory(&lb)?;
         return Ok(());
@@ -127,9 +130,23 @@ pub(crate) fn unlock_key(args: &[String]) -> CliResult<()> {
 pub(crate) fn add_access(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let recipient_arg = require_arg(args, 1, "identity or contact")?;
-    let recipient = load_recipient_from_arg(recipient_arg)?;
+    let recipient = if let Some(public_key_path) = args.get(2) {
+        load_recipient_file(recipient_arg, public_key_path)?
+    } else {
+        if Path::new(recipient_arg).exists() {
+            return Err(cli_error(
+                "public key files require a contact name: lockbox access add <lockbox> <name> <public-key>",
+            ));
+        }
+        load_recipient_from_arg(recipient_arg)?
+    };
+    let name = recipient.name.ok_or_else(|| {
+        cli_error(
+            "access entries require a name; use lockbox access add <lockbox> <name> <public-key>",
+        )
+    })?;
     let mut lb = open_existing(lockbox_path, access)?;
-    lb.add_recipient(&recipient)?;
+    lb.add_recipient_named(name, &recipient.public_key)?;
     lb.commit()?;
     mirror_key_directory(&lb)?;
     Ok(())
@@ -143,11 +160,12 @@ pub(crate) fn list_keys(args: &[String], access: &Access) -> CliResult<()> {
     for slot in lb.list_key_slots() {
         rows.push(vec![
             slot.id.to_string(),
+            slot.name.unwrap_or_else(|| "-".to_string()),
             format!("{:?}", slot.protection),
             slot.algorithm.to_string(),
         ]);
     }
-    print_records(&["slot", "protection", "algorithm"], rows, format)?;
+    print_records(&["slot", "name", "protection", "algorithm"], rows, format)?;
     Ok(())
 }
 

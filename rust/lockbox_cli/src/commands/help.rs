@@ -524,13 +524,17 @@ fn access_command(verbose: bool) -> Command {
                 .about("Allow an identity or contact to unlock a lockbox.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox access add secrets.lbox alice\n  lockbox access add secrets.lbox ./alice.pub",
-                    "Context:\n  Access add grants unlock access by adding a public identity to the lockbox. The input may be one of your identities, a saved contact, or a public key file.",
+                    "Examples:\n  lockbox access add secrets.lbox alice\n  lockbox access add secrets.lbox identity:alice\n  lockbox access add secrets.lbox contact:alice\n  lockbox access add secrets.lbox alice ./alice.pub",
+                    "Context:\n  Access add grants unlock access by adding an identity or contact to the lockbox. A bare name can refer to one of your saved identities or saved contacts. If both use the same name, use identity:name or contact:name. For a public key file, provide the contact name first so the lockbox can record who the access entry belongs to.",
                 ))
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required(
                     "identity-or-contact",
-                    "Identity name, contact name, or public key path.",
+                    "Identity name, contact name, identity:name, contact:name, or contact name for a public key file.",
+                ))
+                .arg(optional(
+                    "public-key",
+                    "Public key path. When supplied, the previous argument is stored as the access name.",
                 )),
         )
         .subcommand(

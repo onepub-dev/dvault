@@ -202,13 +202,60 @@ pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<Recipien
     Ok(vault.load_private_key(name_or_path)?)
 }
 
-pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<RecipientPublicKey> {
+pub(crate) struct ResolvedRecipient {
+    pub(crate) name: Option<String>,
+    pub(crate) public_key: RecipientPublicKey,
+}
+
+pub(crate) fn load_recipient_file(name: &str, path: &str) -> CliResult<ResolvedRecipient> {
+    Ok(ResolvedRecipient {
+        name: Some(name.to_string()),
+        public_key: import_public_key(&std::fs::read(path)?)?,
+    })
+}
+
+pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<ResolvedRecipient> {
     if std::path::Path::new(arg).exists() {
-        return Ok(import_public_key(&std::fs::read(arg)?)?);
+        return Ok(ResolvedRecipient {
+            name: None,
+            public_key: import_public_key(&std::fs::read(arg)?)?,
+        });
     }
     let vault = default_vault()?;
-    if let Ok(recipient) = vault.load_trusted_recipient(arg) {
-        return Ok(recipient);
+    if let Some(name) = arg.strip_prefix("identity:") {
+        if name.is_empty() {
+            return Err(cli_error("missing identity name after identity:"));
+        }
+        return Ok(ResolvedRecipient {
+            name: Some(name.to_string()),
+            public_key: vault.load_private_key(name)?.public_key(),
+        });
     }
-    Ok(vault.load_private_key(arg)?.public_key())
+    if let Some(name) = arg.strip_prefix("contact:") {
+        if name.is_empty() {
+            return Err(cli_error("missing contact name after contact:"));
+        }
+        return Ok(ResolvedRecipient {
+            name: Some(name.to_string()),
+            public_key: vault.load_trusted_recipient(name)?,
+        });
+    }
+    let is_identity = vault.private_key_exists(arg)?;
+    let is_contact = vault.trusted_recipient_exists(arg)?;
+    match (is_identity, is_contact) {
+        (true, true) => Err(cli_error(format!(
+            "ambiguous access target: {arg} matches both an identity and a contact. Use identity:{arg} or contact:{arg}."
+        ))),
+        (true, false) => Ok(ResolvedRecipient {
+            name: Some(arg.to_string()),
+            public_key: vault.load_private_key(arg)?.public_key(),
+        }),
+        (false, true) => Ok(ResolvedRecipient {
+            name: Some(arg.to_string()),
+            public_key: vault.load_trusted_recipient(arg)?,
+        }),
+        (false, false) => Err(cli_error(format!(
+            "identity or contact not found: {arg}. Use a saved identity, saved contact, or pass a name with a public key file."
+        ))),
+    }
 }

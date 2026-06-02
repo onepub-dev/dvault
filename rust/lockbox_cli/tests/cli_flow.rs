@@ -179,6 +179,15 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(access_help.contains("remove"));
     assert!(!access_help.contains("  help"));
 
+    let access_add_verbose_help = run_output(bin, &["access", "add", "--help", "--verbose"]);
+    assert_success(&access_add_verbose_help);
+    let access_add_verbose_help = String::from_utf8_lossy(&access_add_verbose_help.stdout);
+    assert!(access_add_verbose_help.contains("identity:name or contact:name"));
+    assert!(access_add_verbose_help.contains("lockbox access add secrets.lbox identity:alice"));
+    assert!(access_add_verbose_help.contains("lockbox access add secrets.lbox alice ./alice.pub"));
+    assert!(access_add_verbose_help.contains("Identity name, contact name, identity:name"));
+    assert!(access_add_verbose_help.contains("Public key path."));
+
     let vault_help = run_output(bin, &["vault", "--help"]);
     assert_success(&vault_help);
     let vault_help = String::from_utf8_lossy(&vault_help.stdout);
@@ -623,6 +632,7 @@ fn removing_last_lockbox_key_has_cli_guidance() {
             "access",
             "add",
             lockbox.to_str().unwrap(),
+            "access_key",
             public_key.to_str().unwrap(),
         ],
         &vault_root,
@@ -1188,9 +1198,49 @@ fn access_subcommand_aliases_manage_lockbox_access() {
     run_in(
         bin,
         &[
+            "vault",
+            "contact",
+            "add",
+            "sharee",
+            second_public_key.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    let ambiguous = run_output_in(
+        bin,
+        &["access", "add", lockbox.to_str().unwrap(), "sharee"],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!ambiguous.status.success());
+    let ambiguous = String::from_utf8_lossy(&ambiguous.stderr);
+    assert!(ambiguous.contains("ambiguous access target: sharee"));
+    assert!(ambiguous.contains("identity:sharee"));
+    assert!(ambiguous.contains("contact:sharee"));
+
+    let path_only = run_output_in(
+        bin,
+        &[
             "access",
             "add",
             lockbox.to_str().unwrap(),
+            public_key.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!path_only.status.success());
+    assert!(String::from_utf8_lossy(&path_only.stderr)
+        .contains("public key files require a contact name"));
+
+    run_in(
+        bin,
+        &[
+            "access",
+            "add",
+            lockbox.to_str().unwrap(),
+            "external",
             public_key.to_str().unwrap(),
         ],
         &vault_root,
@@ -1202,8 +1252,14 @@ fn access_subcommand_aliases_manage_lockbox_access() {
             "access",
             "add",
             lockbox.to_str().unwrap(),
-            second_public_key.to_str().unwrap(),
+            "identity:sharee",
         ],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &["access", "add", lockbox.to_str().unwrap(), "contact:sharee"],
         &vault_root,
         &agent_root,
     );
@@ -1217,6 +1273,24 @@ fn access_subcommand_aliases_manage_lockbox_access() {
     assert_success(&access);
     let access = String::from_utf8_lossy(&access.stdout);
     assert!(access.lines().any(|line| !line.trim().is_empty()));
+    assert!(access.contains("\texternal\tRecipient\t"));
+    assert!(access.contains("\tsharee\tRecipient\t"));
+
+    let access_json = run_output_in(
+        bin,
+        &[
+            "access",
+            "ls",
+            "--format",
+            "json",
+            lockbox.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&access_json);
+    let access_json = String::from_utf8_lossy(&access_json.stdout);
+    assert!(access_json.contains("\"name\":\"external\""));
 
     let slot_id = access
         .lines()

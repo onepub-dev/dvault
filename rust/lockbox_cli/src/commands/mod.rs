@@ -353,7 +353,12 @@ fn access_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
         .ok_or_else(|| Error::InvalidInput("missing access command".to_string()))?;
     let mut args = vec![command.to_string(), value(sub, "lockbox")];
     match command {
-        "add" => args.push(value(sub, "identity-or-contact")),
+        "add" => {
+            args.push(value(sub, "identity-or-contact"));
+            if let Some(public_key) = sub.get_one::<String>("public-key") {
+                args.push(public_key.clone());
+            }
+        }
         "list" | "ls" => push_option(&mut args, sub, "format", "--format"),
         "remove" | "rm" => args.push(value(sub, "slot-id")),
         _ => return Err(Error::InvalidInput(format!("unknown access command: {command}")).into()),
