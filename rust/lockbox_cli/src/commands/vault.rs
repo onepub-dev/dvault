@@ -185,7 +185,6 @@ fn path() -> CliResult<()> {
 }
 
 fn keygen(args: &[String]) -> CliResult<()> {
-    let (args, format) = parse_format(args)?;
     let overwrite = args.iter().any(|arg| arg == "--overwrite");
     let args = args
         .iter()
@@ -197,7 +196,6 @@ fn keygen(args: &[String]) -> CliResult<()> {
         .first()
         .map(String::as_str)
         .unwrap_or(VaultDirectory::DEFAULT_KEY_NAME);
-    let public_path = args.get(1).map(String::as_str);
     let vault = default_vault()?;
     if vault.private_key_exists(name)? && !overwrite {
         return Err(Error::AlreadyExists(format!("vault identity {name}")).into());
@@ -205,20 +203,13 @@ fn keygen(args: &[String]) -> CliResult<()> {
 
     let keypair = RecipientKeyPair::generate()?;
     vault.store_private_key(name, &keypair)?;
-    if let Some(path) = public_path {
-        fs::write(path, export_public_key(&keypair.public_key(), format)?)?;
-    }
     if defaulted_name {
         println!("Using default identity name: {name}");
     }
     println!("Created vault identity: {name}");
-    if let Some(path) = public_path {
-        println!("Public key written: {path}");
-    } else {
-        println!(
-            "Export its public key with: lockbox vault identity export-public {name} <public-key-output>"
-        );
-    }
+    println!(
+        "Export its public key with: lockbox vault identity export-public {name} <public-key-output>"
+    );
     Ok(())
 }
 

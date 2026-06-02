@@ -292,7 +292,6 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 "create" => {
                     push_flag(&mut args, identity_sub, "overwrite", "--overwrite");
                     push_optional(&mut args, identity_sub, "name");
-                    push_optional(&mut args, identity_sub, "public-key-output");
                 }
                 "list" | "ls" => push_option(&mut args, identity_sub, "format", "--format"),
                 "import" => {

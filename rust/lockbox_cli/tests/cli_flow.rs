@@ -82,8 +82,9 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_identity_create_help = String::from_utf8_lossy(&vault_identity_create_help.stdout);
     assert!(vault_identity_create_help.contains("Create one of your identities."));
     assert!(vault_identity_create_help.contains("creates the `default` identity"));
-    assert!(vault_identity_create_help.contains("public key output path is optional"));
+    assert!(vault_identity_create_help.contains("export-public"));
     assert!(vault_identity_create_help.contains("lockbox vault identity create laptop\n"));
+    assert!(!vault_identity_create_help.contains("[public-key-output]"));
 
     let vault_identity_help = run_output(bin, &["vault", "identity", "--help"]);
     assert_success(&vault_identity_help);
@@ -313,10 +314,16 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
     run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
     run_without_content_key(
         bin,
+        &["vault", "identity", "create", "alias"],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(
+        bin,
         &[
             "vault",
             "identity",
-            "create",
+            "export-public",
             "alias",
             public_key.to_str().unwrap(),
         ],
@@ -721,12 +728,13 @@ fn cli_env_rename_and_visualize_flow() {
     assert!(visualize.contains("recovery scan:"));
 
     let vault_public = dir.join("default.pub");
+    run(bin, &["vault", "identity", "create", "default"]);
     run(
         bin,
         &[
             "vault",
             "identity",
-            "create",
+            "export-public",
             "default",
             vault_public.to_str().unwrap(),
         ],
@@ -1079,13 +1087,7 @@ fn access_subcommand_aliases_manage_lockbox_access() {
     );
     run_in(
         bin,
-        &[
-            "vault",
-            "identity",
-            "create",
-            "sharee",
-            public_key.to_str().unwrap(),
-        ],
+        &["vault", "identity", "create", "sharee"],
         &vault_root,
         &agent_root,
     );
@@ -1094,7 +1096,25 @@ fn access_subcommand_aliases_manage_lockbox_access() {
         &[
             "vault",
             "identity",
-            "create",
+            "export-public",
+            "sharee",
+            public_key.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &["vault", "identity", "create", "sharee2"],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &[
+            "vault",
+            "identity",
+            "export-public",
             "sharee2",
             second_public_key.to_str().unwrap(),
         ],
@@ -1309,7 +1329,7 @@ fn vault_init_overwrite_replaces_existing_vault_with_warning() {
 }
 
 #[test]
-fn vault_identity_create_output_names_default_and_public_key_path() {
+fn vault_identity_create_names_default_and_rejects_public_key_output() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("vault-identity-output");
     let _ = fs::remove_dir_all(&dir);
@@ -1329,23 +1349,25 @@ fn vault_identity_create_output_names_default_and_public_key_path() {
     assert!(output.contains("Created vault identity: default"));
     assert!(output.contains("lockbox vault identity export-public default <public-key-output>"));
 
-    let public_key = dir.join("named.pub");
     let named = run_output_without_content_key(
         bin,
-        &[
-            "vault",
-            "identity",
-            "create",
-            "named",
-            public_key.to_str().unwrap(),
-        ],
+        &["vault", "identity", "create", "named"],
         &vault_root,
         &agent_root,
     );
     assert_success(&named);
     let named = String::from_utf8_lossy(&named.stdout);
     assert!(named.contains("Created vault identity: named"));
-    assert!(named.contains(&format!("Public key written: {}", public_key.display())));
+    assert!(named.contains("lockbox vault identity export-public named <public-key-output>"));
+
+    let refused_public_output = run_output_without_content_key(
+        bin,
+        &["vault", "identity", "create", "other", "other.pub"],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!refused_public_output.status.success());
+    assert!(String::from_utf8_lossy(&refused_public_output.stderr).contains("unexpected argument"));
 }
 
 #[test]
@@ -1821,10 +1843,16 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
     let public_default = dir.join("default.pub");
     run_in(
         bin,
+        &["vault", "identity", "create", "default"],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
         &[
             "vault",
             "identity",
-            "create",
+            "export-public",
             "default",
             public_default.to_str().unwrap(),
         ],

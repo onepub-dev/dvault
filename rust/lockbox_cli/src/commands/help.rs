@@ -660,7 +660,7 @@ fn vault_identity_command(verbose: bool) -> Command {
             Command::new("create")
                 .about("Create one of your identities.")
                 .after_help(
-                    "With no name, Lockbox creates the `default` identity. The public key output path is optional; use it when you want a shareable public key file immediately.\n\nExamples:\n  lockbox vault identity create\n  lockbox vault identity create laptop\n  lockbox vault identity create laptop ./laptop.pub",
+                    "With no name, Lockbox creates the `default` identity. To write a shareable public key file, create the identity first and then run `lockbox vault identity export-public`.\n\nExamples:\n  lockbox vault identity create\n  lockbox vault identity create laptop\n  lockbox vault identity export-public laptop ./laptop.pub",
                 )
                 .arg(
                     Arg::new("overwrite")
@@ -670,7 +670,6 @@ fn vault_identity_command(verbose: bool) -> Command {
                         .help("Replace an existing private key."),
                 )
                 .arg(optional("name", "Identity name."))
-                .arg(optional("public-key-output", "Public key output path.")),
         )
         .subcommand(
             Command::new("import")
