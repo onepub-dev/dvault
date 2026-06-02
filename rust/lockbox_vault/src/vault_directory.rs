@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 use crate::key_format::{export_private_key, import_private_key, KeyFormat};
 
 const VAULT_FILE_NAME: &str = "local-vault.lbox";
+const VAULT_STRUCTURE_VERSION_PATH: &str = "/vault/structure-version";
+
+/// Current on-disk structure version for records stored inside the local vault.
+pub const CURRENT_VAULT_STRUCTURE_VERSION: u32 = 1;
 
 /// Trusted recipient entry stored in a `VaultDirectory`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,11 +64,13 @@ impl VaultDirectory {
             set_private_file_permissions(&path)?;
             lockbox
         };
-        Ok(Self {
+        let vault = Self {
             root,
             path,
             lockbox: RefCell::new(lockbox),
-        })
+        };
+        vault.ensure_structure_version()?;
+        Ok(vault)
     }
 
     /// Returns the root directory that contains the local vault file.
@@ -75,6 +81,13 @@ impl VaultDirectory {
     /// Returns the path to the `local-vault.lbox` file.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Returns the structure version recorded inside this vault.
+    pub fn structure_version(&self) -> Result<u32> {
+        self.read_structure_version()?.ok_or_else(|| {
+            Error::CorruptVaultRecord("vault structure version record is missing".to_string())
+        })
     }
 
     /// Stores a recipient private key under `name`.
@@ -272,6 +285,44 @@ impl VaultDirectory {
         out.sort();
         Ok(out)
     }
+
+    fn ensure_structure_version(&self) -> Result<()> {
+        match self.read_structure_version()? {
+            Some(CURRENT_VAULT_STRUCTURE_VERSION) => Ok(()),
+            Some(version) if version > CURRENT_VAULT_STRUCTURE_VERSION => {
+                Err(Error::Configuration(format!(
+                    "local vault structure version {version} is newer than this Lockbox build supports ({CURRENT_VAULT_STRUCTURE_VERSION}); upgrade Lockbox before using this vault"
+                )))
+            }
+            Some(version) => self.migrate_structure_version(version),
+            None => self.write_structure_version(CURRENT_VAULT_STRUCTURE_VERSION),
+        }
+    }
+
+    fn migrate_structure_version(&self, version: u32) -> Result<()> {
+        match version {
+            0 => self.write_structure_version(CURRENT_VAULT_STRUCTURE_VERSION),
+            version => Err(Error::Configuration(format!(
+                "local vault structure version {version} cannot be migrated by this Lockbox build"
+            ))),
+        }
+    }
+
+    fn read_structure_version(&self) -> Result<Option<u32>> {
+        let path = vault_structure_version_record_path();
+        {
+            let lockbox = self.lockbox.borrow();
+            if lockbox.stat(&path).is_none() {
+                return Ok(None);
+            }
+        }
+        decode_structure_version(&self.get_record(&path)?).map(Some)
+    }
+
+    fn write_structure_version(&self, version: u32) -> Result<()> {
+        let bytes = format!("{version}\n");
+        self.put_record_replace(&vault_structure_version_record_path(), bytes.as_bytes())
+    }
 }
 
 fn recursive_list(path: &str) -> ListOptions {
@@ -306,6 +357,25 @@ fn trusted_recipient_record_path(name: &str) -> Result<LockboxPath> {
 fn key_directory_backup_record_path(lockbox_id: LockboxId) -> LockboxPath {
     LockboxPath::new(format!("/key_directories/{lockbox_id}.keydir"))
         .expect("key directory backup path is a valid lockbox path")
+}
+
+fn vault_structure_version_record_path() -> LockboxPath {
+    LockboxPath::new(VAULT_STRUCTURE_VERSION_PATH)
+        .expect("vault structure version path is a valid lockbox path")
+}
+
+fn decode_structure_version(bytes: &[u8]) -> Result<u32> {
+    let text = std::str::from_utf8(bytes).map_err(|_| {
+        Error::CorruptVaultRecord("vault structure version is not valid UTF-8".to_string())
+    })?;
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(Error::CorruptVaultRecord(
+            "vault structure version is not a decimal integer".to_string(),
+        ));
+    }
+    text.parse::<u32>()
+        .map_err(|_| Error::CorruptVaultRecord("vault structure version is too large".to_string()))
 }
 
 /// Returns the default directory for the local vault.

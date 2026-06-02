@@ -5,7 +5,7 @@ use lockbox_core::{
 };
 use lockbox_vault::{
     export_private_key, import_private_key_file, ContentKeyStore, KeyFormat, SecretString, Vault,
-    VaultDirectory,
+    VaultDirectory, CURRENT_VAULT_STRUCTURE_VERSION,
 };
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -175,6 +175,10 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
     let root = unique_dir("directory");
     let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
     let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
+    assert_eq!(
+        vault.structure_version().unwrap(),
+        CURRENT_VAULT_STRUCTURE_VERSION
+    );
     let keypair = RecipientKeyPair::generate().unwrap();
     vault.store_private_key("default", &keypair).unwrap();
     let encrypted = fs::read(root.join("local-vault.lbox")).unwrap();
@@ -213,6 +217,70 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
         backup
     );
     assert_eq!(vault.key_directory_backup_count().unwrap(), 1);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn vault_directory_migrates_legacy_unversioned_vaults() {
+    let root = unique_dir("legacy-vault-version");
+    fs::create_dir_all(&root).unwrap();
+    let vault_path = root.join("local-vault.lbox");
+    let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
+
+    Lockbox::create_file(&vault_path, LockboxProtection::Password(&vault_password)).unwrap();
+
+    let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
+    assert_eq!(
+        vault.structure_version().unwrap(),
+        CURRENT_VAULT_STRUCTURE_VERSION
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn vault_directory_migrates_explicit_legacy_structure_version() {
+    let root = unique_dir("explicit-legacy-vault-version");
+    let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
+    VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
+
+    let vault_path = root.join("local-vault.lbox");
+    let mut lockbox =
+        Lockbox::open_file(&vault_path, LockboxUnlock::Password(&vault_password)).unwrap();
+    lockbox
+        .add_file(&p("/vault/structure-version"), b"0\n", true)
+        .unwrap();
+    lockbox.commit().unwrap();
+
+    let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
+    assert_eq!(
+        vault.structure_version().unwrap(),
+        CURRENT_VAULT_STRUCTURE_VERSION
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn vault_directory_rejects_newer_structure_versions() {
+    let root = unique_dir("future-vault-version");
+    let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
+    VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
+
+    let vault_path = root.join("local-vault.lbox");
+    let mut lockbox =
+        Lockbox::open_file(&vault_path, LockboxUnlock::Password(&vault_password)).unwrap();
+    lockbox
+        .add_file(&p("/vault/structure-version"), b"999\n", true)
+        .unwrap();
+    lockbox.commit().unwrap();
+
+    assert!(matches!(
+        VaultDirectory::unlock_or_create(&root, &vault_password),
+        Err(Error::Configuration(message))
+            if message.contains("newer than this Lockbox build supports")
+    ));
 
     let _ = fs::remove_dir_all(root);
 }
