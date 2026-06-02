@@ -124,9 +124,9 @@ pub(crate) fn unlock_key(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
-pub(crate) fn add_recipient(args: &[String], access: &Access) -> CliResult<()> {
+pub(crate) fn add_access(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let recipient_arg = require_arg(args, 1, "recipient")?;
+    let recipient_arg = require_arg(args, 1, "identity or contact")?;
     let recipient = load_recipient_from_arg(recipient_arg)?;
     let mut lb = open_existing(lockbox_path, access)?;
     lb.add_recipient(&recipient)?;
@@ -151,7 +151,7 @@ pub(crate) fn list_keys(args: &[String], access: &Access) -> CliResult<()> {
     Ok(())
 }
 
-pub(crate) fn remove_key(args: &[String], access: &Access) -> CliResult<()> {
+pub(crate) fn remove_access(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let slot_id = require_arg(args, 1, "slot id")?.parse::<u64>()?;
     let mut lb = open_existing(lockbox_path, access)?;
@@ -162,7 +162,7 @@ pub(crate) fn remove_key(args: &[String], access: &Access) -> CliResult<()> {
                 if message == "refusing to remove the last key slot"
         ) {
             return Err(cli_error(
-                "cannot remove the last key slot; add another recipient before removing this key",
+                "cannot remove the last access entry; add another identity or contact before removing this access entry",
             ));
         }
         return Err(err.into());
@@ -172,13 +172,13 @@ pub(crate) fn remove_key(args: &[String], access: &Access) -> CliResult<()> {
     Ok(())
 }
 
-pub(crate) fn recipient(args: &[String], access: &Access) -> CliResult<()> {
-    let command = require_arg(args, 0, "recipient command")?;
+pub(crate) fn access(args: &[String], access: &Access) -> CliResult<()> {
+    let command = require_arg(args, 0, "access command")?;
     match command {
-        "add" => add_recipient(&args[1..], access),
+        "add" => add_access(&args[1..], access),
         "list" | "ls" => list_keys(&args[1..], access),
-        "remove" | "rm" => remove_key(&args[1..], access),
-        _ => Err(Error::InvalidInput(format!("unknown recipient command: {command}")).into()),
+        "remove" | "rm" => remove_access(&args[1..], access),
+        _ => Err(Error::InvalidInput(format!("unknown access command: {command}")).into()),
     }
 }
 

@@ -51,7 +51,7 @@ pub(crate) fn run() -> CliResult<()> {
         "lock" => keys::lock(&lock_args(command_matches))?,
         "keygen" => keys::keygen(&two_args(command_matches, "private-key", "public-key"))?,
         "unlock-key" => keys::unlock_key(&unlock_key_args(command_matches))?,
-        "recipient" => keys::recipient(&recipient_args(command_matches)?, &access)?,
+        "access" => keys::access(&access_args(command_matches)?, &access)?,
         "vault" => vault::run(&vault_args(command_matches)?)?,
         "add" => files::add(
             &add_args(command_matches),
@@ -126,7 +126,7 @@ fn read_worker_policy(matches: &ArgMatches) -> CliResult<WorkerPolicy> {
 
 fn create_args(matches: &ArgMatches) -> Vec<String> {
     let mut args = Vec::new();
-    if let Some(recipient) = matches.get_one::<String>("recipient") {
+    if let Some(recipient) = matches.get_one::<String>("for") {
         args.push("--recipient".to_string());
         args.push(recipient.clone());
     }
@@ -283,103 +283,79 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 push_option(&mut args, sub, "format", "--format");
             }
         }
-        "key" => {
-            let (key_command, key_sub) = sub
+        "identity" => {
+            let (identity_command, identity_sub) = sub
                 .subcommand()
-                .ok_or_else(|| Error::InvalidInput("missing vault key command".to_string()))?;
-            args.push(key_command.to_string());
-            match key_command {
+                .ok_or_else(|| Error::InvalidInput("missing vault identity command".to_string()))?;
+            args.push(identity_command.to_string());
+            match identity_command {
                 "create" => {
-                    push_flag(&mut args, key_sub, "overwrite", "--overwrite");
-                    push_optional(&mut args, key_sub, "name");
-                    push_optional(&mut args, key_sub, "public-key-output");
+                    push_flag(&mut args, identity_sub, "overwrite", "--overwrite");
+                    push_optional(&mut args, identity_sub, "name");
+                    push_optional(&mut args, identity_sub, "public-key-output");
                 }
                 "import" => {
-                    args.push(value(key_sub, "name"));
-                    args.push(value(key_sub, "private-key"));
-                    push_optional(&mut args, key_sub, "public-key-output");
+                    args.push(value(identity_sub, "name"));
+                    args.push(value(identity_sub, "private-key"));
+                    push_optional(&mut args, identity_sub, "public-key-output");
                 }
                 "export" | "export-public" => {
-                    push_option(&mut args, key_sub, "format", "--format");
-                    push_many(&mut args, key_sub, "args");
+                    push_option(&mut args, identity_sub, "format", "--format");
+                    push_many(&mut args, identity_sub, "args");
                 }
                 "remove" | "rm" => {
-                    push_flag(&mut args, key_sub, "force", "--force");
-                    push_optional(&mut args, key_sub, "name");
+                    push_flag(&mut args, identity_sub, "force", "--force");
+                    push_optional(&mut args, identity_sub, "name");
                 }
                 _ => {
                     return Err(Error::InvalidInput(format!(
-                        "unknown vault key command: {key_command}"
+                        "unknown vault identity command: {identity_command}"
                     ))
                     .into())
                 }
             }
         }
-        "keygen" => {
-            push_flag(&mut args, sub, "overwrite", "--overwrite");
-            push_optional(&mut args, sub, "name");
-            push_optional(&mut args, sub, "public-key-output");
-        }
-        "import-key" => {
-            args.push(value(sub, "name"));
-            args.push(value(sub, "private-key"));
-            push_optional(&mut args, sub, "public-key-output");
-        }
-        "export-key" => {
-            push_option(&mut args, sub, "format", "--format");
-            push_many(&mut args, sub, "args");
-        }
-        "export-public" => {
-            push_option(&mut args, sub, "format", "--format");
-            push_many(&mut args, sub, "args");
-        }
-        "trust" => {
-            if let Some((trust_command, trust_sub)) = sub.subcommand() {
-                args.push(trust_command.to_string());
-                match trust_command {
+        "contact" => {
+            if let Some((contact_command, contact_sub)) = sub.subcommand() {
+                args.push(contact_command.to_string());
+                match contact_command {
                     "add" => {
-                        push_flag(&mut args, trust_sub, "overwrite", "--overwrite");
-                        args.push(value(trust_sub, "name"));
-                        args.push(value(trust_sub, "public-key"));
+                        push_flag(&mut args, contact_sub, "overwrite", "--overwrite");
+                        args.push(value(contact_sub, "name"));
+                        args.push(value(contact_sub, "public-key"));
                     }
-                    "remove" | "rm" => args.push(value(trust_sub, "name")),
+                    "remove" | "rm" => args.push(value(contact_sub, "name")),
                     _ => {
                         return Err(Error::InvalidInput(format!(
-                            "unknown vault trust command: {trust_command}"
+                            "unknown vault contact command: {contact_command}"
                         ))
                         .into())
                     }
                 }
             } else {
                 return Err(Error::InvalidInput(
-                    "missing vault trust command; use `lockbox vault trust add <name> <public-key>` or `lockbox vault trust remove <name>`"
+                    "missing vault contact command; use `lockbox vault contact add <name> <public-key>` or `lockbox vault contact remove <name>`"
                         .to_string(),
                 )
                 .into());
             }
         }
-        "remove-key" => {
-            push_flag(&mut args, sub, "force", "--force");
-            push_optional(&mut args, sub, "name");
-        }
-        "remove-trusted" | "remove" | "rm" => args.push(value(sub, "name")),
+        "remove" | "rm" => args.push(value(sub, "name")),
         _ => return Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
     }
     Ok(args)
 }
 
-fn recipient_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+fn access_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let (command, sub) = matches
         .subcommand()
-        .ok_or_else(|| Error::InvalidInput("missing recipient command".to_string()))?;
+        .ok_or_else(|| Error::InvalidInput("missing access command".to_string()))?;
     let mut args = vec![command.to_string(), value(sub, "lockbox")];
     match command {
-        "add" => args.push(value(sub, "recipient")),
+        "add" => args.push(value(sub, "identity-or-contact")),
         "list" | "ls" => push_option(&mut args, sub, "format", "--format"),
         "remove" | "rm" => args.push(value(sub, "slot-id")),
-        _ => {
-            return Err(Error::InvalidInput(format!("unknown recipient command: {command}")).into())
-        }
+        _ => return Err(Error::InvalidInput(format!("unknown access command: {command}")).into()),
     }
     Ok(args)
 }

@@ -31,13 +31,13 @@ pub(crate) fn command(verbose: bool) -> Command {
         .subcommands([
             archive_command("create", "Create a new encrypted lockbox.")
                 .after_help(
-                    "By default, create prompts for a new lockbox password. Password and recipient lockboxes use the local vault for key recovery metadata, so run `lockbox vault init` first.\n\nExamples:\n  lockbox vault init\n  lockbox create secrets.lbox\n  lockbox create --recipient alice secrets.lbox",
+                    "By default, create prompts for a new lockbox password. Password and shared lockboxes use the local vault for key recovery metadata, so run `lockbox vault init` first.\n\nExamples:\n  lockbox vault init\n  lockbox create secrets.lbox\n  lockbox create --for alice secrets.lbox",
                 )
                 .arg(
-                    Arg::new("recipient")
-                        .long("recipient")
-                        .value_name("VAULT_KEY_OR_RECIPIENT")
-                        .help("Create the lockbox for a vault key or trusted recipient."),
+                    Arg::new("for")
+                        .long("for")
+                        .value_name("IDENTITY_OR_CONTACT")
+                        .help("Create the lockbox for one of your identities or a saved contact."),
                 )
                 .arg(required("lockbox", "Lockbox path.")),
             archive_command("unlock", "Unlock a lockbox for later commands.")
@@ -193,12 +193,12 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .arg(required("from", "Existing path inside the lockbox."))
                 .arg(required("to", "New path inside the lockbox.")),
             env_command(),
-            recipient_command(),
+            access_command(),
             vault_command(verbose),
             developer_command("visualize", "Print internal lockbox structure.")
                 .visible_alias("visualise")
                 .arg(required("lockbox", "Lockbox path.")),
-            developer_command("keygen", "Generate raw recipient key files.")
+            developer_command("keygen", "Generate raw keypair files.")
                 .arg(required("private-key", "Private key output path."))
                 .arg(required("public-key", "Public key output path.")),
             developer_command("unlock-key", "Unlock using a vault private key.")
@@ -238,10 +238,10 @@ Environment
   env             Store, retrieve, list, export, or remove environment values.
 
 Sharing
-  recipient       Manage recipient access for a lockbox.
+  access          Manage who can unlock a lockbox.
 
 Vault
-  vault           Manage your private keys and trusted public keys."
+  vault           Manage identities and contacts."
     );
 
     if verbose {
@@ -254,7 +254,7 @@ Advanced command options:
   lockbox add --jobs auto|1|N <lockbox> <source> <lockbox-path>
 
 Developer and compatibility commands:
-  keygen          Generate raw recipient key files.
+  keygen          Generate raw keypair files.
   unlock-key      Unlock using a vault private key.
   visualize       Print internal lockbox structure.
 
@@ -421,44 +421,44 @@ fn env_command() -> Command {
     )
 }
 
-fn recipient_command() -> Command {
-    sharing_command("recipient", "Manage recipient access for a lockbox.")
+fn access_command() -> Command {
+    sharing_command("access", "Manage who can unlock a lockbox.")
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
             Command::new("add")
-                .about("Share a lockbox with a recipient public key.")
+                .about("Allow an identity or contact to unlock a lockbox.")
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required(
-                    "recipient",
-                    "Public key path or trusted recipient name.",
+                    "identity-or-contact",
+                    "Identity name, contact name, or public key path.",
                 )),
         )
         .subcommand(
             Command::new("list")
-                .about("List recipients that can unlock a lockbox.")
+                .about("List who can unlock a lockbox.")
                 .visible_alias("ls")
                 .arg(output_format_arg())
                 .arg(required("lockbox", "Lockbox path.")),
         )
         .subcommand(
             Command::new("remove")
-                .about("Remove recipient access from a lockbox.")
+                .about("Remove access from a lockbox.")
                 .visible_alias("rm")
                 .arg(required("lockbox", "Lockbox path."))
-                .arg(required("slot-id", "Recipient slot id.")),
+                .arg(required("slot-id", "Access slot id.")),
         )
 }
 
 fn vault_command(verbose: bool) -> Command {
-    base_command("vault", "Manage your private keys and trusted public keys.")
+    base_command("vault", "Manage identities and contacts.")
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
             Command::new("init")
                 .about("Create or unlock the local vault.")
                 .after_help(
-                    "The local vault stores private keys, trusted public keys, and key-directory backups. A new vault also gets a default recipient key. Keep the vault password backed up; Lockbox cannot recover private keys from the vault without it.\n\nIf the vault already exists, init reports the path and makes no changes. Use --verify to validate the password, or --overwrite only when replacing the vault and losing records stored only there.",
+                    "The local vault stores identities, contacts, and key-directory backups. A new vault also gets a default identity. Keep the vault password backed up; Lockbox cannot recover identities from the vault without it.\n\nIf the vault already exists, init reports the path and makes no changes. Use --verify to validate the password, or --overwrite only when replacing the vault and losing records stored only there.",
                 )
                 .arg(
                     Arg::new("verify")
@@ -522,114 +522,44 @@ fn vault_command(verbose: bool) -> Command {
                 .about("Print the local vault directory.")
                 .hide(!verbose),
         )
-        .subcommand(vault_key_command(verbose))
+        .subcommand(vault_identity_command(verbose))
         .subcommand(
-            Command::new("keygen")
-                .about("Generate a recipient key in the local vault.")
-                .hide(!verbose)
-                .after_help(
-                    "Vault recipient keys let you create and unlock lockboxes without sharing passwords. The private key stays in the local vault. Share the public key so other users can create lockboxes for you, or export it with `lockbox vault export-public`.\n\nIf no name is supplied, Lockbox uses the default key name: default.",
-                )
-                .arg(
-                    Arg::new("overwrite")
-                        .long("overwrite")
-                        .hide(!verbose)
-                        .action(ArgAction::SetTrue)
-                        .help("Replace an existing private key."),
-                )
-                .arg(optional("name", "Vault key name."))
-                .arg(optional("public-key-output", "Public key output path.")),
-        )
-        .subcommand(
-            Command::new("import-key")
-                .about("Import a private key into the local vault.")
-                .hide(!verbose)
-                .arg(required("name", "Vault key name."))
-                .arg(required("private-key", "Private key path."))
-                .arg(optional("public-key-output", "Public key output path.")),
-        )
-        .subcommand(
-            Command::new("export-key")
-                .about("Export a private key from the local vault.")
-                .hide(!verbose)
-                .arg(format_arg(verbose))
-                .arg(
-                    Arg::new("args")
-                        .value_names(["name", "private-key-output"])
-                        .num_args(1..=2)
-                        .required(true)
-                        .help("Optional vault key name followed by the private key output path."),
-                ),
-        )
-        .subcommand(
-            Command::new("export-public")
-                .about("Export a public key from the local vault.")
-                .hide(!verbose)
-                .arg(format_arg(verbose))
-                .arg(
-                    Arg::new("args")
-                        .value_names(["name", "public-key-output"])
-                        .num_args(1..=2)
-                        .required(true)
-                        .help("Optional vault key name followed by the public key output path."),
-                ),
-        )
-        .subcommand(
-            Command::new("trust")
-                .about("Store a trusted recipient public key.")
+            Command::new("contact")
+                .about("Manage contacts.")
                 .disable_help_subcommand(true)
                 .subcommand_required(true)
                 .arg_required_else_help(true)
                 .subcommand(
                     Command::new("add")
-                        .about("Store a trusted recipient public key.")
+                        .about("Save a contact public key.")
                         .arg(
                             Arg::new("overwrite")
                                 .long("overwrite")
                                 .hide(!verbose)
                                 .action(ArgAction::SetTrue)
-                                .help("Replace an existing trusted recipient."),
+                                .help("Replace an existing contact."),
                         )
-                        .arg(required("name", "Trusted recipient name."))
+                        .arg(required("name", "Contact name."))
                         .arg(required("public-key", "Public key path.")),
                 )
                 .subcommand(
                     Command::new("remove")
-                        .about("Remove a trusted recipient public key.")
+                        .about("Remove a contact.")
                         .visible_alias("rm")
-                        .arg(required("name", "Trusted recipient name.")),
+                        .arg(required("name", "Contact name.")),
                 ),
-        )
-        .subcommand(
-            Command::new("remove-key")
-                .about("Remove a private key from the local vault.")
-                .hide(!verbose)
-                .arg(
-                    Arg::new("force")
-                        .long("force")
-                        .visible_alias("noask")
-                        .action(ArgAction::SetTrue)
-                        .help("Remove the key without an interactive confirmation."),
-                )
-                .arg(optional("name", "Vault key name.")),
-        )
-        .subcommand(
-            Command::new("remove-trusted")
-                .about("Remove a trusted recipient public key.")
-                .hide(!verbose)
-                .arg(required("name", "Trusted recipient name.")),
         )
 }
 
-fn vault_key_command(verbose: bool) -> Command {
-    Command::new("key")
-        .about("Manage vault recipient keys.")
+fn vault_identity_command(verbose: bool) -> Command {
+    Command::new("identity")
+        .about("Manage identities.")
         .disable_help_subcommand(true)
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
             Command::new("create")
-                .about("Generate a recipient key in the local vault.")
+                .about("Create one of your identities.")
                 .arg(
                     Arg::new("overwrite")
                         .long("overwrite")
@@ -637,13 +567,13 @@ fn vault_key_command(verbose: bool) -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Replace an existing private key."),
                 )
-                .arg(optional("name", "Vault key name."))
+                .arg(optional("name", "Identity name."))
                 .arg(optional("public-key-output", "Public key output path.")),
         )
         .subcommand(
             Command::new("import")
                 .about("Import a private key into the local vault.")
-                .arg(required("name", "Vault key name."))
+                .arg(required("name", "Identity name."))
                 .arg(required("private-key", "Private key path."))
                 .arg(optional("public-key-output", "Public key output path.")),
         )
@@ -656,7 +586,7 @@ fn vault_key_command(verbose: bool) -> Command {
                         .value_names(["name", "private-key-output"])
                         .num_args(1..=2)
                         .required(true)
-                        .help("Optional vault key name followed by the private key output path."),
+                        .help("Optional identity name followed by the private key output path."),
                 ),
         )
         .subcommand(
@@ -668,7 +598,7 @@ fn vault_key_command(verbose: bool) -> Command {
                         .value_names(["name", "public-key-output"])
                         .num_args(1..=2)
                         .required(true)
-                        .help("Optional vault key name followed by the public key output path."),
+                        .help("Optional identity name followed by the public key output path."),
                 ),
         )
         .subcommand(
@@ -682,7 +612,7 @@ fn vault_key_command(verbose: bool) -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Remove the key without an interactive confirmation."),
                 )
-                .arg(optional("name", "Vault key name.")),
+                .arg(optional("name", "Identity name.")),
         )
 }
 

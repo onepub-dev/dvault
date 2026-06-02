@@ -19,38 +19,32 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
     match command {
         "init" => init(&args[1..]),
         "path" => path(),
-        "key" => key_command(&args[1..]),
-        "keygen" => keygen(&args[1..]),
-        "import-key" => import_key(&args[1..]),
-        "trust" => trust_command(&args[1..]),
-        "remove-key" => remove_key(&args[1..]),
-        "remove-trusted" => remove_trusted(&args[1..]),
+        "identity" => identity_command(&args[1..]),
+        "contact" => contact_command(&args[1..]),
         "list" | "ls" => list(&args[1..]),
         "sessions" => sessions(&args[1..]),
-        "export-key" => export_key(&args[1..]),
-        "export-public" => export_public(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
     }
 }
 
-fn key_command(args: &[String]) -> CliResult<()> {
-    let command = require_arg(args, 0, "vault key command")?;
+fn identity_command(args: &[String]) -> CliResult<()> {
+    let command = require_arg(args, 0, "vault identity command")?;
     match command {
         "create" | "gen" | "generate" => keygen(&args[1..]),
         "import" => import_key(&args[1..]),
         "export" => export_key(&args[1..]),
         "export-public" => export_public(&args[1..]),
         "remove" | "rm" => remove_key(&args[1..]),
-        _ => Err(Error::InvalidInput(format!("unknown vault key command: {command}")).into()),
+        _ => Err(Error::InvalidInput(format!("unknown vault identity command: {command}")).into()),
     }
 }
 
-fn trust_command(args: &[String]) -> CliResult<()> {
+fn contact_command(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
-        Some("add") => trust(&args[1..]),
-        Some("remove" | "rm") => remove_trusted(&args[1..]),
+        Some("add") => contact_add(&args[1..]),
+        Some("remove" | "rm") => remove_contact(&args[1..]),
         _ => Err(Error::InvalidInput(
-            "missing vault trust command; use `lockbox vault trust add <name> <public-key>` or `lockbox vault trust remove <name>`"
+            "missing vault contact command; use `lockbox vault contact add <name> <public-key>` or `lockbox vault contact remove <name>`"
                 .to_string(),
         )
         .into()),
@@ -124,7 +118,7 @@ fn init(args: &[String]) -> CliResult<()> {
         println!("Local vault already exists.");
         println!("Path: {}", path.display());
         if overwrite {
-            println!("WARNING: replacing it will remove local private keys, trusted public keys,");
+            println!("WARNING: replacing it will remove identities, contacts,");
             println!("and key-directory backups stored only in this vault.");
             let password = read_new_vault_password()?;
             fs::remove_file(&path)?;
@@ -134,7 +128,7 @@ fn init(args: &[String]) -> CliResult<()> {
             println!("Vault replaced successfully.");
             if generated {
                 println!(
-                    "Generated default private/public key: {}",
+                    "Created default identity: {}",
                     VaultDirectory::DEFAULT_KEY_NAME
                 );
             }
@@ -162,7 +156,7 @@ fn init(args: &[String]) -> CliResult<()> {
         println!("This will create the local Lockbox vault.");
         println!("Path: {}", path.display());
         println!();
-        println!("The vault stores your private keys, trusted public keys, and");
+        println!("The vault stores identities, contacts, and");
         println!("key-directory backups for lockboxes you create or share.");
         println!();
         println!("Choose a vault password you can back up safely. If you lose it,");
@@ -175,7 +169,7 @@ fn init(args: &[String]) -> CliResult<()> {
     println!("Vault created successfully.");
     if generated {
         println!(
-            "Generated default private/public key: {}",
+            "Created default identity: {}",
             VaultDirectory::DEFAULT_KEY_NAME
         );
     }
@@ -205,7 +199,7 @@ fn keygen(args: &[String]) -> CliResult<()> {
     let public_path = args.get(1).map(String::as_str);
     let vault = default_vault()?;
     if vault.private_key_exists(name)? && !overwrite {
-        return Err(Error::AlreadyExists(format!("vault private key {name}")).into());
+        return Err(Error::AlreadyExists(format!("vault identity {name}")).into());
     }
 
     let keypair = RecipientKeyPair::generate()?;
@@ -214,31 +208,31 @@ fn keygen(args: &[String]) -> CliResult<()> {
         fs::write(path, export_public_key(&keypair.public_key(), format)?)?;
     }
     if defaulted_name {
-        println!("Using default vault key name: {name}");
+        println!("Using default identity name: {name}");
     }
-    println!("Generated vault private key: {name}");
+    println!("Created vault identity: {name}");
     if let Some(path) = public_path {
         println!("Public key written: {path}");
     } else {
         println!(
-            "Export the public key with: lockbox vault export-public {name} <public-key-output>"
+            "Export its public key with: lockbox vault identity export-public {name} <public-key-output>"
         );
     }
     Ok(())
 }
 
-fn trust(args: &[String]) -> CliResult<()> {
+fn contact_add(args: &[String]) -> CliResult<()> {
     let overwrite = args.iter().any(|arg| arg == "--overwrite");
     let args = args
         .iter()
         .filter(|arg| arg.as_str() != "--overwrite")
         .cloned()
         .collect::<Vec<_>>();
-    let name = require_arg(&args, 0, "recipient name")?;
+    let name = require_arg(&args, 0, "contact name")?;
     let public_path = require_arg(&args, 1, "public key path")?;
     let vault = default_vault()?;
     if vault.trusted_recipient_exists(name)? && !overwrite {
-        return Err(Error::AlreadyExists(format!("trusted recipient {name}")).into());
+        return Err(Error::AlreadyExists(format!("contact {name}")).into());
     }
     let recipient = import_public_key(&fs::read(public_path)?)?;
     vault.store_trusted_recipient(name, &recipient)?;
@@ -246,12 +240,12 @@ fn trust(args: &[String]) -> CliResult<()> {
 }
 
 fn import_key(args: &[String]) -> CliResult<()> {
-    let name = require_arg(args, 0, "key name")?;
+    let name = require_arg(args, 0, "identity name")?;
     let private_path = require_arg(args, 1, "private key path")?;
     let public_path = args.get(2).map(String::as_str);
     let vault = default_vault()?;
     if vault.private_key_exists(name)? {
-        return Err(Error::AlreadyExists(format!("vault private key {name}")).into());
+        return Err(Error::AlreadyExists(format!("vault identity {name}")).into());
     }
     let keypair = import_private_key_file(private_path)?;
     vault.store_private_key(name, &keypair)?;
@@ -278,16 +272,16 @@ fn remove_key(args: &[String]) -> CliResult<()> {
         .map(String::as_str)
         .unwrap_or(VaultDirectory::DEFAULT_KEY_NAME);
     if !force && !confirm_private_key_removal(name)? {
-        println!("Vault private key not removed: {name}");
+        println!("Vault identity not removed: {name}");
         return Ok(());
     }
     default_vault()?.delete_private_key(name)?;
-    println!("Vault private key removed: {name}");
+    println!("Vault identity removed: {name}");
     Ok(())
 }
 
-fn remove_trusted(args: &[String]) -> CliResult<()> {
-    let name = require_arg(args, 0, "recipient name")?;
+fn remove_contact(args: &[String]) -> CliResult<()> {
+    let name = require_arg(args, 0, "contact name")?;
     default_vault()?.delete_trusted_recipient(name)?;
     Ok(())
 }
@@ -297,11 +291,10 @@ fn list(args: &[String]) -> CliResult<()> {
     let vault = default_vault()?;
     let mut rows = Vec::new();
     for name in vault.list_private_keys()? {
-        rows.push(vec!["private".to_string(), name.clone()]);
-        rows.push(vec!["public".to_string(), name]);
+        rows.push(vec!["identity".to_string(), name]);
     }
     for recipient in vault.list_trusted_recipients()? {
-        rows.push(vec!["trusted".to_string(), recipient.name]);
+        rows.push(vec!["contact".to_string(), recipient.name]);
     }
     print_records(&["kind", "name"], rows, format)?;
     Ok(())
@@ -362,7 +355,7 @@ fn export_public(args: &[String]) -> CliResult<()> {
         [destination] => {
             if vault.private_key_exists(destination)? {
                 return Err(Error::InvalidInput(format!(
-                    "missing public key output path for vault key {destination}"
+                    "missing public key output path for identity {destination}"
                 ))
                 .into());
             }
@@ -386,7 +379,7 @@ fn export_key(args: &[String]) -> CliResult<()> {
         [destination] => {
             if vault.private_key_exists(destination)? {
                 return Err(Error::InvalidInput(format!(
-                    "missing private key output path for vault key {destination}"
+                    "missing private key output path for identity {destination}"
                 ))
                 .into());
             }
@@ -401,7 +394,7 @@ fn export_key(args: &[String]) -> CliResult<()> {
 }
 
 fn confirm_private_key_removal(name: &str) -> CliResult<bool> {
-    eprintln!("Remove vault private key '{name}'?");
+    eprintln!("Remove vault identity '{name}'?");
     eprintln!(
         "Lockboxes that only this private key can unlock may become inaccessible from this vault."
     );
