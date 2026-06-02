@@ -504,20 +504,17 @@ fn vault_command(verbose: bool) -> Command {
                 )
                 .subcommand(
                     Command::new("auto-unlock")
-                        .about("Manage vault password reuse through the operating system secret store.")
+                        .about("Store the vault password in the operating system secret store so Lockbox can unlock the local vault automatically after your OS login session is unlocked.")
                         .disable_help_subcommand(true)
                         .arg_required_else_help(false)
-                        .after_help(
-                            "Auto-unlock stores the vault password in the operating system secret store, so future commands can unlock the local vault after the user session is unlocked.",
-                        )
                         .subcommand(
                             Command::new("status")
-                                .about("Show auto-unlock status.")
+                                .about("Show whether auto-unlock is supported and enabled.")
                                 .arg(output_format_arg()),
                         )
-                        .subcommand(Command::new("enable").about("Enable auto-unlock when the platform supports it."))
-                        .subcommand(Command::new("disable").about("Disable auto-unlock."))
-                        .subcommand(Command::new("forget").about("Forget the stored auto-unlock secret.")),
+                        .subcommand(Command::new("enable").about("Allow Lockbox to store the vault password for auto-unlock."))
+                        .subcommand(Command::new("disable").about("Stop using auto-unlock."))
+                        .subcommand(Command::new("forget").about("Delete the stored vault password used for auto-unlock.")),
                 ),
         )
         .subcommand(

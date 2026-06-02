@@ -122,7 +122,9 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let auto_unlock_help = run_output(bin, &["vault", "sessions", "auto-unlock", "--help"]);
     assert_success(&auto_unlock_help);
     let auto_unlock_help = String::from_utf8_lossy(&auto_unlock_help.stdout);
-    assert!(auto_unlock_help.contains("Manage vault password reuse"));
+    assert!(
+        auto_unlock_help.contains("Store the vault password in the operating system secret store")
+    );
     assert!(auto_unlock_help.contains("status"));
     assert!(auto_unlock_help.contains("enable"));
     assert!(auto_unlock_help.contains("disable"));
@@ -599,8 +601,10 @@ fn doctor_and_vault_sessions_report_agent_state() {
     );
     assert_success(&auto_unlock);
     let auto_unlock = String::from_utf8_lossy(&auto_unlock.stdout);
-    assert!(auto_unlock.contains("backend\t"));
-    assert!(auto_unlock.contains("supported\t"));
+    assert_contains_in_order(
+        &auto_unlock,
+        &["supported\t", "enabled\t", "backend\t", "vault\t"],
+    );
 }
 
 #[test]

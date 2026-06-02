@@ -84,15 +84,15 @@ fn auto_unlock_status(args: &[String]) -> CliResult<()> {
     let (_, format) = output_format_from_args(args)?;
     let status = platform_secret_store_status()?;
     print_records(
-        &["setting", "value"],
+        &["property", "value"],
         vec![
-            vec!["backend".to_string(), status.backend.to_string()],
             vec![
                 "supported".to_string(),
                 yes_no(status.supported).to_string(),
             ],
-            vec!["disabled".to_string(), yes_no(status.disabled).to_string()],
-            vec!["item".to_string(), status.item],
+            vec!["enabled".to_string(), yes_no(!status.disabled).to_string()],
+            vec!["backend".to_string(), status.backend.to_string()],
+            vec!["vault".to_string(), status.item],
         ],
         format,
     )?;
