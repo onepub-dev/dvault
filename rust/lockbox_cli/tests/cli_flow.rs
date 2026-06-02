@@ -40,20 +40,43 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let add_verbose_help = String::from_utf8_lossy(&add_verbose_help.stdout);
     assert!(add_verbose_help.contains("--jobs <auto|1|N>"));
     assert!(add_verbose_help.contains("--key <RAW_CONTENT_KEY>"));
+    assert!(add_verbose_help.contains("Context:"));
+    assert!(add_verbose_help.contains("imports a host file or directory"));
+    assert_contains_in_order(
+        &add_verbose_help,
+        &[
+            "Add a file or directory to a lockbox.",
+            "Context:",
+            "Usage: lockbox add",
+        ],
+    );
 
     let env_help = run_output(bin, &["env", "set", "--help"]);
     assert_success(&env_help);
     let env_help = String::from_utf8_lossy(&env_help.stdout);
     assert!(env_help.contains("-v, --value <VALUE>"));
+    assert!(!env_help.contains("Context:"));
 
     let env_help = run_output(bin, &["env", "--help"]);
     assert_success(&env_help);
     let env_help = String::from_utf8_lossy(&env_help.stdout);
     assert!(env_help.contains("Print one stored environment value by name."));
     assert!(env_help.contains("Print all non-secret environment values in an importable format."));
-    assert!(env_help.contains("Normal values are printed by `env get`"));
-    assert!(env_help.contains("Secret values are encrypted the same way"));
-    assert!(env_help.contains("require `env get --secret` to print"));
+    assert!(!env_help.contains("Normal values are printed by `env get`"));
+
+    let env_verbose_help = run_output(bin, &["env", "--help", "--verbose"]);
+    assert_success(&env_verbose_help);
+    let env_verbose_help = String::from_utf8_lossy(&env_verbose_help.stdout);
+    assert!(env_verbose_help.contains("Context:"));
+    assert!(env_verbose_help.contains("Normal values are printed by `env get`"));
+    assert!(env_verbose_help.contains("Secret values are encrypted the same way"));
+    assert!(env_verbose_help.contains("require `env get --secret` to print"));
+
+    let env_set_verbose_help = run_output(bin, &["env", "set", "--help", "--verbose"]);
+    assert_success(&env_set_verbose_help);
+    let env_set_verbose_help = String::from_utf8_lossy(&env_set_verbose_help.stdout);
+    assert!(env_set_verbose_help.contains("Context:"));
+    assert!(env_set_verbose_help.contains("Choose one value source"));
 
     let env_get_help = run_output(bin, &["env", "get", "--help"]);
     assert_success(&env_get_help);
@@ -73,42 +96,80 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_init_help = run_output(bin, &["vault", "init", "--help"]);
     assert_success(&vault_init_help);
     let vault_init_help = String::from_utf8_lossy(&vault_init_help.stdout);
-    assert!(vault_init_help.contains("A new vault also gets a default identity."));
+    assert!(!vault_init_help.contains("A new vault also gets a default identity."));
     assert!(vault_init_help.contains("--verify"));
     assert!(vault_init_help.contains("--overwrite"));
+
+    let vault_init_verbose_help = run_output(bin, &["vault", "init", "--help", "--verbose"]);
+    assert_success(&vault_init_verbose_help);
+    let vault_init_verbose_help = String::from_utf8_lossy(&vault_init_verbose_help.stdout);
+    assert!(vault_init_verbose_help.contains("Context:"));
+    assert!(vault_init_verbose_help.contains("A new vault also gets a default identity."));
 
     let vault_identity_create_help = run_output(bin, &["vault", "identity", "create", "--help"]);
     assert_success(&vault_identity_create_help);
     let vault_identity_create_help = String::from_utf8_lossy(&vault_identity_create_help.stdout);
     assert!(vault_identity_create_help.contains("Create one of your identities."));
-    assert!(vault_identity_create_help.contains("creates the `default` identity"));
+    assert!(!vault_identity_create_help.contains("creates the `default` identity"));
     assert!(vault_identity_create_help.contains("export-public"));
     assert!(vault_identity_create_help.contains("lockbox vault identity create laptop\n"));
     assert!(!vault_identity_create_help.contains("[public-key-output]"));
+
+    let vault_identity_create_verbose_help =
+        run_output(bin, &["vault", "identity", "create", "--help", "--verbose"]);
+    assert_success(&vault_identity_create_verbose_help);
+    let vault_identity_create_verbose_help =
+        String::from_utf8_lossy(&vault_identity_create_verbose_help.stdout);
+    assert!(vault_identity_create_verbose_help.contains("Context:"));
+    assert!(vault_identity_create_verbose_help.contains("creates the `default` identity"));
 
     let vault_identity_help = run_output(bin, &["vault", "identity", "--help"]);
     assert_success(&vault_identity_help);
     let vault_identity_help = String::from_utf8_lossy(&vault_identity_help.stdout);
     assert!(vault_identity_help.contains("Manage your lockbox unlock identities."));
-    assert!(vault_identity_help.contains("contains private unlock material"));
-    assert!(vault_identity_help.contains("share it so someone else can add you"));
-    assert!(vault_identity_help.contains("lockbox vault contact add"));
+    assert!(!vault_identity_help.contains("contains private unlock material"));
+    assert!(!vault_identity_help.contains("lockbox vault contact add"));
     assert!(!vault_identity_help.contains("on this machine"));
     assert!(vault_identity_help.contains("list"));
     assert!(vault_identity_help.contains("create"));
     assert!(vault_identity_help.contains("export"));
     assert!(!vault_identity_help.contains("  help"));
 
+    let vault_identity_verbose_help =
+        run_output(bin, &["vault", "identity", "--help", "--verbose"]);
+    assert_success(&vault_identity_verbose_help);
+    let vault_identity_verbose_help = String::from_utf8_lossy(&vault_identity_verbose_help.stdout);
+    assert!(vault_identity_verbose_help.contains("Context:"));
+    assert!(vault_identity_verbose_help.contains("contains private unlock material"));
+    assert!(vault_identity_verbose_help.contains("share it so someone else can add you"));
+    assert!(vault_identity_verbose_help.contains("lockbox vault contact add"));
+    assert!(!vault_identity_verbose_help.contains("on this machine"));
+    assert_contains_in_order(
+        &vault_identity_verbose_help,
+        &[
+            "Manage your lockbox unlock identities.",
+            "Context:",
+            "Usage: lockbox vault identity",
+        ],
+    );
+
     let vault_contact_help = run_output(bin, &["vault", "contact", "--help"]);
     assert_success(&vault_contact_help);
     let vault_contact_help = String::from_utf8_lossy(&vault_contact_help.stdout);
     assert!(vault_contact_help.contains("Manage contacts that can be given access to a lockbox."));
-    assert!(vault_contact_help.contains("Contacts are saved public keys"));
-    assert!(vault_contact_help.contains("unlocking requires the matching private identity"));
+    assert!(!vault_contact_help.contains("Contacts are saved public keys"));
     assert!(!vault_contact_help.contains("on this machine"));
     assert!(vault_contact_help.contains("list"));
     assert!(vault_contact_help.contains("add"));
     assert!(vault_contact_help.contains("remove"));
+
+    let vault_contact_verbose_help = run_output(bin, &["vault", "contact", "--help", "--verbose"]);
+    assert_success(&vault_contact_verbose_help);
+    let vault_contact_verbose_help = String::from_utf8_lossy(&vault_contact_verbose_help.stdout);
+    assert!(vault_contact_verbose_help.contains("Context:"));
+    assert!(vault_contact_verbose_help.contains("Contacts are saved public keys"));
+    assert!(vault_contact_verbose_help.contains("unlocking requires the matching private identity"));
+    assert!(!vault_contact_verbose_help.contains("on this machine"));
 
     let access_help = run_output(bin, &["access", "--help"]);
     assert_success(&access_help);
