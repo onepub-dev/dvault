@@ -188,7 +188,7 @@ fn unlock_path_or_backup_with_password(
         Err(primary_err) => {
             let lockbox_id = VaultUnlock::read_lockbox_id(path).map_err(|_| primary_err.clone())?;
             let vault_password = vault_password_from_env().map_err(|_| primary_err.clone())?;
-            let backup = VaultDirectory::open_default(&vault_password)
+            let backup = VaultDirectory::unlock_or_create_default(&vault_password)
                 .and_then(|vault| vault.load_key_directory_backup(lockbox_id))
                 .map_err(|_| primary_err.clone())?;
             VaultUnlock::key_directory_backup_with_password(&backup, password)
@@ -206,7 +206,7 @@ fn unlock_path_or_backup_with_recipient(
         Err(primary_err) => {
             let lockbox_id = VaultUnlock::read_lockbox_id(path).map_err(|_| primary_err.clone())?;
             let vault_password = vault_password_from_env().map_err(|_| primary_err.clone())?;
-            let backup = VaultDirectory::open_default(&vault_password)
+            let backup = VaultDirectory::unlock_or_create_default(&vault_password)
                 .and_then(|vault| vault.load_key_directory_backup(lockbox_id))
                 .map_err(|_| primary_err.clone())?;
             VaultUnlock::key_directory_backup_with_recipient(&backup, recipient)

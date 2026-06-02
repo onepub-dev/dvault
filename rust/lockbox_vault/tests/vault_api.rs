@@ -174,7 +174,7 @@ fn vault_unlock_populates_cache_for_password_lockbox() {
 fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backups() {
     let root = unique_dir("directory");
     let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
-    let vault = VaultDirectory::open(&root, &vault_password).unwrap();
+    let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
     let keypair = RecipientKeyPair::generate().unwrap();
     vault.store_private_key("default", &keypair).unwrap();
     let encrypted = fs::read(root.join("local-vault.lbox")).unwrap();
@@ -236,7 +236,7 @@ fn vault_unlock_uses_key_directory_backup_when_embedded_directory_is_corrupt() {
         .unwrap();
     lockbox.commit().unwrap();
     let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
-    VaultDirectory::open(&vault_root, &vault_password)
+    VaultDirectory::unlock_or_create(&vault_root, &vault_password)
         .unwrap()
         .store_key_directory_backup(
             lockbox.lockbox_id(),
@@ -305,7 +305,7 @@ fn vault_convenience_password_store_and_lock_all_flow() {
 fn vault_directory_public_crud_helpers_flow() {
     let root = unique_dir("directory-crud");
     let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
-    let vault = VaultDirectory::open(&root, &vault_password).unwrap();
+    let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
     assert_eq!(vault.root(), root.as_path());
     assert_eq!(vault.path(), root.join("local-vault.lbox").as_path());
 

@@ -38,18 +38,18 @@ impl VaultDirectory {
     /// Default name used for the primary local recipient key.
     pub const DEFAULT_KEY_NAME: &'static str = "default";
 
-    /// Opens the default vault directory using `password`.
+    /// Unlocks or creates the default vault directory using `password`.
     ///
     /// The directory is chosen by `default_vault_dir`.
-    pub fn open_default(password: &SecretString) -> Result<Self> {
-        Self::open(default_vault_dir()?, password)
+    pub fn unlock_or_create_default(password: &SecretString) -> Result<Self> {
+        Self::unlock_or_create(default_vault_dir()?, password)
     }
 
-    /// Opens or creates a vault directory at `root`.
+    /// Unlocks or creates a vault directory at `root`.
     ///
     /// The vault file is protected with `password`. When a new vault file is
     /// created, private file permissions are applied on supported platforms.
-    pub fn open(root: impl AsRef<Path>, password: &SecretString) -> Result<Self> {
+    pub fn unlock_or_create(root: impl AsRef<Path>, password: &SecretString) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         create_private_dir(&root)?;
         let path = root.join(VAULT_FILE_NAME);

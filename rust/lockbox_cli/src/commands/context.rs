@@ -154,13 +154,13 @@ pub(crate) fn remember_default_vault_password(password: &SecretString) -> Result
 
 pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
     if let Some(password) = SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
-        return VaultDirectory::open_default(&password);
+        return VaultDirectory::unlock_or_create_default(&password);
     }
 
     let platform_enabled = !platform_secret_store_disabled()?;
     if platform_enabled {
         if let Ok(Some(password)) = get_platform_vault_password() {
-            match VaultDirectory::open_default(&password) {
+            match VaultDirectory::unlock_or_create_default(&password) {
                 Ok(vault) => return Ok(vault),
                 Err(_) => {
                     let _ = forget_platform_vault_password();
@@ -170,7 +170,7 @@ pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
     }
 
     let password = prompt_secret("Vault password: ").map_err(|err| Error::Io(err.to_string()))?;
-    let vault = VaultDirectory::open_default(&password)?;
+    let vault = VaultDirectory::unlock_or_create_default(&password)?;
     if platform_enabled {
         let _ = put_platform_vault_password(&password);
     }

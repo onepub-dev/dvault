@@ -1145,6 +1145,34 @@ fn vault_init_existing_is_noop_unless_verify_is_requested() {
 }
 
 #[test]
+fn vault_init_verify_wrong_password_reports_vault_specific_error() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-init-wrong-password");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+
+    let output = Command::new(bin)
+        .args(["vault", "init", "--verify"])
+        .env("LOCKBOX_PASSWORD", "test-lockbox-password")
+        .env("LOCKBOX_VAULT_PASSWORD", "wrong-vault-password")
+        .env("LOCKBOX_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_VAULT_DIR", &vault_root)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("vault unlock failed: check the vault password"));
+    assert!(stderr.contains("local vault file may be damaged"));
+    assert!(!stderr.contains("content key"));
+    assert!(!stderr.contains("recipient keypair"));
+    assert!(!stderr.contains("local vault unlock state"));
+}
+
+#[test]
 fn vault_init_overwrite_replaces_existing_vault_with_warning() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("vault-init-overwrite");

@@ -1,6 +1,6 @@
 use super::context::{
-    default_vault, read_new_vault_password, read_vault_password, remember_default_vault_password,
-    require_arg, CliResult,
+    cli_error, default_vault, read_new_vault_password, read_vault_password,
+    remember_default_vault_password, require_arg, CliResult,
 };
 use super::output::{output_format_from_args, print_records};
 use lockbox_core::{Error, RecipientKeyPair};
@@ -128,7 +128,7 @@ fn init(args: &[String]) -> CliResult<()> {
             println!("and key-directory backups stored only in this vault.");
             let password = read_new_vault_password()?;
             fs::remove_file(&path)?;
-            let vault = VaultDirectory::open_default(&password)?;
+            let vault = VaultDirectory::unlock_or_create_default(&password)?;
             let generated = ensure_default_private_key(&vault)?;
             remember_default_vault_password(&password)?;
             println!("Vault replaced successfully.");
@@ -142,7 +142,15 @@ fn init(args: &[String]) -> CliResult<()> {
         }
         if verify {
             let password = read_vault_password("Vault password: ")?;
-            let vault = VaultDirectory::open_default(&password)?;
+            let vault = match VaultDirectory::unlock_or_create_default(&password) {
+                Ok(vault) => vault,
+                Err(Error::InvalidKey) => {
+                    return Err(cli_error(
+                        "vault unlock failed: check the vault password. If the password is correct, the local vault file may be damaged",
+                    ));
+                }
+                Err(err) => return Err(err.into()),
+            };
             remember_default_vault_password(&password)?;
             println!("Vault unlocked successfully.");
             println!("Directory: {}", vault.root().display());
@@ -162,7 +170,7 @@ fn init(args: &[String]) -> CliResult<()> {
         println!("Lockbox cannot recover the private keys stored in this vault.");
     }
     let password = read_new_vault_password()?;
-    let vault = VaultDirectory::open_default(&password)?;
+    let vault = VaultDirectory::unlock_or_create_default(&password)?;
     let generated = ensure_default_private_key(&vault)?;
     remember_default_vault_password(&password)?;
     println!("Vault created successfully.");
