@@ -597,7 +597,7 @@ fn vault_command(verbose: bool) -> Command {
                 .about("Manage contacts that can be given access to a lockbox.")
                 .disable_help_subcommand(true)
                 .after_help(
-                    "Contacts are saved public keys for other people or systems. A contact can be added to a lockbox access list, but cannot unlock lockboxes on this machine unless you also have the matching private identity.\n\nExamples:\n  lockbox vault contact list\n  lockbox vault contact add alice ./alice.pub\n  lockbox vault contact remove alice",
+                    "Contacts are saved public keys for other people or systems. A contact can be added to a lockbox access list, but cannot unlock a lockbox by itself; unlocking requires the matching private identity.\n\nExamples:\n  lockbox vault contact list\n  lockbox vault contact add alice ./alice.pub\n  lockbox vault contact remove alice",
                 )
                 .subcommand_required(true)
                 .arg_required_else_help(true)
@@ -640,10 +640,10 @@ fn vault_command(verbose: bool) -> Command {
 
 fn vault_identity_command(verbose: bool) -> Command {
     Command::new("identity")
-        .about("Manage identities that can unlock lockboxes on this machine.")
+        .about("Manage your lockbox unlock identities.")
         .disable_help_subcommand(true)
         .after_help(
-            "An identity is one of your local unlock identities. It includes private key material, so it can unlock lockboxes that grant access to it. To save someone else's public key, use `lockbox vault contact add`.\n\nExamples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity export-public laptop ./laptop.pub",
+            "An identity contains private unlock material for lockboxes that grant access to it. Export its public key and share it so someone else can add you to a lockbox access list. To save someone else's public key, use `lockbox vault contact add`.\n\nExamples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity export-public laptop ./laptop.pub",
         )
         .subcommand_required(true)
         .arg_required_else_help(true)

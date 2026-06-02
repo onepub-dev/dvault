@@ -89,10 +89,11 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_identity_help = run_output(bin, &["vault", "identity", "--help"]);
     assert_success(&vault_identity_help);
     let vault_identity_help = String::from_utf8_lossy(&vault_identity_help.stdout);
-    assert!(vault_identity_help
-        .contains("Manage identities that can unlock lockboxes on this machine."));
-    assert!(vault_identity_help.contains("An identity is one of your local unlock identities."));
+    assert!(vault_identity_help.contains("Manage your lockbox unlock identities."));
+    assert!(vault_identity_help.contains("contains private unlock material"));
+    assert!(vault_identity_help.contains("share it so someone else can add you"));
     assert!(vault_identity_help.contains("lockbox vault contact add"));
+    assert!(!vault_identity_help.contains("on this machine"));
     assert!(vault_identity_help.contains("list"));
     assert!(vault_identity_help.contains("create"));
     assert!(vault_identity_help.contains("export"));
@@ -103,6 +104,8 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_contact_help = String::from_utf8_lossy(&vault_contact_help.stdout);
     assert!(vault_contact_help.contains("Manage contacts that can be given access to a lockbox."));
     assert!(vault_contact_help.contains("Contacts are saved public keys"));
+    assert!(vault_contact_help.contains("unlocking requires the matching private identity"));
+    assert!(!vault_contact_help.contains("on this machine"));
     assert!(vault_contact_help.contains("list"));
     assert!(vault_contact_help.contains("add"));
     assert!(vault_contact_help.contains("remove"));
