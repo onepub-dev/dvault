@@ -57,7 +57,8 @@ impl VaultDirectory {
         let root = root.as_ref().to_path_buf();
         create_private_dir(&root)?;
         let path = root.join(VAULT_FILE_NAME);
-        let lockbox = if path.exists() {
+        let existed = path.exists();
+        let lockbox = if existed {
             Lockbox::open_file(&path, LockboxUnlock::Password(password))?
         } else {
             let lockbox = Lockbox::create_file(&path, LockboxProtection::Password(password))?;
@@ -69,7 +70,7 @@ impl VaultDirectory {
             path,
             lockbox: RefCell::new(lockbox),
         };
-        vault.ensure_structure_version()?;
+        vault.ensure_structure_version(!existed)?;
         Ok(vault)
     }
 
@@ -286,7 +287,7 @@ impl VaultDirectory {
         Ok(out)
     }
 
-    fn ensure_structure_version(&self) -> Result<()> {
+    fn ensure_structure_version(&self, initialize_missing: bool) -> Result<()> {
         match self.read_structure_version()? {
             Some(CURRENT_VAULT_STRUCTURE_VERSION) => Ok(()),
             Some(version) if version > CURRENT_VAULT_STRUCTURE_VERSION => {
@@ -294,17 +295,14 @@ impl VaultDirectory {
                     "local vault structure version {version} is newer than this Lockbox build supports ({CURRENT_VAULT_STRUCTURE_VERSION}); upgrade Lockbox before using this vault"
                 )))
             }
-            Some(version) => self.migrate_structure_version(version),
-            None => self.write_structure_version(CURRENT_VAULT_STRUCTURE_VERSION),
-        }
-    }
-
-    fn migrate_structure_version(&self, version: u32) -> Result<()> {
-        match version {
-            0 => self.write_structure_version(CURRENT_VAULT_STRUCTURE_VERSION),
-            version => Err(Error::Configuration(format!(
+            Some(version) => Err(Error::Configuration(format!(
                 "local vault structure version {version} cannot be migrated by this Lockbox build"
             ))),
+            None if initialize_missing => self.write_structure_version(CURRENT_VAULT_STRUCTURE_VERSION),
+            None => Err(Error::Configuration(
+                "local vault structure version is missing; recreate the vault with this Lockbox build"
+                    .to_string(),
+            )),
         }
     }
 

@@ -222,7 +222,7 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
 }
 
 #[test]
-fn vault_directory_migrates_legacy_unversioned_vaults() {
+fn vault_directory_rejects_unversioned_existing_vaults() {
     let root = unique_dir("legacy-vault-version");
     fs::create_dir_all(&root).unwrap();
     let vault_path = root.join("local-vault.lbox");
@@ -230,17 +230,17 @@ fn vault_directory_migrates_legacy_unversioned_vaults() {
 
     Lockbox::create_file(&vault_path, LockboxProtection::Password(&vault_password)).unwrap();
 
-    let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
-    assert_eq!(
-        vault.structure_version().unwrap(),
-        CURRENT_VAULT_STRUCTURE_VERSION
-    );
+    assert!(matches!(
+        VaultDirectory::unlock_or_create(&root, &vault_password),
+        Err(Error::Configuration(message))
+            if message.contains("structure version is missing")
+    ));
 
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn vault_directory_migrates_explicit_legacy_structure_version() {
+fn vault_directory_rejects_older_structure_versions() {
     let root = unique_dir("explicit-legacy-vault-version");
     let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
     VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
@@ -253,11 +253,10 @@ fn vault_directory_migrates_explicit_legacy_structure_version() {
         .unwrap();
     lockbox.commit().unwrap();
 
-    let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
-    assert_eq!(
-        vault.structure_version().unwrap(),
-        CURRENT_VAULT_STRUCTURE_VERSION
-    );
+    assert!(matches!(
+        VaultDirectory::unlock_or_create(&root, &vault_password),
+        Err(Error::Configuration(message)) if message.contains("cannot be migrated")
+    ));
 
     let _ = fs::remove_dir_all(root);
 }
