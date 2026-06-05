@@ -3,16 +3,20 @@ use super::context::{
     remember_default_vault_password, require_arg, CliResult,
 };
 use super::output::{output_format_from_args, print_records};
-use lockbox_core::{Error, RecipientKeyPair};
+use lockbox_core::{Error, RecipientKeyPair, RecipientPublicKey};
+use lockbox_share_protocol::{ContactShare, ShareClientPool};
 use lockbox_vault::{
     default_vault_dir, default_vault_path, disable_platform_secret_store,
-    enable_platform_secret_store, export_private_key, export_public_key,
+    enable_platform_secret_store, encode_hex, export_private_key, export_public_key,
     forget_platform_vault_password, import_private_key_file, import_public_key,
     list as list_open_lockboxes, local_vault, platform_secret_store_status, stop as stop_agent,
-    KeyFormat, VaultDirectory,
+    IdentityGenerationStatus, KeyFormat, VaultDirectory,
 };
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Write};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn run(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault command")?;
@@ -21,8 +25,23 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "path" => path(),
         "identity" => identity_command(&args[1..]),
         "contact" => contact_command(&args[1..]),
+        "share" => share_command(&args[1..]),
+        "lockbox" => lockbox_command(&args[1..]),
         "sessions" => sessions(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
+    }
+}
+
+fn share_command(args: &[String]) -> CliResult<()> {
+    match args.first().map(String::as_str) {
+        Some("publish") => share_publish(&args[1..]),
+        Some("receive") | Some("fetch") => share_receive(&args[1..]),
+        Some("delete") | Some("rm") => share_delete(&args[1..]),
+        _ => Err(Error::InvalidInput(
+            "missing vault share command; use `lockbox vault share publish`, `lockbox vault share receive`, or `lockbox vault share delete`"
+                .to_string(),
+        )
+        .into()),
     }
 }
 
@@ -31,10 +50,12 @@ fn identity_command(args: &[String]) -> CliResult<()> {
     match command {
         "list" | "ls" => list_identities(&args[1..]),
         "create" | "gen" | "generate" => keygen(&args[1..]),
+        "history" => identity_history(&args[1..]),
         "import" => import_key(&args[1..]),
         "export" => export_public(&args[1..]),
         "export-private" => export_key(&args[1..]),
         "remove" | "rm" => remove_key(&args[1..]),
+        "rotate" => rotate_key(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault identity command: {command}")).into()),
     }
 }
@@ -46,6 +67,18 @@ fn contact_command(args: &[String]) -> CliResult<()> {
         Some("remove" | "rm") => remove_contact(&args[1..]),
         _ => Err(Error::InvalidInput(
             "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact add <name> <public-key>`, or `lockbox vault contact remove <name>`"
+                .to_string(),
+        )
+        .into()),
+    }
+}
+
+fn lockbox_command(args: &[String]) -> CliResult<()> {
+    match args.first().map(String::as_str) {
+        Some("list" | "ls") => list_known_lockboxes(&args[1..]),
+        Some("forget") => forget_known_lockbox(&args[1..]),
+        _ => Err(Error::InvalidInput(
+            "missing vault lockbox command; use `lockbox vault lockbox list` or `lockbox vault lockbox forget <lockbox>`"
                 .to_string(),
         )
         .into()),
@@ -231,6 +264,253 @@ fn contact_add(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
+fn share_publish(args: &[String]) -> CliResult<()> {
+    let options = ShareCliOptions::parse(args)?;
+    let identity = options
+        .positionals
+        .first()
+        .map(String::as_str)
+        .unwrap_or(VaultDirectory::DEFAULT_KEY_NAME);
+    let vault = default_vault()?;
+    let keypair = vault.load_private_key(identity)?;
+    let public_key = keypair.public_key().to_bytes();
+    let now = unix_ms_now();
+    let ttl_seconds = options.ttl_seconds.unwrap_or(900);
+    let expires_at = now.saturating_add(ttl_seconds as u64 * 1000);
+    let nonce = share_nonce(identity, &public_key, now);
+    let fingerprint = public_key_fingerprint(&public_key);
+    let pool = share_client_pool(&options)?;
+    let result = pool.share_contact(
+        ttl_seconds,
+        options.max_fetches.unwrap_or(1),
+        ContactShare {
+            identity,
+            public_key: &public_key,
+            fingerprint: &fingerprint,
+            share_nonce: &nonce,
+            created_at_unix_ms: now,
+            expires_at_unix_ms: expires_at,
+        },
+    )?;
+    println!("share_code={}", result.share_code);
+    println!("delete_token={}", encode_hex(&result.delete_token));
+    println!("expires_at_unix_ms={}", result.expires_at_unix_ms);
+    Ok(())
+}
+
+fn share_receive(args: &[String]) -> CliResult<()> {
+    let options = ShareCliOptions::parse(args)?;
+    let share_code = options
+        .positionals
+        .first()
+        .ok_or_else(|| Error::InvalidInput("missing share code".to_string()))?;
+    let contact_name = options
+        .positionals
+        .get(1)
+        .ok_or_else(|| Error::InvalidInput("missing contact name".to_string()))?;
+    let pool = share_client_pool(&options)?;
+    let fetched = pool.fetch(share_code)?;
+    let contact = lockbox_share_protocol::decode_contact_share(&fetched.payload)?;
+    let recipient = RecipientPublicKey::from_bytes(&contact.public_key)?;
+    let vault = default_vault()?;
+    if vault.trusted_recipient_exists(contact_name)? && !options.overwrite {
+        return Err(Error::AlreadyExists(format!("contact {contact_name}")).into());
+    }
+    vault.store_trusted_recipient(contact_name, &recipient)?;
+    println!("contact={contact_name}");
+    println!("identity={}", contact.identity);
+    println!("fingerprint={}", encode_hex(&contact.fingerprint));
+    Ok(())
+}
+
+fn share_delete(args: &[String]) -> CliResult<()> {
+    let options = ShareCliOptions::parse(args)?;
+    let share_code = options
+        .positionals
+        .first()
+        .ok_or_else(|| Error::InvalidInput("missing share code".to_string()))?;
+    let delete_token = options
+        .positionals
+        .get(1)
+        .ok_or_else(|| Error::InvalidInput("missing delete token".to_string()))?;
+    let delete_token = decode_hex(delete_token)?;
+    let deleted = share_client_pool(&options)?.delete(share_code, &delete_token)?;
+    println!("deleted={}", if deleted { "yes" } else { "no" });
+    Ok(())
+}
+
+#[derive(Default)]
+struct ShareCliOptions {
+    server: Option<String>,
+    topology_url: Option<String>,
+    ttl_seconds: Option<u32>,
+    max_fetches: Option<u16>,
+    overwrite: bool,
+    positionals: Vec<String>,
+}
+
+impl ShareCliOptions {
+    fn parse(args: &[String]) -> CliResult<Self> {
+        let mut options = ShareCliOptions::default();
+        let mut index = 0usize;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--server" => {
+                    index += 1;
+                    options.server = Some(require_arg(args, index, "--server value")?.to_string());
+                }
+                "--topology-url" => {
+                    index += 1;
+                    options.topology_url =
+                        Some(require_arg(args, index, "--topology-url value")?.to_string());
+                }
+                "--ttl" => {
+                    index += 1;
+                    options.ttl_seconds = Some(require_arg(args, index, "--ttl value")?.parse()?);
+                }
+                "--max-fetches" => {
+                    index += 1;
+                    options.max_fetches =
+                        Some(require_arg(args, index, "--max-fetches value")?.parse()?);
+                }
+                "--overwrite" => options.overwrite = true,
+                other => options.positionals.push(other.to_string()),
+            }
+            index += 1;
+        }
+        Ok(options)
+    }
+}
+
+fn share_client_pool(options: &ShareCliOptions) -> CliResult<ShareClientPool> {
+    if let Some(topology_url) = &options.topology_url {
+        return Ok(ShareClientPool::discover(&normalize_topology_url(
+            topology_url,
+        ))?);
+    }
+    if let Some(server) = &options.server {
+        return Ok(ShareClientPool::new([normalize_share_url(server)])?);
+    }
+    let config = read_share_config()?;
+    if let Some(topology_url) = config.topology_url {
+        return Ok(ShareClientPool::discover(&normalize_topology_url(
+            &topology_url,
+        ))?);
+    }
+    Ok(ShareClientPool::new([normalize_share_url(
+        config.server.as_deref().unwrap_or("keyshare.onepub.dev"),
+    )])?)
+}
+
+#[derive(Default)]
+struct ShareConfig {
+    server: Option<String>,
+    topology_url: Option<String>,
+}
+
+fn read_share_config() -> CliResult<ShareConfig> {
+    let path = std::env::var("LOCKBOX_SHARE_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or(default_vault_dir()?.join("config.yaml"));
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(ShareConfig::default()),
+        Err(err) => return Err(err.into()),
+    };
+    let mut in_share = false;
+    let mut config = ShareConfig::default();
+    for raw_line in text.lines() {
+        let line = raw_line
+            .split_once('#')
+            .map(|(value, _)| value)
+            .unwrap_or(raw_line);
+        if line.trim().is_empty() {
+            continue;
+        }
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            in_share = line.trim() == "share:";
+            continue;
+        }
+        if !in_share {
+            continue;
+        }
+        let Some((key, value)) = line.trim().split_once(':') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').to_string();
+        match key.trim() {
+            "server" => config.server = Some(value),
+            "topology_url" => config.topology_url = Some(value),
+            _ => {}
+        }
+    }
+    Ok(config)
+}
+
+fn normalize_share_url(value: &str) -> String {
+    let value = value.trim();
+    if value.starts_with("http://") || value.starts_with("https://") {
+        value.to_string()
+    } else {
+        format!("http://{value}/v1/share")
+    }
+}
+
+fn normalize_topology_url(value: &str) -> String {
+    let value = value.trim();
+    if value.starts_with("http://") || value.starts_with("https://") {
+        value.to_string()
+    } else {
+        format!("http://{value}/v1/topology")
+    }
+}
+
+fn public_key_fingerprint(public_key: &[u8]) -> Vec<u8> {
+    Sha256::digest(public_key).to_vec()
+}
+
+fn share_nonce(identity: &str, public_key: &[u8], now: u64) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(identity.as_bytes());
+    hasher.update(public_key);
+    hasher.update(now.to_be_bytes());
+    hasher.update(std::process::id().to_be_bytes());
+    hasher.finalize()[..24].to_vec()
+}
+
+fn unix_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn decode_hex(value: &str) -> CliResult<Vec<u8>> {
+    let value = value.trim();
+    if value.len() % 2 != 0 {
+        return Err(Error::InvalidInput("hex value has odd length".to_string()).into());
+    }
+    let mut out = Vec::with_capacity(value.len() / 2);
+    let bytes = value.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let high = hex_digit(bytes[index])?;
+        let low = hex_digit(bytes[index + 1])?;
+        out.push((high << 4) | low);
+        index += 2;
+    }
+    Ok(out)
+}
+
+fn hex_digit(byte: u8) -> CliResult<u8> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(Error::InvalidInput("hex value contains non-hex digits".to_string()).into()),
+    }
+}
+
 fn import_key(args: &[String]) -> CliResult<()> {
     let name = require_arg(args, 0, "identity name")?;
     let private_path = require_arg(args, 1, "private key path")?;
@@ -272,6 +552,20 @@ fn remove_key(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
+fn rotate_key(args: &[String]) -> CliResult<()> {
+    let name = args
+        .first()
+        .map(String::as_str)
+        .unwrap_or(VaultDirectory::DEFAULT_KEY_NAME);
+    let history = default_vault()?.rotate_private_key(name)?;
+    println!("Rotated vault identity: {name}");
+    println!("Active generation: {}", history.active_generation);
+    println!(
+        "Run `lockbox access refresh --all {name}` to update remembered lockboxes that use this identity."
+    );
+    Ok(())
+}
+
 fn remove_contact(args: &[String]) -> CliResult<()> {
     let name = require_arg(args, 0, "contact name")?;
     default_vault()?.delete_trusted_recipient(name)?;
@@ -289,6 +583,45 @@ fn list_identities(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
+fn identity_history(args: &[String]) -> CliResult<()> {
+    let (args, format) = output_format_from_args(args)?;
+    let name = args
+        .first()
+        .map(String::as_str)
+        .unwrap_or(VaultDirectory::DEFAULT_KEY_NAME);
+    let history = default_vault()?.list_identity_generations(name)?;
+    let rows = history
+        .generations
+        .into_iter()
+        .map(|generation| {
+            vec![
+                history.name.clone(),
+                generation.index.to_string(),
+                identity_generation_status(generation.status).to_string(),
+                encode_hex(&generation.recipient_fingerprint),
+                generation.created_at_unix_ms.to_string(),
+                generation
+                    .retired_at_unix_ms
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_records(
+        &[
+            "identity",
+            "generation",
+            "status",
+            "fingerprint",
+            "created_at_unix_ms",
+            "retired_at_unix_ms",
+        ],
+        rows,
+        format,
+    )?;
+    Ok(())
+}
+
 fn list_contacts(args: &[String]) -> CliResult<()> {
     let (_, format) = output_format_from_args(args)?;
     let vault = default_vault()?;
@@ -298,6 +631,49 @@ fn list_contacts(args: &[String]) -> CliResult<()> {
     }
     print_records(&["name"], rows, format)?;
     Ok(())
+}
+
+fn list_known_lockboxes(args: &[String]) -> CliResult<()> {
+    let (_, format) = output_format_from_args(args)?;
+    let vault = default_vault()?;
+    let mut rows = Vec::new();
+    for lockbox in vault.list_known_lockboxes()? {
+        rows.push(vec![
+            lockbox.path.clone(),
+            known_lockbox_state(&lockbox.path).to_string(),
+            lockbox.lockbox_id.to_string(),
+            lockbox.last_seen_unix_ms.to_string(),
+        ]);
+    }
+    print_records(
+        &["path", "state", "lockbox_id", "last_seen_unix_ms"],
+        rows,
+        format,
+    )?;
+    Ok(())
+}
+
+fn forget_known_lockbox(args: &[String]) -> CliResult<()> {
+    let path = require_arg(args, 0, "lockbox")?;
+    default_vault()?.forget_known_lockbox(path)?;
+    println!("Forgot known lockbox: {path}");
+    Ok(())
+}
+
+fn known_lockbox_state(path: &str) -> &'static str {
+    match fs::metadata(path) {
+        Ok(_) => "present",
+        Err(err) if err.kind() == io::ErrorKind::NotFound => "missing",
+        Err(_) => "inaccessible",
+    }
+}
+
+fn identity_generation_status(status: IdentityGenerationStatus) -> &'static str {
+    match status {
+        IdentityGenerationStatus::Active => "active",
+        IdentityGenerationStatus::Retired => "retired",
+        IdentityGenerationStatus::Compromised => "compromised",
+    }
 }
 
 fn sessions(args: &[String]) -> CliResult<()> {

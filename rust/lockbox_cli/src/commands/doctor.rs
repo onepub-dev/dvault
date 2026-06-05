@@ -1,6 +1,7 @@
 use super::context::CliResult;
 use lockbox_vault::{
-    default_vault_path, is_running, platform_secret_store_status, verify_agent_transport_security,
+    default_vault_path, get_platform_vault_password, is_running, platform_secret_store_disabled,
+    platform_secret_store_status, verify_agent_transport_security, SecretString, VaultDirectory,
 };
 use std::fs::OpenOptions;
 
@@ -46,6 +47,41 @@ pub(crate) fn run() -> CliResult<()> {
         }
     );
     println!("  running: {}", yes_no(is_running()));
+    println!();
+    println!("Known lockboxes");
+    match default_vault_noninteractive() {
+        Ok(Some(vault)) => {
+            let known = vault.list_known_lockboxes()?;
+            let mut present = 0usize;
+            let mut missing = Vec::new();
+            let mut inaccessible = Vec::new();
+            for lockbox in known {
+                match std::fs::metadata(&lockbox.path) {
+                    Ok(_) => present += 1,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        missing.push(lockbox.path)
+                    }
+                    Err(_) => inaccessible.push(lockbox.path),
+                }
+            }
+            println!("  present: {present}");
+            println!("  missing: {}", missing.len());
+            println!("  inaccessible: {}", inaccessible.len());
+            if !missing.is_empty() {
+                println!("  missing paths:");
+                for path in missing {
+                    println!("    {path}");
+                    println!("      run: lockbox vault lockbox forget {path}");
+                }
+            }
+        }
+        Ok(None) => {
+            println!("  not checked: vault is locked");
+        }
+        Err(err) => {
+            println!("  not checked: {err}");
+        }
+    }
     Ok(())
 }
 
@@ -55,4 +91,16 @@ fn yes_no(value: bool) -> &'static str {
     } else {
         "no"
     }
+}
+
+fn default_vault_noninteractive() -> Result<Option<VaultDirectory>, Box<dyn std::error::Error>> {
+    if let Some(password) = SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
+        return Ok(Some(VaultDirectory::unlock_or_create_default(&password)?));
+    }
+    if !platform_secret_store_disabled()? {
+        if let Ok(Some(password)) = get_platform_vault_password() {
+            return Ok(Some(VaultDirectory::unlock_or_create_default(&password)?));
+        }
+    }
+    Ok(None)
 }

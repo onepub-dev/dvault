@@ -1,0 +1,19 @@
+[package]
+name = "lockbox_share_server"
+version = "0.1.0"
+edition = "2021"
+license-file = "../../LICENSE"
+description = "High-throughput Lockbox contact share rendezvous server"
+
+[lib]
+name = "lockbox_share_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lockbox-share-server"
+path = "src/main.rs"
+
+[dependencies]
+getrandom = "0.2"
+lockbox_share_protocol = { path = "../lockbox_share_protocol" }
+sha2 = "0.10"

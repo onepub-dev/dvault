@@ -561,6 +561,39 @@ fn access_command(verbose: bool) -> Command {
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("slot-id", "Access slot id.")),
         )
+        .subcommand(
+            Command::new("refresh")
+                .about("Refresh stale lockbox access entries.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox access refresh project.lbox alice\n  lockbox access refresh --all alice\n  lockbox access refresh --all --dry-run",
+                    "Context:\n  Access refresh checks named recipient access entries and rewrites matching entries to the current vault identity key. Use --dry-run first to see the planned changes and missing known lockboxes.",
+                ))
+                .arg(
+                    Arg::new("all")
+                        .long("all")
+                        .action(ArgAction::SetTrue)
+                        .help("Check every lockbox known to the vault."),
+                )
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX IDENTITY | IDENTITY")
+                        .num_args(0..=2)
+                        .help("Without --all, pass lockbox and identity. With --all, optionally pass one identity."),
+                )
+                .arg(
+                    Arg::new("dry-run")
+                        .long("dry-run")
+                        .action(ArgAction::SetTrue)
+                        .help("Print the refresh plan without changing lockboxes."),
+                )
+                .arg(
+                    Arg::new("yes")
+                        .long("yes")
+                        .action(ArgAction::SetTrue)
+                        .help("Apply without interactive confirmation."),
+                ),
+        )
 }
 
 fn vault_command(verbose: bool) -> Command {
@@ -736,6 +769,108 @@ fn vault_command(verbose: bool) -> Command {
                         .arg(required("name", "Contact name.")),
                 ),
         )
+        .subcommand(
+            Command::new("share")
+                .about("Share vault identity contact details through a share server.")
+                .disable_help_subcommand(true)
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault share publish\n  lockbox vault share receive 0123456789012 alice\n  lockbox vault share delete 0123456789012 <delete-token>",
+                    "Context:\n  Vault share publishes or receives typed contact-share payloads through the configured binary share server protocol. Configure share.server or share.topology_url in the vault config YAML, or pass --server/--topology-url.",
+                ))
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .subcommand(
+                    Command::new("publish")
+                        .about("Publish one vault identity public key as a share.")
+                        .arg(share_server_arg())
+                        .arg(share_topology_arg())
+                        .arg(optional("identity", "Vault identity name. Defaults to default."))
+                        .arg(
+                            Arg::new("ttl")
+                                .long("ttl")
+                                .value_name("SECONDS")
+                                .help("Share lifetime in seconds."),
+                        )
+                        .arg(
+                            Arg::new("max-fetches")
+                                .long("max-fetches")
+                                .value_name("N")
+                                .help("Maximum successful receives."),
+                        ),
+                )
+                .subcommand(
+                    Command::new("receive")
+                        .about("Receive a contact share and save it as a contact.")
+                        .visible_alias("fetch")
+                        .arg(share_server_arg())
+                        .arg(share_topology_arg())
+                        .arg(
+                            Arg::new("overwrite")
+                                .long("overwrite")
+                                .action(ArgAction::SetTrue)
+                                .help("Replace an existing contact."),
+                        )
+                        .arg(required("share-code", "Share code."))
+                        .arg(required("contact-name", "Contact name to save.")),
+                )
+                .subcommand(
+                    Command::new("delete")
+                        .about("Delete a pending share with its delete token.")
+                        .visible_alias("rm")
+                        .arg(share_server_arg())
+                        .arg(share_topology_arg())
+                        .arg(required("share-code", "Share code."))
+                        .arg(required("delete-token", "Delete token printed by publish.")),
+                ),
+        )
+        .subcommand(
+            Command::new("lockbox")
+                .about("Manage lockboxes remembered by the vault.")
+                .disable_help_subcommand(true)
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault lockbox list\n  lockbox vault lockbox forget ./old-project.lbox",
+                    "Context:\n  The vault remembers lockboxes it has created, unlocked, or modified so bulk maintenance commands can find them later. Forget removes only the vault reference; it does not delete the lockbox file.",
+                ))
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .subcommand(
+                    Command::new("list")
+                        .about("List lockboxes remembered by the vault.")
+                        .visible_alias("ls")
+                        .after_help(verbose_help(
+                            verbose,
+                            "Examples:\n  lockbox vault lockbox list\n  lockbox vault lockbox list --format json",
+                            "Context:\n  Lockbox list reports remembered lockbox paths and whether each file is present, missing, or inaccessible.",
+                        ))
+                        .arg(output_format_arg()),
+                )
+                .subcommand(
+                    Command::new("forget")
+                        .about("Forget one remembered lockbox path.")
+                        .after_help(verbose_help(
+                            verbose,
+                            "Examples:\n  lockbox vault lockbox forget ./old-project.lbox",
+                            "Context:\n  Forget removes a stale known-lockbox record from the vault. It does not delete the lockbox file.",
+                        ))
+                        .arg(required("lockbox", "Lockbox path to forget.")),
+                ),
+        )
+}
+
+fn share_server_arg() -> Arg {
+    Arg::new("server")
+        .long("server")
+        .value_name("URL")
+        .help("Share server /v1/share URL or host.")
+}
+
+fn share_topology_arg() -> Arg {
+    Arg::new("topology-url")
+        .long("topology-url")
+        .value_name("URL")
+        .help("Share server /v1/topology URL.")
 }
 
 fn vault_identity_command(verbose: bool) -> Command {
@@ -776,6 +911,17 @@ fn vault_identity_command(verbose: bool) -> Command {
                         .help("Replace an existing identity."),
                 )
                 .arg(optional("name", "Identity name."))
+        )
+        .subcommand(
+            Command::new("history")
+                .about("Show identity key generations.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault identity history\n  lockbox vault identity history laptop --format json",
+                    "Context:\n  Identity history shows the active and retired key generations for one vault identity. Retired generations are retained so older lockboxes can still be opened until their access entries are refreshed.",
+                ))
+                .arg(output_format_arg())
+                .arg(optional("name", "Identity name.")),
         )
         .subcommand(
             Command::new("import")
@@ -839,6 +985,16 @@ fn vault_identity_command(verbose: bool) -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Remove the key without an interactive confirmation."),
                 )
+                .arg(optional("name", "Identity name.")),
+        )
+        .subcommand(
+            Command::new("rotate")
+                .about("Rotate an identity to a new key generation.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault identity rotate\n  lockbox vault identity rotate laptop",
+                    "Context:\n  Identity rotate creates a new active private key generation and retires the previous active generation. Refresh remembered lockboxes afterward so they grant access to the new key.",
+                ))
                 .arg(optional("name", "Identity name.")),
         )
 }

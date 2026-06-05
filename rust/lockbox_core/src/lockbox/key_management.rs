@@ -42,7 +42,7 @@ pub enum LockboxProtection<'a> {
     Password(&'a SecretString),
     /// Generate a content key and protect it with a recipient public key.
     ///
-    /// This is the public half of an ML-KEM recipient keypair.
+    /// This is the public half of a hybrid recipient keypair.
     RecipientPublicKey {
         name: Option<String>,
         recipient: RecipientPublicKey,
@@ -281,7 +281,7 @@ impl Lockbox {
     ) -> Result<UnlockedContentKey> {
         for directory in key_directories_from_bytes(bytes)? {
             for slot in directory.slots {
-                let Ok(key) = slot.try_ml_kem(recipient) else {
+                let Ok(key) = slot.try_recipient(recipient) else {
                     continue;
                 };
                 return Ok(UnlockedContentKey {
@@ -301,7 +301,7 @@ impl Lockbox {
         let storage = StorageBackend::file(path)?;
         for directory in key_directories_from_storage(&storage)? {
             for slot in directory.slots {
-                let Ok(key) = slot.try_ml_kem(recipient) else {
+                let Ok(key) = slot.try_recipient(recipient) else {
                     continue;
                 };
                 return Ok(UnlockedContentKey {
@@ -321,7 +321,7 @@ impl Lockbox {
     ) -> Result<UnlockedContentKey> {
         let directory = read_key_directory_backup(bytes)?;
         for slot in directory.slots {
-            let Ok(key) = slot.try_ml_kem(recipient) else {
+            let Ok(key) = slot.try_recipient(recipient) else {
                 continue;
             };
             return Ok(UnlockedContentKey {
@@ -392,9 +392,9 @@ impl Lockbox {
         recipient: &RecipientPublicKey,
     ) -> Result<u64> {
         let id = next_key_slot_id(&self.key_slots);
-        let slot = self
-            .key
-            .with_bytes(|content_key| KeySlot::ml_kem_1024(id, name, recipient, content_key))??;
+        let slot = self.key.with_bytes(|content_key| {
+            KeySlot::hybrid_recipient(id, name, recipient, content_key)
+        })??;
         self.key_slots.push(slot);
         self.mark_key_directory_dirty();
         Ok(id)

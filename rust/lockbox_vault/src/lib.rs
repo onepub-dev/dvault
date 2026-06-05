@@ -55,6 +55,7 @@ pub use platform_secret_store::{
 };
 pub use vault::{local_vault, LocalVault, Vault};
 pub use vault_directory::{
-    default_vault_dir, default_vault_path, StoredTrustedRecipient, VaultDirectory,
+    default_vault_dir, default_vault_path, IdentityGeneration, IdentityGenerationStatus,
+    IdentityHistory, KnownLockbox, StoredTrustedRecipient, VaultDirectory,
     CURRENT_VAULT_STRUCTURE_VERSION,
 };

@@ -4,8 +4,8 @@ use lockbox_core::{
     SecretVec,
 };
 use lockbox_vault::{
-    export_private_key, import_private_key_file, ContentKeyStore, KeyFormat, SecretString, Vault,
-    VaultDirectory, CURRENT_VAULT_STRUCTURE_VERSION,
+    export_private_key, import_private_key_file, ContentKeyStore, IdentityGenerationStatus,
+    KeyFormat, SecretString, Vault, VaultDirectory, CURRENT_VAULT_STRUCTURE_VERSION,
 };
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -186,8 +186,8 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
     assert!(!String::from_utf8_lossy(&encrypted).contains("private-key-password"));
     let loaded = vault.load_private_key("default").unwrap();
     assert_eq!(
-        loaded.private_seed().unwrap(),
-        keypair.private_seed().unwrap()
+        loaded.private_key_record().unwrap(),
+        keypair.private_key_record().unwrap()
     );
 
     vault
@@ -217,6 +217,16 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
         backup
     );
     assert_eq!(vault.key_directory_backup_count().unwrap(), 1);
+
+    vault
+        .remember_known_lockbox(lockbox.lockbox_id(), &lockbox_path)
+        .unwrap();
+    let known = vault.list_known_lockboxes().unwrap();
+    assert_eq!(known.len(), 1);
+    assert_eq!(known[0].lockbox_id, lockbox.lockbox_id());
+    assert_eq!(known[0].path, lockbox_path.to_string_lossy());
+    vault.forget_known_lockbox(&lockbox_path).unwrap();
+    assert!(vault.list_known_lockboxes().unwrap().is_empty());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -388,9 +398,9 @@ fn vault_directory_public_crud_helpers_flow() {
         vault
             .load_private_key("default")
             .unwrap()
-            .private_seed()
+            .private_key_record()
             .unwrap(),
-        keypair.private_seed().unwrap()
+        keypair.private_key_record().unwrap()
     );
     vault.delete_private_key("default").unwrap();
     assert!(!vault.private_key_exists("default").unwrap());
@@ -431,6 +441,77 @@ fn vault_directory_public_crud_helpers_flow() {
 }
 
 #[test]
+fn vault_directory_tracks_identity_generations_and_rotation() {
+    let root = unique_dir("identity-generations");
+    let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
+    let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
+
+    let original = RecipientKeyPair::generate().unwrap();
+    vault.store_private_key("default", &original).unwrap();
+
+    let history = vault.list_identity_generations("default").unwrap();
+    assert_eq!(history.active_generation, 1);
+    assert_eq!(history.generations.len(), 1);
+    assert_eq!(history.generations[0].index, 1);
+    assert_eq!(
+        history.generations[0].status,
+        IdentityGenerationStatus::Active
+    );
+    assert_eq!(
+        vault
+            .load_private_key_generation("default", 1)
+            .unwrap()
+            .private_key_record()
+            .unwrap(),
+        original.private_key_record().unwrap()
+    );
+    assert_eq!(
+        vault.list_private_keys().unwrap(),
+        vec!["default".to_string()]
+    );
+
+    let rotated = vault.rotate_private_key("default").unwrap();
+    assert_eq!(rotated.active_generation, 2);
+    assert_eq!(rotated.generations.len(), 2);
+    assert_eq!(
+        rotated.generations[0].status,
+        IdentityGenerationStatus::Retired
+    );
+    assert!(rotated.generations[0].retired_at_unix_ms.is_some());
+    assert_eq!(
+        rotated.generations[1].status,
+        IdentityGenerationStatus::Active
+    );
+    assert_eq!(
+        vault
+            .load_private_key_generation("default", 1)
+            .unwrap()
+            .private_key_record()
+            .unwrap(),
+        original.private_key_record().unwrap()
+    );
+    let active = vault.load_private_key("default").unwrap();
+    assert_eq!(
+        vault
+            .load_private_key_generation("default", 2)
+            .unwrap()
+            .private_key_record()
+            .unwrap(),
+        active.private_key_record().unwrap()
+    );
+    assert_ne!(
+        active.private_key_record().unwrap(),
+        original.private_key_record().unwrap()
+    );
+    assert_eq!(
+        vault.list_private_keys().unwrap(),
+        vec!["default".to_string()]
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn private_key_file_import_uses_secure_import_path() {
     let root = unique_dir("private-key-file-import");
     fs::create_dir_all(&root).unwrap();
@@ -444,8 +525,8 @@ fn private_key_file_import_uses_secure_import_path() {
 
     let loaded = import_private_key_file(&path).unwrap();
     assert_eq!(
-        loaded.private_seed().unwrap(),
-        keypair.private_seed().unwrap()
+        loaded.private_key_record().unwrap(),
+        keypair.private_key_record().unwrap()
     );
 
     let _ = fs::remove_dir_all(root);

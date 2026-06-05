@@ -172,7 +172,7 @@ fn public_api_password_and_recipient_key_management_flow() {
     assert!(slots.iter().any(|slot| {
         slot.id == recipient_slot
             && slot.protection == LockboxKeySlotProtection::Recipient
-            && slot.algorithm == LockboxKeySlotAlgorithm::MlKem1024ChaCha20Poly1305
+            && slot.algorithm == LockboxKeySlotAlgorithm::X25519MlKem768ChaCha20Poly1305
     }));
 
     lb.add_file(&p("/secret.txt"), b"shared", false).unwrap();
@@ -246,7 +246,7 @@ fn public_api_recovery_scanner_reports_and_salvages_intact_files() {
 }
 
 #[test]
-fn public_api_secret_lockbox_id_and_ml_kem_wrappers_flow() {
+fn public_api_secret_lockbox_id_and_hybrid_wrappers_flow() {
     let mut secret = SecretString::new();
     assert!(secret.is_empty());
     secret.try_push_byte(b'a').unwrap();
@@ -281,18 +281,20 @@ fn public_api_secret_lockbox_id_and_ml_kem_wrappers_flow() {
     assert_eq!(random_id.as_bytes()[8] & 0xc0, 0x80);
 
     let keypair = RecipientKeyPair::generate().unwrap();
-    let from_seed = RecipientKeyPair::from_private_seed(keypair.private_seed().unwrap()).unwrap();
+    let from_record =
+        RecipientKeyPair::from_private_key_record(keypair.private_key_record().unwrap()).unwrap();
     let recipient = keypair.public_key();
     let recipient = RecipientPublicKey::from_bytes(&recipient.to_bytes()).unwrap();
     let wrapped = recipient.encrypt(b"content-key").unwrap();
     let wrapped = RecipientWrappedKey::from_parts(
+        wrapped.x25519_ephemeral_public_key().to_vec(),
         wrapped.ciphertext_bytes().to_vec(),
         wrapped.encrypted_key().to_vec(),
     )
     .unwrap();
-    assert_eq!(from_seed.decrypt(&wrapped).unwrap(), b"content-key");
+    assert_eq!(from_record.decrypt(&wrapped).unwrap(), b"content-key");
     assert_eq!(
-        from_seed
+        from_record
             .encrypt(b"another-key")
             .unwrap()
             .encrypted_key()

@@ -27,8 +27,8 @@ pub enum LockboxKeySlotProtection {
 pub enum LockboxKeySlotAlgorithm {
     /// Argon2id password derivation plus ChaCha20-Poly1305 key wrapping.
     Argon2idChaCha20Poly1305,
-    /// ML-KEM-1024 recipient encapsulation plus ChaCha20-Poly1305 key wrapping.
-    MlKem1024ChaCha20Poly1305,
+    /// X25519 plus ML-KEM-768 recipient wrapping, then ChaCha20-Poly1305.
+    X25519MlKem768ChaCha20Poly1305,
 }
 
 impl LockboxKeySlotAlgorithm {
@@ -36,7 +36,7 @@ impl LockboxKeySlotAlgorithm {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Argon2idChaCha20Poly1305 => "argon2id+chacha20-poly1305",
-            Self::MlKem1024ChaCha20Poly1305 => "ml-kem-1024+chacha20-poly1305",
+            Self::X25519MlKem768ChaCha20Poly1305 => "x25519+ml-kem-768+chacha20-poly1305",
         }
     }
 }
@@ -71,7 +71,7 @@ pub(crate) enum KeySlot {
         salt: Vec<u8>,
         encrypted_key: Vec<u8>,
     },
-    MlKem1024 {
+    HybridRecipient {
         id: u64,
         name: Option<String>,
         wrapped: Box<RecipientWrappedKey>,
@@ -81,7 +81,7 @@ pub(crate) enum KeySlot {
 impl KeySlot {
     pub(crate) fn id(&self) -> u64 {
         match self {
-            KeySlot::Password { id, .. } | KeySlot::MlKem1024 { id, .. } => *id,
+            KeySlot::Password { id, .. } | KeySlot::HybridRecipient { id, .. } => *id,
         }
     }
 
@@ -93,11 +93,11 @@ impl KeySlot {
                 protection: LockboxKeySlotProtection::Password,
                 algorithm: LockboxKeySlotAlgorithm::Argon2idChaCha20Poly1305,
             },
-            KeySlot::MlKem1024 { id, name, .. } => LockboxKeySlot {
+            KeySlot::HybridRecipient { id, name, .. } => LockboxKeySlot {
                 id: *id,
                 name: name.clone(),
                 protection: LockboxKeySlotProtection::Recipient,
-                algorithm: LockboxKeySlotAlgorithm::MlKem1024ChaCha20Poly1305,
+                algorithm: LockboxKeySlotAlgorithm::X25519MlKem768ChaCha20Poly1305,
             },
         }
     }
@@ -118,7 +118,7 @@ impl KeySlot {
         })
     }
 
-    pub(crate) fn ml_kem_1024(
+    pub(crate) fn hybrid_recipient(
         id: u64,
         name: Option<String>,
         recipient: &RecipientPublicKey,
@@ -127,7 +127,7 @@ impl KeySlot {
         if let Some(name) = name.as_deref() {
             validate_key_slot_name(name)?;
         }
-        Ok(Self::MlKem1024 {
+        Ok(Self::HybridRecipient {
             id,
             name,
             wrapped: Box::new(recipient.encrypt(content_key)?),
@@ -150,9 +150,9 @@ impl KeySlot {
         }
     }
 
-    pub(crate) fn try_ml_kem(&self, recipient: &RecipientKeyPair) -> Result<Vec<u8>> {
+    pub(crate) fn try_recipient(&self, recipient: &RecipientKeyPair) -> Result<Vec<u8>> {
         match self {
-            KeySlot::MlKem1024 { wrapped, .. } => recipient.decrypt(wrapped),
+            KeySlot::HybridRecipient { wrapped, .. } => recipient.decrypt(wrapped),
             _ => Err(Error::InvalidKey),
         }
     }

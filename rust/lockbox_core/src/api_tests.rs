@@ -394,7 +394,7 @@ fn file_content_can_be_loaded_and_extracted_with_streaming_apis() {
 }
 
 #[test]
-fn content_keys_can_be_wrapped_with_ml_kem_1024() {
+fn content_keys_can_be_wrapped_with_hybrid_recipient_key() {
     let key_pair = RecipientKeyPair::generate().unwrap();
     let content_key = [9u8; 32];
 
@@ -406,13 +406,17 @@ fn content_keys_can_be_wrapped_with_ml_kem_1024() {
 }
 
 #[test]
-fn ml_kem_wraps_for_same_recipient_do_not_share_ciphertext() {
+fn hybrid_wraps_for_same_recipient_do_not_share_key_exchange_material() {
     let key_pair = RecipientKeyPair::generate().unwrap();
     let content_key = [9u8; 32];
 
     let first = key_pair.encrypt(&content_key).unwrap();
     let second = key_pair.encrypt(&content_key).unwrap();
 
+    assert_ne!(
+        first.x25519_ephemeral_public_key(),
+        second.x25519_ephemeral_public_key()
+    );
     assert_ne!(first.ciphertext_bytes(), second.ciphertext_bytes());
     assert_eq!(key_pair.decrypt(&first).unwrap(), content_key);
     assert_eq!(key_pair.decrypt(&second).unwrap(), content_key);
@@ -438,7 +442,7 @@ fn recipient_slot_names_survive_round_trip() {
     assert_eq!(named_slot.protection, LockboxKeySlotProtection::Recipient);
     assert_eq!(
         named_slot.algorithm,
-        LockboxKeySlotAlgorithm::MlKem1024ChaCha20Poly1305
+        LockboxKeySlotAlgorithm::X25519MlKem768ChaCha20Poly1305
     );
 }
 

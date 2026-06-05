@@ -12,8 +12,8 @@ use crate::{decode_hex, encode_hex};
 const PRIVATE_LABEL: &str = "LOCKBOX PRIVATE KEY";
 const PUBLIC_LABEL: &str = "LOCKBOX PUBLIC KEY";
 const KTY: &str = "AKP";
-const ALG: &str = "ML-KEM-1024";
-const CRV: &str = "ML-KEM-1024";
+const ALG: &str = "X25519-ML-KEM-768";
+const CRV: &str = "X25519-ML-KEM-768";
 
 /// Supported recipient key serialization formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,23 +71,23 @@ struct Jwks {
 ///
 /// Private-key output is returned as `SecretVec` so the serialized secret
 /// material is zeroized on drop. `LockboxPem`, `Jwk`, and `Jwks` include both
-/// public-key metadata and the private seed; `RawHex` contains only the private
-/// seed bytes encoded as hexadecimal text.
+/// public-key metadata and the private key record; `RawHex` contains only the
+/// private key record bytes encoded as hexadecimal text.
 pub fn export_private_key(keypair: &RecipientKeyPair, format: KeyFormat) -> Result<SecretVec> {
     let public = keypair.public_key();
     let public_bytes = public.to_bytes();
     let public_x = Base64UrlUnpadded::encode_string(&public_bytes);
     let kid = fingerprint(&public_bytes);
-    let seed = keypair.private_seed()?;
+    let private_record = keypair.private_key_record()?;
     match format {
-        KeyFormat::RawHex => hex_encode_secure(seed),
-        KeyFormat::Jwk => private_jwk_secure(&kid, &public_x, seed),
+        KeyFormat::RawHex => hex_encode_secure(private_record),
+        KeyFormat::Jwk => private_jwk_secure(&kid, &public_x, private_record),
         KeyFormat::Jwks => {
-            let jwk = private_jwk_secure(&kid, &public_x, seed)?;
+            let jwk = private_jwk_secure(&kid, &public_x, private_record)?;
             jwks_secure(&jwk)
         }
         KeyFormat::LockboxPem => {
-            let jwk = private_jwk_secure(&kid, &public_x, seed)?;
+            let jwk = private_jwk_secure(&kid, &public_x, private_record)?;
             pem_secure(PRIVATE_LABEL, &jwk)
         }
     }
@@ -98,8 +98,8 @@ pub fn export_private_key(keypair: &RecipientKeyPair, format: KeyFormat) -> Resu
 /// The input buffer is normalized in place and remains secret memory for the
 /// duration of parsing.
 pub fn import_private_key(mut bytes: SecretVec) -> Result<RecipientKeyPair> {
-    normalize_private_key_to_seed(&mut bytes)?;
-    RecipientKeyPair::from_private_seed(bytes)
+    normalize_private_key_record(&mut bytes)?;
+    RecipientKeyPair::from_private_key_record(bytes)
 }
 
 /// Reads and imports a recipient private key from a file.
@@ -170,17 +170,17 @@ pub fn import_public_key(bytes: &[u8]) -> Result<RecipientPublicKey> {
     })?)
 }
 
-fn private_jwk_secure(kid: &str, public_x: &str, seed: SecretVec) -> Result<SecretVec> {
-    let seed = base64url_encode_secure(seed)?;
+fn private_jwk_secure(kid: &str, public_x: &str, private_record: SecretVec) -> Result<SecretVec> {
+    let private_record = base64url_encode_secure(private_record)?;
     let mut out = SecretVec::new();
     out.try_extend_from_slice(
-        br#"{"kty": "AKP", "alg": "ML-KEM-1024", "crv": "ML-KEM-1024", "kid": ""#,
+        br#"{"kty": "AKP", "alg": "X25519-ML-KEM-768", "crv": "X25519-ML-KEM-768", "kid": ""#,
     )?;
     out.try_extend_from_slice(kid.as_bytes())?;
     out.try_extend_from_slice(br#"", "x": ""#)?;
     out.try_extend_from_slice(public_x.as_bytes())?;
     out.try_extend_from_slice(br#"", "d": ""#)?;
-    out.try_extend_from_secure(&seed)?;
+    out.try_extend_from_secure(&private_record)?;
     out.try_extend_from_slice(br#"", "key_ops": ["unwrapKey", "deriveKey"]}"#)?;
     Ok(out)
 }
@@ -218,7 +218,7 @@ fn append_wrapped_base64(out: &mut SecretVec, body: &SecretVec) -> Result<()> {
     Ok(())
 }
 
-fn normalize_private_key_to_seed(bytes: &mut SecretVec) -> Result<()> {
+fn normalize_private_key_record(bytes: &mut SecretVec) -> Result<()> {
     bytes
         .with_mut_bytes(|bytes| {
             let (start, end) = trim_ascii_range(bytes);
@@ -233,28 +233,28 @@ fn normalize_private_key_to_seed(bytes: &mut SecretVec) -> Result<()> {
                     .len();
                 let (d_start, d_end) = find_json_string_value(&bytes[..decoded_len], b"d")?;
                 bytes.copy_within(d_start..d_end, 0);
-                let seed_len = Base64UrlUnpadded::decode_in_place(&mut bytes[..d_end - d_start])
+                let record_len = Base64UrlUnpadded::decode_in_place(&mut bytes[..d_end - d_start])
                     .map_err(|_| {
                         Error::InvalidKeyMaterial(
                             "private JWK d value is not valid base64url".to_string(),
                         )
                     })?
                     .len();
-                return Ok(seed_len);
+                return Ok(record_len);
             }
             if bytes[start..end].starts_with(b"{") {
                 let (d_start, d_end) = find_json_string_value(&bytes[start..end], b"d")?;
                 let d_start = start + d_start;
                 let d_end = start + d_end;
                 bytes.copy_within(d_start..d_end, 0);
-                let seed_len = Base64UrlUnpadded::decode_in_place(&mut bytes[..d_end - d_start])
+                let record_len = Base64UrlUnpadded::decode_in_place(&mut bytes[..d_end - d_start])
                     .map_err(|_| {
                         Error::InvalidKeyMaterial(
                             "private JWK d value is not valid base64url".to_string(),
                         )
                     })?
                     .len();
-                return Ok(seed_len);
+                return Ok(record_len);
             }
             bytes.copy_within(start..end, 0);
             hex_decode_in_place(&mut bytes[..end - start])
@@ -514,8 +514,8 @@ mod tests {
         let private = export_private_key(&keypair, KeyFormat::LockboxPem).unwrap();
         let loaded = import_private_key(private).unwrap();
         assert_eq!(
-            loaded.private_seed().unwrap(),
-            keypair.private_seed().unwrap()
+            loaded.private_key_record().unwrap(),
+            keypair.private_key_record().unwrap()
         );
 
         let public = export_public_key(&keypair.public_key(), KeyFormat::LockboxPem).unwrap();
@@ -528,8 +528,11 @@ mod tests {
         let keypair = RecipientKeyPair::generate().unwrap();
         let jwk = export_private_key(&keypair, KeyFormat::Jwk).unwrap();
         assert_eq!(
-            import_private_key(jwk).unwrap().private_seed().unwrap(),
-            keypair.private_seed().unwrap()
+            import_private_key(jwk)
+                .unwrap()
+                .private_key_record()
+                .unwrap(),
+            keypair.private_key_record().unwrap()
         );
         let jwks = export_public_key(&keypair.public_key(), KeyFormat::Jwks).unwrap();
         assert_eq!(
@@ -543,8 +546,11 @@ mod tests {
         let keypair = RecipientKeyPair::generate().unwrap();
         let raw = export_private_key(&keypair, KeyFormat::RawHex).unwrap();
         assert_eq!(
-            import_private_key(raw).unwrap().private_seed().unwrap(),
-            keypair.private_seed().unwrap()
+            import_private_key(raw)
+                .unwrap()
+                .private_key_record()
+                .unwrap(),
+            keypair.private_key_record().unwrap()
         );
     }
 }

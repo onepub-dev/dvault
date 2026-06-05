@@ -1,3 +1,10 @@
 [workspace]
-members = ["lockbox_secure", "lockbox_core", "lockbox_vault", "lockbox_cli"]
+members = [
+    "lockbox_secure",
+    "lockbox_core",
+    "lockbox_vault",
+    "lockbox_cli",
+    "lockbox_share_protocol",
+    "lockbox_share_server",
+]
 resolver = "2"

@@ -65,13 +65,13 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> CliResult<Lockbox> 
             Access::ContentKey(key) => {
                 let lockbox = Vault::new(NoopStore)
                     .create_lockbox(path, LockboxProtection::ContentKey(key.try_clone()?))?;
-                mirror_key_directory(&lockbox)?;
+                mirror_key_directory(&lockbox, path)?;
                 Ok(lockbox)
             }
             Access::PromptPassword => {
                 let password = read_new_password().map_err(|err| Error::Io(err.to_string()))?;
                 let lockbox = local_vault().create_lockbox_with_password(path, &password)?;
-                mirror_key_directory(&lockbox)?;
+                mirror_key_directory(&lockbox, path)?;
                 Ok(lockbox)
             }
             Access::CacheOnly => Err(cli_error(
@@ -186,14 +186,16 @@ pub(crate) fn ensure_default_vault_initialized() -> Result<(), Error> {
     ))
 }
 
-pub(crate) fn mirror_key_directory(lockbox: &Lockbox) -> Result<(), Error> {
+pub(crate) fn mirror_key_directory(lockbox: &Lockbox, path: impl AsRef<Path>) -> Result<(), Error> {
     if lockbox.list_key_slots().is_empty() {
         return Ok(());
     }
     ensure_default_vault_initialized()?;
     let vault = default_vault()?;
     let backup = VaultUnlock::export_key_directory_backup(lockbox)?;
-    vault.store_key_directory_backup(lockbox.lockbox_id(), &backup)
+    vault.store_key_directory_backup(lockbox.lockbox_id(), &backup)?;
+    vault.remember_known_lockbox(lockbox.lockbox_id(), path)?;
+    Ok(())
 }
 
 pub(crate) fn load_private_key_from_arg(arg: Option<&str>) -> CliResult<RecipientKeyPair> {

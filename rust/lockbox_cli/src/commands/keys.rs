@@ -5,14 +5,18 @@ use super::context::{
 };
 use super::output::{output_format_from_args, print_records};
 use lockbox_core::vault_bridge::VaultUnlock;
-use lockbox_core::{Error, LockboxProtection, LockboxUnlock, RecipientKeyPair};
+use lockbox_core::{
+    Error, Lockbox, LockboxKeySlotProtection, LockboxProtection, LockboxUnlock, RecipientKeyPair,
+    RecipientPublicKey,
+};
 use lockbox_vault::{
     encode_hex, export_private_key, list as list_open_lockboxes, local_vault, KeyFormat, NoopStore,
     SecretVec, Vault,
 };
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
@@ -31,7 +35,7 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
                 recipient: recipient.public_key,
             },
         )?;
-        mirror_key_directory(&lb)?;
+        mirror_key_directory(&lb, &lockbox_path)?;
         return Ok(());
     }
     let lockbox_path = create_path(require_arg(args, 0, "lockbox")?)?;
@@ -43,14 +47,14 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
                 &lockbox_path,
                 LockboxProtection::ContentKey(key.try_clone()?),
             )?;
-            mirror_key_directory(&lb)?;
+            mirror_key_directory(&lb, &lockbox_path)?;
         }
         Access::PromptPassword => {
             ensure_default_vault_initialized()?;
             let _vault = default_vault()?;
             let password = read_new_password()?;
             let lb = local_vault().create_lockbox_with_password(&lockbox_path, &password)?;
-            mirror_key_directory(&lb)?;
+            mirror_key_directory(&lb, &lockbox_path)?;
         }
         Access::CacheOnly => {
             return Err(Error::InvalidInput("create requires an unlock method".to_string()).into());
@@ -71,7 +75,7 @@ pub(crate) fn unlock(args: &[String]) -> CliResult<()> {
     } else {
         local_vault().unlock_lockbox_with_password(&options.lockbox_path, &password)?
     };
-    mirror_key_directory(&lb)?;
+    mirror_key_directory(&lb, &options.lockbox_path)?;
     println!("Lockbox unlocked: {}", options.lockbox_path);
     Ok(())
 }
@@ -123,7 +127,7 @@ pub(crate) fn unlock_key(args: &[String]) -> CliResult<()> {
     let keypair = load_private_key_from_arg(args.get(1).map(String::as_str))?;
     let lb =
         local_vault().unlock_lockbox(lockbox_path, LockboxUnlock::RecipientKeyPair(keypair))?;
-    mirror_key_directory(&lb)?;
+    mirror_key_directory(&lb, lockbox_path)?;
     Ok(())
 }
 
@@ -148,7 +152,7 @@ pub(crate) fn add_access(args: &[String], access: &Access) -> CliResult<()> {
     let mut lb = open_existing(lockbox_path, access)?;
     lb.add_recipient_named(name, &recipient.public_key)?;
     lb.commit()?;
-    mirror_key_directory(&lb)?;
+    mirror_key_directory(&lb, lockbox_path)?;
     Ok(())
 }
 
@@ -186,7 +190,7 @@ pub(crate) fn remove_access(args: &[String], access: &Access) -> CliResult<()> {
         return Err(err.into());
     }
     lb.commit()?;
-    mirror_key_directory(&lb)?;
+    mirror_key_directory(&lb, lockbox_path)?;
     Ok(())
 }
 
@@ -195,14 +199,272 @@ pub(crate) fn access(args: &[String], access: &Access) -> CliResult<()> {
     match command {
         "add" => add_access(&args[1..], access),
         "list" | "ls" => list_keys(&args[1..], access),
+        "refresh" => refresh_access(&args[1..], access),
         "remove" | "rm" => remove_access(&args[1..], access),
         _ => Err(Error::InvalidInput(format!("unknown access command: {command}")).into()),
     }
 }
 
-fn write_private_key(path: &str, bytes: &SecretVec) -> CliResult<()> {
-    use std::io::Write;
+pub(crate) fn refresh_access(args: &[String], access: &Access) -> CliResult<()> {
+    let dry_run = args.iter().any(|arg| arg == "--dry-run");
+    let yes = args.iter().any(|arg| arg == "--yes");
+    let positional = args
+        .iter()
+        .filter(|arg| !matches!(arg.as_str(), "--dry-run" | "--yes"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if positional.first().map(String::as_str) == Some("--all") {
+        if positional.len() > 2 {
+            return Err(cli_error(
+                "access refresh --all accepts at most one identity argument",
+            ));
+        }
+        let identity = positional.get(1).map(String::as_str);
+        let vault = default_vault()?;
+        let identities = match identity {
+            Some(identity) => vec![identity.to_string()],
+            None => vault.list_private_keys()?,
+        };
+        if identities.is_empty() {
+            return Err(cli_error("no vault identities found to refresh"));
+        }
+        let known = vault.list_known_lockboxes()?;
+        let mut missing = Vec::new();
+        let mut inaccessible = Vec::new();
+        let mut targets = Vec::new();
+        for lockbox in &known {
+            match fs::metadata(&lockbox.path) {
+                Ok(metadata) if metadata.is_dir() => {
+                    inaccessible.push((
+                        lockbox.path.clone(),
+                        "lockbox path is a directory".to_string(),
+                    ));
+                    continue;
+                }
+                Ok(_) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    missing.push(lockbox.path.clone());
+                    continue;
+                }
+                Err(err) => {
+                    inaccessible.push((lockbox.path.clone(), err.to_string()));
+                    continue;
+                }
+            }
+            match refresh_targets_for_lockbox(&lockbox.path, &identities, access) {
+                Ok(found) => targets.extend(found),
+                Err(err) => inaccessible.push((lockbox.path.clone(), err.to_string())),
+            }
+        }
+        print_refresh_plan(
+            if identity.is_some() { identity } else { None },
+            Some(known.len()),
+            &targets,
+            &missing,
+            &inaccessible,
+            dry_run,
+            yes,
+        );
+        apply_refresh_plan(&targets, access, dry_run, yes)?;
+        return Ok(());
+    }
 
+    let lockbox_path = require_arg(&positional, 0, "lockbox")?;
+    let identity = require_arg(&positional, 1, "identity")?;
+    if positional.len() > 2 {
+        return Err(cli_error(
+            "access refresh requires lockbox and identity arguments",
+        ));
+    }
+    let identities = vec![identity.to_string()];
+    let targets = refresh_targets_for_lockbox(lockbox_path, &identities, access)?;
+    print_refresh_plan(Some(identity), None, &targets, &[], &[], dry_run, yes);
+    apply_refresh_plan(&targets, access, dry_run, yes)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct RefreshTarget {
+    lockbox_path: String,
+    identity: String,
+    slot_count: usize,
+}
+
+fn refresh_targets_for_lockbox(
+    lockbox_path: &str,
+    identities: &[String],
+    access: &Access,
+) -> CliResult<Vec<RefreshTarget>> {
+    let lb = open_existing(lockbox_path, access)?;
+    let mut targets = Vec::new();
+    for identity in identities {
+        let slot_count = matching_recipient_slot_ids(&lb, identity).len();
+        if slot_count > 0 {
+            targets.push(RefreshTarget {
+                lockbox_path: lockbox_path.to_string(),
+                identity: identity.clone(),
+                slot_count,
+            });
+        }
+    }
+    Ok(targets)
+}
+
+fn matching_recipient_slot_ids(lockbox: &Lockbox, identity: &str) -> Vec<u64> {
+    lockbox
+        .list_key_slots()
+        .into_iter()
+        .filter(|slot| {
+            slot.protection == LockboxKeySlotProtection::Recipient
+                && slot.name.as_deref() == Some(identity)
+        })
+        .map(|slot| slot.id)
+        .collect()
+}
+
+fn print_refresh_plan(
+    identity: Option<&str>,
+    known_count: Option<usize>,
+    targets: &[RefreshTarget],
+    missing: &[String],
+    inaccessible: &[(String, String)],
+    dry_run: bool,
+    yes: bool,
+) {
+    println!("Refresh plan:");
+    match identity {
+        Some(identity) => println!("  identity: {identity}"),
+        None => println!("  identity: all"),
+    }
+    if let Some(known_count) = known_count {
+        println!("  known lockboxes: {known_count}");
+    }
+    println!("  matching lockbox/identity pairs: {}", targets.len());
+    println!(
+        "  matching access entries: {}",
+        targets
+            .iter()
+            .map(|target| target.slot_count)
+            .sum::<usize>()
+    );
+    println!("  dry run: {}", if dry_run { "yes" } else { "no" });
+    println!("  apply without prompt: {}", if yes { "yes" } else { "no" });
+    println!("  missing: {}", missing.len());
+    println!("  inaccessible: {}", inaccessible.len());
+    if !targets.is_empty() {
+        println!();
+        println!("Refresh targets:");
+        for target in targets {
+            println!(
+                "  {} {} ({} access entries)",
+                target.lockbox_path, target.identity, target.slot_count
+            );
+        }
+    }
+    if !missing.is_empty() {
+        println!();
+        println!("Missing known lockboxes:");
+        for path in missing {
+            println!("  {path}");
+        }
+    }
+    if !inaccessible.is_empty() {
+        println!();
+        println!("Inaccessible known lockboxes:");
+        for (path, reason) in inaccessible {
+            println!("  {path}: {reason}");
+        }
+    }
+}
+
+fn apply_refresh_plan(
+    targets: &[RefreshTarget],
+    access: &Access,
+    dry_run: bool,
+    yes: bool,
+) -> CliResult<()> {
+    if dry_run {
+        println!();
+        println!("No access entries were changed.");
+        return Ok(());
+    }
+    if targets.is_empty() {
+        println!();
+        println!("No matching access entries found.");
+        return Ok(());
+    }
+    if !yes && !confirm_access_refresh(targets.len())? {
+        println!();
+        println!("No access entries were changed.");
+        return Ok(());
+    }
+    let public_keys = load_refresh_public_keys(targets)?;
+    let mut updated = 0usize;
+    for target in targets {
+        let public_key = public_keys.get(&target.identity).ok_or_else(|| {
+            cli_error(format!(
+                "vault identity {} was not loaded for refresh",
+                target.identity
+            ))
+        })?;
+        if refresh_lockbox_identity(&target.lockbox_path, &target.identity, public_key, access)? {
+            updated += 1;
+        }
+    }
+    println!();
+    println!("Refreshed access for {updated} lockbox/identity pairs.");
+    Ok(())
+}
+
+fn load_refresh_public_keys(
+    targets: &[RefreshTarget],
+) -> CliResult<BTreeMap<String, RecipientPublicKey>> {
+    let vault = default_vault()?;
+    let mut public_keys = BTreeMap::new();
+    for target in targets {
+        if public_keys.contains_key(&target.identity) {
+            continue;
+        }
+        public_keys.insert(
+            target.identity.clone(),
+            vault.load_private_key(&target.identity)?.public_key(),
+        );
+    }
+    Ok(public_keys)
+}
+
+fn refresh_lockbox_identity(
+    lockbox_path: &str,
+    identity: &str,
+    public_key: &RecipientPublicKey,
+    access: &Access,
+) -> CliResult<bool> {
+    let mut lb = open_existing(lockbox_path, access)?;
+    let old_slot_ids = matching_recipient_slot_ids(&lb, identity);
+    if old_slot_ids.is_empty() {
+        return Ok(false);
+    }
+    let new_slot_id = lb.add_recipient_named(identity.to_string(), public_key)?;
+    for slot_id in old_slot_ids {
+        if slot_id != new_slot_id {
+            lb.delete_key(slot_id)?;
+        }
+    }
+    lb.commit()?;
+    mirror_key_directory(&lb, lockbox_path)?;
+    Ok(true)
+}
+
+fn confirm_access_refresh(target_count: usize) -> CliResult<bool> {
+    eprintln!("Refresh access for {target_count} lockbox/identity pairs?");
+    eprint!("Type 'yes' to apply: ");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(answer.trim() == "yes")
+}
+
+fn write_private_key(path: &str, bytes: &SecretVec) -> CliResult<()> {
     let mut file = create_private_key_file(path)?;
     bytes.with_bytes(|bytes| file.write_all(bytes))??;
     Ok(())

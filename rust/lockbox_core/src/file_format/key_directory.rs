@@ -225,10 +225,11 @@ fn encode_key_slots(slots: &[KeySlot]) -> Vec<u8> {
                 write_bytes(&mut out, salt);
                 write_bytes(&mut out, encrypted_key);
             }
-            KeySlot::MlKem1024 { id, name, wrapped } => {
+            KeySlot::HybridRecipient { id, name, wrapped } => {
                 out.push(2);
                 out.extend_from_slice(&id.to_le_bytes());
                 write_optional_name(&mut out, name.as_deref());
+                write_bytes(&mut out, wrapped.x25519_ephemeral_public_key());
                 write_bytes(&mut out, wrapped.ciphertext_bytes());
                 write_bytes(&mut out, wrapped.encrypted_key());
             }
@@ -267,12 +268,17 @@ fn decode_key_slots(payload: &[u8]) -> Result<Vec<KeySlot>> {
             }
             2 => {
                 let name = read_optional_name(payload, &mut offset)?;
-                let ciphertext = read_bytes(payload, &mut offset)?;
+                let x25519_ephemeral_public_key = read_bytes(payload, &mut offset)?;
+                let mlkem_ciphertext = read_bytes(payload, &mut offset)?;
                 let encrypted_key = read_bytes(payload, &mut offset)?;
-                slots.push(KeySlot::MlKem1024 {
+                slots.push(KeySlot::HybridRecipient {
                     id,
                     name,
-                    wrapped: Box::new(RecipientWrappedKey::from_parts(ciphertext, encrypted_key)?),
+                    wrapped: Box::new(RecipientWrappedKey::from_parts(
+                        x25519_ephemeral_public_key,
+                        mlkem_ciphertext,
+                        encrypted_key,
+                    )?),
                 });
             }
             _ => return Err(Error::CorruptHeader),

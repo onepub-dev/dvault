@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use lockbox_core::{Lockbox, LockboxUnlock};
+use lockbox_vault::import_private_key_file;
+
 static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
@@ -873,7 +876,7 @@ fn cli_env_rename_and_visualize_flow() {
         ],
     );
     let public_jwk_text = String::from_utf8_lossy(&fs::read(&public_jwk).unwrap()).to_string();
-    assert!(public_jwk_text.contains("\"alg\": \"ML-KEM-1024\""));
+    assert!(public_jwk_text.contains("\"alg\": \"X25519-ML-KEM-768\""));
 
     run(bin, &["vault", "contact", "remove", "default"]);
     run(bin, &["vault", "identity", "remove", "--force", "default"]);
@@ -1566,6 +1569,105 @@ fn vault_identity_remove_requires_confirmation_and_force_bypasses_it() {
 }
 
 #[test]
+fn vault_identity_rotate_history_and_access_refresh_flow() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = short_target_dir("identity-refresh");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let lockbox = dir.join("shared.lbox");
+    let current_private = dir.join("current.private");
+
+    run_in(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_in(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &["access", "add", lockbox.to_str().unwrap(), "default"],
+        &vault_root,
+        &agent_root,
+    );
+
+    let rotated = run_output_in(
+        bin,
+        &["vault", "identity", "rotate", "default"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&rotated);
+    let rotated = String::from_utf8_lossy(&rotated.stdout);
+    assert!(rotated.contains("Rotated vault identity: default"));
+    assert!(rotated.contains("Active generation: 2"));
+
+    let history = run_output_in(
+        bin,
+        &["vault", "identity", "history", "default", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&history);
+    let history = String::from_utf8_lossy(&history.stdout);
+    assert!(history.contains("\t1\tretired\t"));
+    assert!(history.contains("\t2\tactive\t"));
+
+    run_in(
+        bin,
+        &[
+            "vault",
+            "identity",
+            "export-private",
+            "default",
+            current_private.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    let current_key = import_private_key_file(&current_private).unwrap();
+    assert!(Lockbox::open_file(&lockbox, LockboxUnlock::RecipientKeyPair(current_key)).is_err());
+
+    let dry_run = run_output_in(
+        bin,
+        &[
+            "access",
+            "refresh",
+            lockbox.to_str().unwrap(),
+            "default",
+            "--dry-run",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&dry_run);
+    let dry_run = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(dry_run.contains("matching access entries: 1"));
+    assert!(dry_run.contains("No access entries were changed."));
+
+    let refreshed = run_output_in(
+        bin,
+        &[
+            "access",
+            "refresh",
+            lockbox.to_str().unwrap(),
+            "default",
+            "--yes",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&refreshed);
+    assert!(String::from_utf8_lossy(&refreshed.stdout)
+        .contains("Refreshed access for 1 lockbox/identity pairs."));
+
+    let current_key = import_private_key_file(&current_private).unwrap();
+    Lockbox::open_file(&lockbox, LockboxUnlock::RecipientKeyPair(current_key)).unwrap();
+}
+
+#[test]
 fn vault_identity_export_reports_missing_output_for_named_identity() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("vault-key-export-error");
@@ -2010,7 +2112,7 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
 
     let private_exports = [
         ("pem", None, "BEGIN LOCKBOX PRIVATE KEY"),
-        ("jwk", Some("jwk"), "\"alg\": \"ML-KEM-1024\""),
+        ("jwk", Some("jwk"), "\"alg\": \"X25519-ML-KEM-768\""),
         ("jwks", Some("jwks"), "\"keys\""),
         ("raw", Some("raw-hex"), ""),
     ];
@@ -2044,7 +2146,7 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
 
     let public_exports = [
         ("pem", None, "BEGIN LOCKBOX PUBLIC KEY"),
-        ("jwk", Some("jwk"), "\"alg\": \"ML-KEM-1024\""),
+        ("jwk", Some("jwk"), "\"alg\": \"X25519-ML-KEM-768\""),
         ("jwks", Some("jwks"), "\"keys\""),
         ("raw", Some("raw-hex"), ""),
     ];

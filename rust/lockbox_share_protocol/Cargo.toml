@@ -1,0 +1,14 @@
+[package]
+name = "lockbox_share_protocol"
+version = "0.1.0"
+edition = "2021"
+license-file = "../../LICENSE"
+description = "Lockbox share server wire protocol and client API"
+
+[lib]
+name = "lockbox_share_protocol"
+path = "src/lib.rs"
+
+[dependencies]
+sha2 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls"] }

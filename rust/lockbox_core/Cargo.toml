@@ -17,10 +17,12 @@ native-zstd-encoder = ["dep:zstd"]
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 getrandom = "0.2"
+hkdf = "0.12"
 lockbox_secure = { path = "../lockbox_secure" }
 ml-kem = { version = "0.3", features = ["getrandom"] }
 sha2 = "0.10"
 unicode-normalization = "0.1"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 zeroize = "1"
 ruzstd = { path = "../../../zstd-rs/ruzstd" }
 sysinfo = { version = "0.38.4", default-features = false, features = [

@@ -293,6 +293,10 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     push_flag(&mut args, identity_sub, "overwrite", "--overwrite");
                     push_optional(&mut args, identity_sub, "name");
                 }
+                "history" => {
+                    push_option(&mut args, identity_sub, "format", "--format");
+                    push_optional(&mut args, identity_sub, "name");
+                }
                 "list" | "ls" => push_option(&mut args, identity_sub, "format", "--format"),
                 "import" => {
                     args.push(value(identity_sub, "name"));
@@ -307,6 +311,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     push_flag(&mut args, identity_sub, "force", "--force");
                     push_optional(&mut args, identity_sub, "name");
                 }
+                "rotate" => push_optional(&mut args, identity_sub, "name"),
                 _ => {
                     return Err(Error::InvalidInput(format!(
                         "unknown vault identity command: {identity_command}"
@@ -341,26 +346,103 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 .into());
             }
         }
+        "share" => {
+            if let Some((share_command, share_sub)) = sub.subcommand() {
+                args.push(share_command.to_string());
+                match share_command {
+                    "publish" => {
+                        push_share_options(&mut args, share_sub);
+                        push_optional(&mut args, share_sub, "identity");
+                    }
+                    "receive" | "fetch" => {
+                        push_share_options(&mut args, share_sub);
+                        push_flag(&mut args, share_sub, "overwrite", "--overwrite");
+                        args.push(value(share_sub, "share-code"));
+                        args.push(value(share_sub, "contact-name"));
+                    }
+                    "delete" | "rm" => {
+                        push_share_options(&mut args, share_sub);
+                        args.push(value(share_sub, "share-code"));
+                        args.push(value(share_sub, "delete-token"));
+                    }
+                    _ => {
+                        return Err(Error::InvalidInput(format!(
+                            "unknown vault share command: {share_command}"
+                        ))
+                        .into())
+                    }
+                }
+            } else {
+                return Err(Error::InvalidInput(
+                    "missing vault share command; use `lockbox vault share publish`, `lockbox vault share receive`, or `lockbox vault share delete`"
+                        .to_string(),
+                )
+                .into());
+            }
+        }
+        "lockbox" => {
+            if let Some((lockbox_command, lockbox_sub)) = sub.subcommand() {
+                args.push(lockbox_command.to_string());
+                match lockbox_command {
+                    "list" | "ls" => push_option(&mut args, lockbox_sub, "format", "--format"),
+                    "forget" => args.push(value(lockbox_sub, "lockbox")),
+                    _ => {
+                        return Err(Error::InvalidInput(format!(
+                            "unknown vault lockbox command: {lockbox_command}"
+                        ))
+                        .into())
+                    }
+                }
+            } else {
+                return Err(Error::InvalidInput(
+                    "missing vault lockbox command; use `lockbox vault lockbox list` or `lockbox vault lockbox forget <lockbox>`"
+                        .to_string(),
+                )
+                .into());
+            }
+        }
         "remove" | "rm" => args.push(value(sub, "name")),
         _ => return Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
     }
     Ok(args)
 }
 
+fn push_share_options(args: &mut Vec<String>, matches: &ArgMatches) {
+    push_option(args, matches, "server", "--server");
+    push_option(args, matches, "topology-url", "--topology-url");
+    push_option(args, matches, "ttl", "--ttl");
+    push_option(args, matches, "max-fetches", "--max-fetches");
+}
+
 fn access_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let (command, sub) = matches
         .subcommand()
         .ok_or_else(|| Error::InvalidInput("missing access command".to_string()))?;
-    let mut args = vec![command.to_string(), value(sub, "lockbox")];
+    let mut args = vec![command.to_string()];
     match command {
         "add" => {
+            args.push(value(sub, "lockbox"));
             args.push(value(sub, "identity-or-contact"));
             if let Some(public_key) = sub.get_one::<String>("public-key") {
                 args.push(public_key.clone());
             }
         }
-        "list" | "ls" => push_option(&mut args, sub, "format", "--format"),
-        "remove" | "rm" => args.push(value(sub, "slot-id")),
+        "list" | "ls" => {
+            args.push(value(sub, "lockbox"));
+            push_option(&mut args, sub, "format", "--format");
+        }
+        "refresh" => {
+            if sub.get_flag("all") {
+                args.push("--all".to_string());
+            }
+            push_many(&mut args, sub, "args");
+            push_flag(&mut args, sub, "dry-run", "--dry-run");
+            push_flag(&mut args, sub, "yes", "--yes");
+        }
+        "remove" | "rm" => {
+            args.push(value(sub, "lockbox"));
+            args.push(value(sub, "slot-id"));
+        }
         _ => return Err(Error::InvalidInput(format!("unknown access command: {command}")).into()),
     }
     Ok(args)
