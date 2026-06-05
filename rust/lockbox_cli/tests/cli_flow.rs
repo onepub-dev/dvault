@@ -1931,6 +1931,39 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
             secret_file.to_str().unwrap(),
         ],
     );
+    run(
+        bin,
+        &[
+            "env",
+            "set",
+            lockbox.to_str().unwrap(),
+            "/production/APP_MODE",
+            "-v",
+            "prod-path",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "env",
+            "set",
+            lockbox.to_str().unwrap(),
+            "/production/database/DATABASE_URL",
+            "-v",
+            "postgres://localhost/app",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "env",
+            "set",
+            lockbox.to_str().unwrap(),
+            "/staging/APP_MODE",
+            "-v",
+            "staging-path",
+        ],
+    );
 
     let listing = run_output(
         bin,
@@ -1938,15 +1971,63 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     );
     assert_success(&listing);
     let listing = String::from_utf8_lossy(&listing.stdout);
-    assert!(listing.contains("APP_MODE"));
-    assert!(listing.contains("API_TOKEN\tsecret"));
+    assert!(listing.contains("/APP_MODE"));
+    assert!(listing.contains("/API_TOKEN\tsecret"));
+    assert!(listing.contains("/production/APP_MODE"));
+
+    let production_listing = run_output(
+        bin,
+        &[
+            "env",
+            "list",
+            "--format",
+            "tsv",
+            lockbox.to_str().unwrap(),
+            "/production",
+        ],
+    );
+    assert_success(&production_listing);
+    let production_listing = String::from_utf8_lossy(&production_listing.stdout);
+    assert!(production_listing.contains("/production/APP_MODE"));
+    assert!(production_listing.contains("/production/database/DATABASE_URL"));
+    assert!(!production_listing.contains("/staging/APP_MODE"));
+
+    let app_mode_listing = run_output(
+        bin,
+        &[
+            "env",
+            "list",
+            "--format",
+            "tsv",
+            lockbox.to_str().unwrap(),
+            "**/APP_MODE",
+        ],
+    );
+    assert_success(&app_mode_listing);
+    let app_mode_listing = String::from_utf8_lossy(&app_mode_listing.stdout);
+    assert!(app_mode_listing.contains("/APP_MODE"));
+    assert!(app_mode_listing.contains("/production/APP_MODE"));
+    assert!(app_mode_listing.contains("/staging/APP_MODE"));
+    assert!(!app_mode_listing.contains("/API_TOKEN"));
 
     let export = run_output(bin, &["env", "export", lockbox.to_str().unwrap()]);
     assert_success(&export);
     let export = String::from_utf8_lossy(&export.stdout);
     assert!(export.contains("APP_MODE='prod'"));
+    assert!(!export.contains("prod-path"));
+    assert!(!export.contains("staging-path"));
     assert!(!export.contains("API_TOKEN"));
     assert!(!export.contains("file-secret"));
+
+    let production_export = run_output(
+        bin,
+        &["env", "export", lockbox.to_str().unwrap(), "/production"],
+    );
+    assert_success(&production_export);
+    let production_export = String::from_utf8_lossy(&production_export.stdout);
+    assert!(production_export.contains("APP_MODE='prod-path'"));
+    assert!(!production_export.contains("DATABASE_URL"));
+    assert!(!production_export.contains("staging-path"));
 
     let powershell_export = run_output(
         bin,

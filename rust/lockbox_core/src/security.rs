@@ -12,19 +12,53 @@ pub(crate) fn validate_permissions(permissions: u32) -> Result<u32> {
 }
 
 pub(crate) fn validate_env_name(name: &str) -> Result<String> {
-    if name.is_empty()
-        || name.len() > MAX_ENV_NAME_BYTES
-        || !name
+    if name.is_empty() || name.len() > MAX_ENV_NAME_BYTES {
+        return Err(Error::InvalidPath(name.to_string()));
+    }
+    let canonical = if name.starts_with('/') {
+        validate_env_path(name)?;
+        name.to_string()
+    } else {
+        validate_env_component(name, name)?;
+        format!("/{name}")
+    };
+    if canonical.len() > MAX_ENV_NAME_BYTES {
+        return Err(Error::InvalidPath(name.to_string()));
+    }
+    Ok(canonical)
+}
+
+fn validate_env_path(path: &str) -> Result<()> {
+    if path.len() == 1
+        || path.ends_with('/')
+        || path.starts_with("//")
+        || path.contains('\\')
+        || path.contains('\0')
+        || path.contains(':')
+    {
+        return Err(Error::InvalidPath(path.to_string()));
+    }
+    for component in path.split('/').skip(1) {
+        validate_env_component(component, path)?;
+    }
+    Ok(())
+}
+
+fn validate_env_component(component: &str, original: &str) -> Result<()> {
+    if component.is_empty()
+        || component == "."
+        || component == ".."
+        || !component
             .chars()
             .next()
             .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
-        || !name
+        || !component
             .chars()
             .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
     {
-        return Err(Error::InvalidPath(name.to_string()));
+        return Err(Error::InvalidPath(original.to_string()));
     }
-    Ok(name.to_string())
+    Ok(())
 }
 
 pub(crate) fn validate_env_value(value: &str) -> Result<String> {

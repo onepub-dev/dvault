@@ -473,19 +473,20 @@ fn env_command(verbose: bool) -> Command {
             .visible_alias("ls")
             .after_help(verbose_help(
                 verbose,
-                "Examples:\n  lockbox env list secrets.lbox\n  lockbox env list --format json secrets.lbox",
-                "Context:\n  Env list shows value names and whether each value is normal or secret. It does not print stored values.",
+                "Examples:\n  lockbox env list secrets.lbox\n  lockbox env list secrets.lbox /production\n  lockbox env list secrets.lbox '**/API_KEY'\n  lockbox env list --format json secrets.lbox",
+                "Context:\n  Env list shows value names and whether each value is normal or secret. It does not print stored values. Pass a path such as /production to list that group, or a glob such as **/API_KEY to match names across groups.",
             ))
             .arg(output_format_arg())
-            .arg(required("lockbox", "Lockbox path.")),
+            .arg(required("lockbox", "Lockbox path."))
+            .arg(optional("pattern", "Optional env path or glob pattern.")),
     )
     .subcommand(
         Command::new("export")
             .about("Print all non-secret environment values in an importable format.")
             .after_help(verbose_help(
                 verbose,
-                "Examples:\n  eval \"$(lockbox env export secrets.lbox)\"\n  lockbox env export --format posix secrets.lbox > env.sh\n  lockbox env export --format powershell secrets.lbox | Invoke-Expression\n\nFormats:\n  posix       NAME='value' lines for sh, bash, and zsh. Default.\n  powershell  $env:NAME = 'value' lines for PowerShell.\n  cmd         set \"NAME=value\" lines for cmd.exe.\n  json        One JSON object per line with name and value fields.\n\n`env export` writes to stdout. Use shell redirection to write it to a file.",
-                "Context:\n  Env export is intended for shell startup, CI setup, or scripting. It only includes non-secret values; use explicit `env get --secret` for secret values so they are never exported in bulk by accident.",
+                "Examples:\n  eval \"$(lockbox env export secrets.lbox)\"\n  lockbox env export secrets.lbox /production\n  lockbox env export --format posix secrets.lbox > env.sh\n  lockbox env export --format powershell secrets.lbox | Invoke-Expression\n\nFormats:\n  posix       NAME='value' lines for sh, bash, and zsh. Default.\n  powershell  $env:NAME = 'value' lines for PowerShell.\n  cmd         set \"NAME=value\" lines for cmd.exe.\n  json        One JSON object per line with name and value fields.\n\n`env export` writes to stdout. Use shell redirection to write it to a file.",
+                "Context:\n  Env export is intended for shell startup, CI setup, or scripting. It only includes non-secret values; use explicit `env get --secret` for secret values so they are never exported in bulk by accident. When exporting a path such as /production, only direct child names are emitted, so /production/API_KEY becomes API_KEY and nested values are skipped.",
             ))
             .arg(
                 Arg::new("format")
@@ -494,7 +495,8 @@ fn env_command(verbose: bool) -> Command {
                     .default_value("posix")
                     .help("Output format."),
             )
-            .arg(required("lockbox", "Lockbox path.")),
+            .arg(required("lockbox", "Lockbox path."))
+            .arg(optional("path", "Optional env path to export.")),
     )
     .subcommand(
         Command::new("rm")

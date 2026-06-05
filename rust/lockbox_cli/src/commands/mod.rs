@@ -239,8 +239,14 @@ fn env_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "overwrite", "--overwrite");
             args.push(value(sub, "name"));
         }
-        "list" | "ls" => push_option(&mut args, sub, "format", "--format"),
-        "export" => push_option(&mut args, sub, "format", "--format"),
+        "list" | "ls" => {
+            push_option(&mut args, sub, "format", "--format");
+            push_optional(&mut args, sub, "pattern");
+        }
+        "export" => {
+            push_option(&mut args, sub, "format", "--format");
+            push_optional(&mut args, sub, "path");
+        }
         "rm" | "remove" => args.push(value(sub, "name")),
         _ => return Err(Error::InvalidInput(format!("unknown env command: {command}")).into()),
     }

@@ -1,9 +1,9 @@
 use crate::{
-    CacheLimit, EnvName, EnvSensitivity, EnvValueRef, Error, ExtractPolicy, ListOptions, Lockbox,
-    LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotProtection,
-    LockboxOptions, LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair,
-    RecipientPublicKey, RecoveryReportOptions, RecoveryScanner, Result, SecretString, WorkerPolicy,
-    WorkloadProfile, MAX_KEY_SLOT_NAME_BYTES,
+    CacheLimit, EnvName, EnvNamePattern, EnvSensitivity, EnvValueRef, Error, ExtractPolicy,
+    ListOptions, Lockbox, LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm,
+    LockboxKeySlotProtection, LockboxOptions, LockboxPath, LockboxProtection, LockboxUnlock,
+    RecipientKeyPair, RecipientPublicKey, RecoveryReportOptions, RecoveryScanner, Result,
+    SecretString, WorkerPolicy, WorkloadProfile, MAX_KEY_SLOT_NAME_BYTES,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -1764,6 +1764,9 @@ fn env_vars_round_trip_and_are_returned_as_a_map() {
     lb.set_env(&env("DATABASE_URL"), "postgres://localhost/app")
         .unwrap();
     lb.set_env(&env("FEATURE_FLAG"), "enabled").unwrap();
+    lb.set_env(&env("/production/API_KEY"), "production-key")
+        .unwrap();
+    lb.set_env(&env("/staging/API_KEY"), "staging-key").unwrap();
     lb.commit().unwrap();
 
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
@@ -1775,16 +1778,18 @@ fn env_vars_round_trip_and_are_returned_as_a_map() {
         reopened.list_env().unwrap(),
         vec![
             (env("DATABASE_URL"), EnvSensitivity::Normal),
-            (env("FEATURE_FLAG"), EnvSensitivity::Normal)
+            (env("FEATURE_FLAG"), EnvSensitivity::Normal),
+            (env("/production/API_KEY"), EnvSensitivity::Normal),
+            (env("/staging/API_KEY"), EnvSensitivity::Normal)
         ]
     );
-    let mut env = std::collections::BTreeMap::new();
+    let mut env_values = std::collections::BTreeMap::new();
     reopened
         .visit_env(|name, value| {
             let EnvValueRef::Normal(value) = value else {
                 panic!("FEATURE_FLAG fixture only stores normal env values");
             };
-            env.insert(
+            env_values.insert(
                 name.to_string(),
                 (value.to_string(), EnvSensitivity::Normal),
             );
@@ -1792,10 +1797,21 @@ fn env_vars_round_trip_and_are_returned_as_a_map() {
         })
         .unwrap();
     assert_eq!(
-        env.get("FEATURE_FLAG")
+        env_values
+            .get("/FEATURE_FLAG")
             .map(|(value, sensitivity)| (value.as_str(), *sensitivity)),
         Some(("enabled", EnvSensitivity::Normal))
     );
+    let production = EnvNamePattern::new("/production").unwrap();
+    let root_feature = EnvNamePattern::new("FEATURE_FLAG").unwrap();
+    let api_keys = EnvNamePattern::new("**/API_KEY").unwrap();
+    assert!(env("/production/API_KEY").matches_pattern(&production));
+    assert!(!env("/staging/API_KEY").matches_pattern(&production));
+    assert!(env("FEATURE_FLAG").matches_pattern(&root_feature));
+    assert!(!env("/production/FEATURE_FLAG").matches_pattern(&root_feature));
+    assert!(env("/production/API_KEY").matches_pattern(&api_keys));
+    assert!(env("/staging/API_KEY").matches_pattern(&api_keys));
+    assert!(!env("FEATURE_FLAG").matches_pattern(&api_keys));
 }
 
 #[test]
@@ -1857,7 +1873,7 @@ fn secret_env_vars_preserve_sensitivity_until_delete() {
     assert_eq!(
         visited,
         vec![(
-            "API_TOKEN".to_string(),
+            "/API_TOKEN".to_string(),
             "first-secret".to_string(),
             EnvSensitivity::Secret
         )]
@@ -1997,7 +2013,23 @@ fn removing_env_var_sanitizes_original_env_page() {
 
 #[test]
 fn env_names_and_values_are_validated() {
-    for name in ["", "1BAD", "BAD-NAME", "BAD.NAME", "BAD NAME"] {
+    assert_eq!(EnvName::new("API_KEY").unwrap().as_str(), "/API_KEY");
+    assert_eq!(
+        EnvName::new("/production/API_KEY").unwrap().as_str(),
+        "/production/API_KEY"
+    );
+    for name in [
+        "",
+        "/",
+        "1BAD",
+        "/production/1BAD",
+        "/production/",
+        "/production//API_KEY",
+        "/production/../API_KEY",
+        "BAD-NAME",
+        "BAD.NAME",
+        "BAD NAME",
+    ] {
         assert!(
             matches!(EnvName::new(name), Err(Error::InvalidPath(_))),
             "env name should be rejected: {name:?}"

@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
 };
 
-use lockbox_core::{EnvName, EnvSensitivity, EnvValueRef, Error, SecretString};
+use lockbox_core::{EnvName, EnvNamePattern, EnvSensitivity, EnvValueRef, Error, SecretString};
 
 use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
 use super::help::usage;
@@ -18,16 +18,25 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
         "get" => get_env(lockbox_path, &args[2..], access)?,
         "list" => {
             let (args, format) = output_format_from_args(&args[2..])?;
-            if !args.is_empty() {
-                return Err(Error::InvalidInput(format!(
-                    "unexpected env list argument: {}",
-                    args[0]
-                ))
-                .into());
-            }
+            let pattern = match args.as_slice() {
+                [] => None,
+                [pattern] => Some(EnvNamePattern::new(pattern)?),
+                _ => {
+                    return Err(Error::InvalidInput(
+                        "env list accepts at most one path or glob pattern".to_string(),
+                    )
+                    .into());
+                }
+            };
             let lb = open_existing(lockbox_path, access)?;
             let mut rows = Vec::new();
             for (name, sensitivity) in lb.list_env()? {
+                if pattern
+                    .as_ref()
+                    .is_some_and(|pattern| !name.matches_pattern(pattern))
+                {
+                    continue;
+                }
                 rows.push(vec![
                     name.to_string(),
                     sensitivity_name(sensitivity).to_string(),
@@ -36,11 +45,13 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
             print_records(&["name", "sensitivity"], rows, format)?;
         }
         "export" => {
-            let format = EnvExportFormat::parse(&args[2..])?;
+            let request = EnvExportRequest::parse(&args[2..])?;
             let lb = open_existing(lockbox_path, access)?;
             lb.visit_env(|name, value| match value {
                 EnvValueRef::Normal(value) => {
-                    println!("{}", format.format_assignment(name.as_str(), value));
+                    if let Some(name) = request.export_name(name.as_str()) {
+                        println!("{}", request.format.format_assignment(name, value));
+                    }
                     Ok(())
                 }
                 EnvValueRef::Secret(_) => Ok(()),
@@ -401,32 +412,26 @@ enum EnvExportFormat {
     Json,
 }
 
-impl EnvExportFormat {
+struct EnvExportRequest {
+    path: String,
+    format: EnvExportFormat,
+}
+
+impl EnvExportRequest {
     fn parse(args: &[String]) -> CliResult<Self> {
-        let mut format = Self::Posix;
+        let mut path = "/".to_string();
+        let mut saw_path = false;
+        let mut format = EnvExportFormat::Posix;
         let mut index = 0;
         while index < args.len() {
             match args[index].as_str() {
                 "--format" => {
                     index += 1;
-                    format = match args.get(index).map(String::as_str) {
-                        Some("posix") => Self::Posix,
-                        Some("powershell") => Self::PowerShell,
-                        Some("cmd") => Self::Cmd,
-                        Some("json") => Self::Json,
-                        Some(value) => {
-                            return Err(Error::InvalidInput(format!(
-                                "unsupported env export format: {value}"
-                            ))
-                            .into());
-                        }
-                        None => {
-                            return Err(Error::InvalidInput(
-                                "missing --format argument".to_string(),
-                            )
-                            .into());
-                        }
-                    };
+                    format = EnvExportFormat::parse_value(args.get(index).map(String::as_str))?;
+                }
+                value if !saw_path => {
+                    path = validate_export_path(value)?;
+                    saw_path = true;
                 }
                 _ => {
                     return Err(
@@ -436,7 +441,38 @@ impl EnvExportFormat {
             }
             index += 1;
         }
-        Ok(format)
+        Ok(Self { path, format })
+    }
+
+    fn export_name<'a>(&self, name: &'a str) -> Option<&'a str> {
+        if self.path == "/" {
+            let name = name.strip_prefix('/')?;
+            if name.contains('/') {
+                return None;
+            }
+            return Some(name);
+        }
+        let rest = name.strip_prefix(&self.path)?;
+        let rest = rest.strip_prefix('/')?;
+        if rest.contains('/') {
+            return None;
+        }
+        Some(rest)
+    }
+}
+
+impl EnvExportFormat {
+    fn parse_value(value: Option<&str>) -> CliResult<Self> {
+        match value {
+            Some("posix") => Ok(Self::Posix),
+            Some("powershell") => Ok(Self::PowerShell),
+            Some("cmd") => Ok(Self::Cmd),
+            Some("json") => Ok(Self::Json),
+            Some(value) => {
+                Err(Error::InvalidInput(format!("unsupported env export format: {value}")).into())
+            }
+            None => Err(Error::InvalidInput("missing --format argument".to_string()).into()),
+        }
     }
 
     fn format_assignment(&self, name: &str, value: &str) -> String {
@@ -451,6 +487,14 @@ impl EnvExportFormat {
             ),
         }
     }
+}
+
+fn validate_export_path(path: &str) -> CliResult<String> {
+    if path == "/" {
+        return Ok(path.to_string());
+    }
+    let name = EnvName::new(path)?;
+    Ok(name.as_str().to_string())
 }
 
 fn set_source(target: &mut Option<ValueSource>, source: ValueSource) -> CliResult<()> {

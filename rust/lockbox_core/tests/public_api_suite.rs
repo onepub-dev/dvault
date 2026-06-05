@@ -101,7 +101,7 @@ fn public_api_files_listing_env_symlink_and_rename_flow() {
         })
         .unwrap();
     assert_eq!(
-        env.get("DATABASE_URL")
+        env.get("/DATABASE_URL")
             .map(|(value, sensitivity)| (value.as_str(), *sensitivity)),
         Some((
             "postgres://localhost/app",
@@ -109,7 +109,7 @@ fn public_api_files_listing_env_symlink_and_rename_flow() {
         ))
     );
     assert_eq!(
-        env.get("API_TOKEN")
+        env.get("/API_TOKEN")
             .map(|(value, sensitivity)| (value.as_str(), *sensitivity)),
         Some(("secret-token", lockbox_core::EnvSensitivity::Normal))
     );

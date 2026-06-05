@@ -565,6 +565,7 @@ fn private_key_generation_env_name(name: &str, index: u16) -> Result<EnvName> {
 }
 
 fn private_key_name_from_env(name: &str) -> Option<Result<String>> {
+    let name = name.strip_prefix('/').unwrap_or(name);
     let hex = name.strip_prefix("LOCKBOX_VAULT_PRIVATE_KEY_")?;
     if hex.contains("_GEN_") {
         return None;

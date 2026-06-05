@@ -44,7 +44,7 @@ pub(crate) use toc::{env_btree, page_tree, toc_btree, toc_codec, toc_entry};
 
 pub use cache_options::{CacheLimit, CacheStats, LockboxOptions, WorkerPolicy, WorkloadProfile};
 pub use entry::{LockboxEntry, LockboxEntryKind};
-pub use env_name::EnvName;
+pub use env_name::{EnvName, EnvNamePattern};
 pub use env_sensitivity::EnvSensitivity;
 pub use error::{Error, Result};
 pub use extract_policy::ExtractPolicy;
