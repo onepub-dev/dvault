@@ -6,6 +6,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::server_log::log_server_event;
 use crate::store::{ServerConfig, ShareStore};
 use lockbox_share_protocol::payload;
 use lockbox_share_protocol::protocol::{self, Operation, Status};
@@ -22,7 +23,7 @@ pub fn run_server(bind: &str, store: Arc<ShareStore>) -> std::io::Result<()> {
 
 pub fn run_listener(listener: TcpListener, store: Arc<ShareStore>) -> std::io::Result<()> {
     let local_addr = listener.local_addr()?;
-    println!("lockbox-share-server listening on {local_addr}");
+    log_server_event(format!("lockbox-share-server listening on {local_addr}"));
     let purge_store = Arc::clone(&store);
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(1));
@@ -32,7 +33,7 @@ pub fn run_listener(listener: TcpListener, store: Arc<ShareStore>) -> std::io::R
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(30));
         if let Err(err) = compact_store.compact_if_needed() {
-            eprintln!("compaction failed: {err}");
+            log_server_event(format!("compaction failed: {err}"));
         }
     });
 
@@ -71,7 +72,7 @@ pub fn run_listener(listener: TcpListener, store: Arc<ShareStore>) -> std::io::R
                     break;
                 }
             }
-            Err(err) => eprintln!("accept failed: {err}"),
+            Err(err) => log_server_event(format!("accept failed: {err}")),
         }
     }
     Ok(())

@@ -1235,8 +1235,10 @@ name = "lockbox_share_server"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.2.17",
+ "libc",
  "lockbox_share_protocol",
  "sha2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

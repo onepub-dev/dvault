@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use crate::server_log::log_server_event;
 
 use getrandom::getrandom;
 use sha2::{Digest, Sha256};
@@ -1167,7 +1168,7 @@ fn start_replication_worker(
         .spawn(move || {
             let mut sequence = load_replication_sequence(&sequence_path).unwrap_or(0);
             let mut pending = load_outbox_pending(&outbox_path).unwrap_or_else(|err| {
-                eprintln!("replication outbox load failed: {err}");
+                log_server_event(format!("replication outbox load failed: {err}"));
                 VecDeque::new()
             });
             loop {
@@ -1176,7 +1177,7 @@ fn start_replication_worker(
                     Ok(kind) => {
                         sequence = sequence.saturating_add(1);
                         if let Err(err) = store_replication_sequence(&sequence_path, sequence) {
-                            eprintln!("replication sequence persist failed: {err}");
+                            log_server_event(format!("replication sequence persist failed: {err}"));
                             continue;
                         }
                         let event = ReplicationEvent {
@@ -1190,7 +1191,7 @@ fn start_replication_worker(
                             event,
                         });
                         if let Err(err) = append_outbox_event(&outbox_path, sequence, &request) {
-                            eprintln!("replication outbox append failed: {err}");
+                            log_server_event(format!("replication outbox append failed: {err}"));
                             continue;
                         }
                         pending.push_back((sequence, request));
@@ -1213,7 +1214,7 @@ fn retry_pending_outbox(
     while let Some((sequence, request)) = pending.pop_front() {
         if send_replication_request(peer_urls, &request) {
             if let Err(err) = append_outbox_ack(outbox_path, sequence) {
-                eprintln!("replication outbox ack failed: {err}");
+                log_server_event(format!("replication outbox ack failed: {err}"));
                 remaining.push_back((sequence, request));
             }
         } else {
@@ -1234,11 +1235,16 @@ fn send_replication_request(peer_urls: &[String], request: &[u8]) -> bool {
             Ok(response) if response.status == Status::Success => {}
             Ok(response) => {
                 all_ok = false;
-                eprintln!("replication peer {peer_url} returned {:?}", response.status)
+                log_server_event(format!(
+                    "replication peer {peer_url} returned {:?}",
+                    response.status
+                ))
             }
             Err(err) => {
                 all_ok = false;
-                eprintln!("replication peer {peer_url} failed: {err}");
+                log_server_event(format!(
+                    "replication peer {peer_url} failed: {err}"
+                ));
             }
         }
     }

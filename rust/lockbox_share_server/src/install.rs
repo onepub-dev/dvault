@@ -5,12 +5,15 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
+use crate::server_log::server_log_destination;
+
 const UNIT_PATH: &str = "/etc/systemd/system/lockbox-share-server.service";
 const CONFIG_DIR: &str = "/etc/lockbox";
 const CONFIG_PATH: &str = "/etc/lockbox/share-server.toml";
 const STATE_DIR: &str = "/var/lib/lockbox-share-server";
 const CACHE_DIR: &str = "/var/cache/lockbox-share-server";
 const LOG_DIR: &str = "/var/log/lockbox-share-server";
+const LOG_FILE: &str = "/var/log/lockbox-share-server/server.log";
 const USER: &str = "lockbox-share";
 
 pub fn install_systemd(force_config: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -77,6 +80,8 @@ pub fn print_status() -> Result<(), Box<dyn std::error::Error>> {
     println!("config_exists={}", Path::new(CONFIG_PATH).exists());
     println!("state_path={STATE_DIR}");
     println!("state_exists={}", Path::new(STATE_DIR).exists());
+    println!("service_log={LOG_FILE}");
+    println!("foreground_log={}", server_log_destination());
     println!(
         "unit_exec_start={}",
         systemctl_value(&[
@@ -208,6 +213,9 @@ Group={USER}
 ExecStart={binary} run --config {CONFIG_PATH}
 Restart=always
 RestartSec=2
+Environment=LOCKBOX_SHARE_SERVER_LOG={LOG_FILE}
+StandardOutput=append:{LOG_FILE}
+StandardError=append:{LOG_FILE}
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -227,7 +235,7 @@ WantedBy=multi-user.target
 
 #[cfg(test)]
 mod tests {
-    use super::{default_config, unit_file, CONFIG_PATH};
+    use super::{default_config, unit_file, CONFIG_PATH, LOG_FILE};
 
     #[test]
     fn unit_runs_from_config_and_restarts_on_boot_failures() {
@@ -235,6 +243,9 @@ mod tests {
         assert!(unit.contains("ExecStart=/usr/local/bin/lockbox-share-server run --config "));
         assert!(unit.contains(CONFIG_PATH));
         assert!(unit.contains("Restart=always"));
+        assert!(unit.contains(&format!("Environment=LOCKBOX_SHARE_SERVER_LOG={LOG_FILE}")));
+        assert!(unit.contains(&format!("StandardOutput=append:{LOG_FILE}")));
+        assert!(unit.contains(&format!("StandardError=append:{LOG_FILE}")));
         assert!(unit.contains("WantedBy=multi-user.target"));
         assert!(!unit.contains("--state-dir"));
     }

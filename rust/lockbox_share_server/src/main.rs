@@ -8,6 +8,7 @@ use std::time::Duration;
 use lockbox_share_protocol::{ServerStatus, TopologyRoute, TopologyServer};
 use lockbox_share_server::install::{install_systemd, print_status, uninstall_systemd};
 use lockbox_share_server::server::run_server;
+use lockbox_share_server::server_log::log_server_event;
 use lockbox_share_server::store::{ServerConfig, ShareStore};
 
 fn main() -> ExitCode {
@@ -15,6 +16,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: {err}");
+            log_server_event(format!("command failed: {err}"));
             ExitCode::FAILURE
         }
     }
