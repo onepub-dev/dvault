@@ -415,6 +415,12 @@ Environment variables are encrypted metadata, not files. They must not appear in
 file listings, file recovery listings, visualizations, or unauthenticated public
 metadata.
 
+All env reads and writes must go through the decoded page cache. This keeps env
+pages on the same copy-on-write, secure page decoding, redaction, and cache
+invalidation path as other lockbox metadata. Code must not scan raw storage for
+env records or append env replacement/tombstone records outside the page-cache
+write path.
+
 The committed env namespace stores only current entries, like the TOC. It must contain only the
 current value for each env name. Old env values are secret material; they must
 not remain decryptable in old COW pages after `set_env`, `delete_env`, or

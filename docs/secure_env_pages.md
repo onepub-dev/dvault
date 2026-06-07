@@ -20,6 +20,12 @@ the secure page policy. The cache stores one `DecodedPage` type, but each page
 object payload has a storage class. Normal pages use ordinary `Vec<u8>`
 payloads; secure env pages use `SecureVec` payloads.
 
+Every env read and write must pass through this decoded page cache path. Reads
+must request the secure env page policy before decoding, and writes must use the
+page-cache append path so old env pages are sanitized/redacted and cache entries
+are invalidated consistently. Env code must not bypass the cache by scanning raw
+pages or by writing ad hoc env records directly to storage.
+
 `PageBuffer` is the shared decoder buffer contract for in-place page-body
 decoding. It is intentionally narrower than `Vec`: it provides read access,
 mutable access, truncation, and secure range cloning. Building page payloads
