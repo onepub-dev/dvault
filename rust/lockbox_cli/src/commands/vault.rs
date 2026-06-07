@@ -18,6 +18,12 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const SHARE_RECEIVE_VERIFICATION_ADVICE: &str = concat!(
+    "verify the fingerprint and signing_fingerprint over a trusted channel you initiated; ",
+    "do not accept verification codes sent only through the original share channel or ",
+    "a channel opened by the sharer"
+);
+
 pub(crate) fn run(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault command")?;
     match command {
@@ -340,6 +346,7 @@ fn share_receive(args: &[String]) -> CliResult<()> {
         "signing_fingerprint={}",
         encode_hex(&public_key_fingerprint(&contact.signing_public_key))
     );
+    println!("verification_advice={SHARE_RECEIVE_VERIFICATION_ADVICE}");
     Ok(())
 }
 
@@ -884,7 +891,7 @@ fn set_private_key_permissions(_path: &str) -> CliResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::format_unix_ms_utc;
+    use super::{format_unix_ms_utc, SHARE_RECEIVE_VERIFICATION_ADVICE};
 
     #[test]
     fn share_expiry_uses_human_readable_utc_time() {
@@ -893,5 +900,12 @@ mod tests {
             format_unix_ms_utc(1_783_032_923_000),
             "2026/07/02 22:55 UTC"
         );
+    }
+
+    #[test]
+    fn share_receive_advice_requires_recipient_initiated_trusted_channel() {
+        assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("trusted channel"));
+        assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("you initiated"));
+        assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("opened by the sharer"));
     }
 }

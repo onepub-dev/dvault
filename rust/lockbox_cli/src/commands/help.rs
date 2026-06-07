@@ -1040,6 +1040,16 @@ fn vault_command(verbose: bool) -> Command {
                     Command::new("receive")
                         .about("Receive a contact share and save it as a contact.")
                         .visible_alias("fetch")
+                        .after_help(verbose_help(
+                            verbose,
+                            "Examples:\n  lockbox vault share receive 0123456789012 alice",
+                            concat!(
+                                "Context:\n  Receive saves the shared public key and signing key as a local contact. ",
+                                "Verify the printed fingerprint and signing_fingerprint over a trusted channel ",
+                                "you initiated. Do not accept verification codes sent only through the original ",
+                                "share channel or a channel opened by the sharer.",
+                            ),
+                        ))
                         .arg(share_server_arg())
                         .arg(share_topology_arg())
                         .arg(
