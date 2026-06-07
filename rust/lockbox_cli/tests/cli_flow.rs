@@ -1234,6 +1234,12 @@ fn list_commands_support_table_tsv_and_json_formats() {
     assert!(recursive.lines().next().unwrap_or("").contains("path"));
     assert!(recursive.contains("/docs/a.txt"));
 
+    let glob = run_output(bin, &["list", lockbox.to_str().unwrap(), "/docs/*.txt"]);
+    assert_success(&glob);
+    let glob = String::from_utf8_lossy(&glob.stdout);
+    assert!(glob.lines().next().unwrap_or("").contains("path"));
+    assert!(glob.contains("/docs/a.txt"));
+
     let tsv = run_output(bin, &["list", "--format", "tsv", lockbox.to_str().unwrap()]);
     assert_success(&tsv);
     assert!(String::from_utf8_lossy(&tsv.stdout).contains("directory\t-\tdocs/"));

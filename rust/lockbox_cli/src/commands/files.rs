@@ -82,11 +82,20 @@ pub(crate) fn list(args: &[String], access: &Access) -> CliResult<()> {
         .cloned()
         .collect::<Vec<_>>();
     let lockbox_path = require_arg(&args, 0, "lockbox")?;
-    let path = LockboxPath::new(args.get(1).map(String::as_str).unwrap_or("/"))?;
+    let target = args.get(1).map(String::as_str).unwrap_or("/");
+    let glob = contains_glob(target);
+    let path = if glob {
+        LockboxPath::new("/")?
+    } else {
+        LockboxPath::new(target)?
+    };
     let lb = open_existing(lockbox_path, access)?;
-    if recursive {
+    if recursive || glob {
         let mut options = ListOptions::new(&path);
         options.recursive = true;
+        if glob {
+            options.set_glob(target.trim_start_matches('/'));
+        }
         let mut rows = Vec::new();
         for entry in lb.list(options)? {
             let entry = entry?;
@@ -102,6 +111,10 @@ pub(crate) fn list(args: &[String], access: &Access) -> CliResult<()> {
         print_records(&["kind", "len", "name"], rows, format)?;
     }
     Ok(())
+}
+
+fn contains_glob(value: &str) -> bool {
+    value.contains('*') || value.contains('?')
 }
 
 fn direct_listing_rows(lb: &Lockbox, path: &LockboxPath) -> CliResult<Vec<Vec<String>>> {

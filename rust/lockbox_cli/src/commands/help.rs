@@ -213,8 +213,8 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .visible_alias("ls")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox list secrets.lbox\n  lockbox list secrets.lbox /project\n  lockbox list --recursive --format json secrets.lbox",
-                    "Context:\n  List shows files and inferred directories stored in a lockbox. The default view mirrors a normal directory listing; use --recursive when scripts or audits need full stored paths.",
+                    "Examples:\n  lockbox list secrets.lbox\n  lockbox list secrets.lbox /project\n  lockbox list secrets.lbox '/project/**/*.txt'\n  lockbox list --recursive --format json secrets.lbox",
+                    "Context:\n  List shows files and inferred directories stored in a lockbox. The default view mirrors a normal directory listing; pass a glob pattern to match stored paths, or use --recursive when scripts or audits need full stored paths.",
                 ))
                 .arg(output_format_arg())
                 .arg(
@@ -225,7 +225,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("List entries below child directories."),
                 )
                 .arg(required("lockbox", "Lockbox path."))
-                .arg(optional("path", "Path inside the lockbox.")),
+                .arg(optional("path", "Path or glob pattern inside the lockbox.")),
             file_command("rm", "Remove a stored entry.")
                 .visible_alias("remove")
                 .after_help(verbose_help(
