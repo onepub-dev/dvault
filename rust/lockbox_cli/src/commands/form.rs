@@ -216,7 +216,7 @@ fn edit(args: &[String], access: &Access) -> CliResult<()> {
         lb.set_form_field_normal(&path, &field_id, &value)?;
     }
     if interactive {
-        fill_missing_fields_interactively(&mut lb, &path, &definition)?;
+        edit_fields_interactively(&mut lb, &path, &definition)?;
     }
     lb.commit()?;
     Ok(())
@@ -438,8 +438,51 @@ fn fill_missing_fields_interactively(
     Ok(())
 }
 
+fn edit_fields_interactively(
+    lb: &mut lockbox_core::Lockbox,
+    path: &LockboxPath,
+    definition: &lockbox_core::FormDefinition,
+) -> CliResult<()> {
+    let record = lb
+        .get_form_record(path)?
+        .ok_or_else(|| Error::NotFound(format!("form record {path}")))?;
+    for field in &definition.fields {
+        let existing = record
+            .values
+            .iter()
+            .find(|value| value.field_id == field.id)
+            .map(|value| &value.value);
+        if field.kind.is_secret() {
+            let value = prompt_secret(&format!("{}: ", field.label))?;
+            if value.is_empty() && (existing.is_some() || !field.required) {
+                continue;
+            }
+            lb.set_form_field_secret(path, &field.id, &value)?;
+        } else {
+            let existing_normal = match existing {
+                Some(FormValue::Normal(value)) => Some(value.as_str()),
+                _ => None,
+            };
+            let value = prompt_normal_field_with_default(&field.label, existing_normal)?;
+            if value.is_empty() && (existing.is_some() || !field.required) {
+                continue;
+            }
+            lb.set_form_field_normal(path, &field.id, &value)?;
+        }
+    }
+    Ok(())
+}
+
 fn prompt_normal_field(label: &str) -> CliResult<String> {
-    print!("{label}: ");
+    prompt_normal_field_with_default(label, None)
+}
+
+fn prompt_normal_field_with_default(label: &str, default: Option<&str>) -> CliResult<String> {
+    if let Some(default) = default {
+        print!("{label} [{default}]: ");
+    } else {
+        print!("{label}: ");
+    }
     std::io::stdout().flush()?;
     let mut value = String::new();
     std::io::stdin().read_line(&mut value)?;

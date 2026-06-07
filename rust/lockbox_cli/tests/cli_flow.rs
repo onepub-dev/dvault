@@ -519,9 +519,10 @@ fn form_interactive_edit_handles_definition_history_and_mismatched_record() {
     let edit = run_output_with_stdin(
         bin,
         &["form", "edit", &lockbox, "/work/history", "--interactive"],
-        "revision secret\n\n",
+        "\nrevision secret\n\n",
     );
     assert_success(&edit);
+    assert!(String::from_utf8_lossy(&edit.stdout).contains("Username [alice]:"));
 
     let show = run_output(bin, &["form", "show", &lockbox, "/work/history"]);
     assert_success(&show);
@@ -530,6 +531,39 @@ fn form_interactive_edit_handles_definition_history_and_mismatched_record() {
     assert!(show.contains("field\tpassword\tPassword\t<secret>"));
     assert!(show.contains("unknown-field\tlegacy\tLegacy"));
     assert!(!show.contains("revision secret"));
+
+    let password = run_output(
+        bin,
+        &[
+            "form",
+            "get",
+            "--secret",
+            &lockbox,
+            "/work/history",
+            "password",
+        ],
+    );
+    assert_success(&password);
+    assert_eq!(
+        String::from_utf8_lossy(&password.stdout),
+        "revision secret\n"
+    );
+
+    let edit_existing = run_output_with_stdin(
+        bin,
+        &["form", "edit", &lockbox, "/work/history", "--interactive"],
+        "bob\n\nhttps://example.com\n",
+    );
+    assert_success(&edit_existing);
+    let edit_existing = String::from_utf8_lossy(&edit_existing.stdout);
+    assert!(edit_existing.contains("Username [alice]:"));
+    assert!(!edit_existing.contains("revision secret"));
+
+    let show = run_output(bin, &["form", "show", &lockbox, "/work/history"]);
+    assert_success(&show);
+    let show = String::from_utf8_lossy(&show.stdout);
+    assert!(show.contains("field\tusername\tUsername\tbob"));
+    assert!(show.contains("field\tsite\tsite\thttps://example.com"));
 
     let password = run_output(
         bin,

@@ -76,23 +76,19 @@ fn read_secret_string() -> io::Result<SecretString> {
 fn read_line_secret() -> io::Result<SecretString> {
     let mut secret = SecretString::new();
     let mut stdin = io::stdin().lock();
-    let mut buffer = [0u8; 256];
+    let mut buffer = [0u8; 1];
     loop {
         let read = stdin.read(&mut buffer)?;
         if read == 0 {
             break;
         }
-        let end = buffer[..read]
-            .iter()
-            .position(|byte| matches!(byte, b'\n' | b'\r'));
-        let value_len = end.unwrap_or(read);
-        secret
-            .try_extend_from_slice(&buffer[..value_len])
-            .map_err(io::Error::other)?;
-        clear_buffer(&mut buffer);
-        if end.is_some() {
+        if matches!(buffer[0], b'\n' | b'\r') {
             break;
         }
+        secret
+            .try_extend_from_slice(&buffer[..read])
+            .map_err(io::Error::other)?;
+        clear_buffer(&mut buffer);
     }
     Ok(secret)
 }
