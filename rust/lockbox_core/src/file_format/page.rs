@@ -43,6 +43,8 @@ pub(crate) enum PageObjectKind {
     Delete = 12,
     EnvLeaf = 13,
     EnvInternal = 14,
+    FormLeaf = 15,
+    FormInternal = 16,
 }
 
 pub(crate) fn page_size_for_objects(objects: &[PageObject]) -> usize {
@@ -154,6 +156,8 @@ impl PageObjectKind {
             12 => Ok(Self::Delete),
             13 => Ok(Self::EnvLeaf),
             14 => Ok(Self::EnvInternal),
+            15 => Ok(Self::FormLeaf),
+            16 => Ok(Self::FormInternal),
             _ => Err(Error::CorruptRecord),
         }
     }
@@ -800,7 +804,10 @@ fn decode_secure_env_page_inspection(
     let object = decoded.objects.first()?;
     if !matches!(
         object.kind,
-        PageObjectKind::EnvLeaf | PageObjectKind::EnvInternal
+        PageObjectKind::EnvLeaf
+            | PageObjectKind::EnvInternal
+            | PageObjectKind::FormLeaf
+            | PageObjectKind::FormInternal
     ) {
         return None;
     }
@@ -860,9 +867,11 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Option<RecordKind> {
         PageObjectKind::FreeIndexLeaf | PageObjectKind::FreeIndexInternal => {
             Some(RecordKind::FreeIndex)
         }
-        PageObjectKind::KeyDirectory | PageObjectKind::EnvLeaf | PageObjectKind::EnvInternal => {
-            None
-        }
+        PageObjectKind::KeyDirectory
+        | PageObjectKind::EnvLeaf
+        | PageObjectKind::EnvInternal
+        | PageObjectKind::FormLeaf
+        | PageObjectKind::FormInternal => None,
     }
 }
 
@@ -882,6 +891,8 @@ fn page_object_kind_name(kind: PageObjectKind) -> &'static str {
         PageObjectKind::Delete => "delete",
         PageObjectKind::EnvLeaf => "env-leaf",
         PageObjectKind::EnvInternal => "env-internal",
+        PageObjectKind::FormLeaf => "form-leaf",
+        PageObjectKind::FormInternal => "form-internal",
     }
 }
 

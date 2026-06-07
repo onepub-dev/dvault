@@ -492,8 +492,9 @@ impl Lockbox {
             .cloned()
             .collect::<Vec<_>>();
         let env = self.clone_all_env_values()?;
+        let forms = self.clone_all_form_state()?;
         if let Some(path) = self.storage.path().map(Path::to_path_buf) {
-            return self.compact_file_backed(path, entries, env);
+            return self.compact_file_backed(path, entries, env, forms);
         }
 
         let key = self.key.try_clone()?;
@@ -502,7 +503,7 @@ impl Lockbox {
             self.lockbox_id,
             self.compaction_options(),
         );
-        self.populate_compacted(&mut compacted, entries, env)?;
+        self.populate_compacted(&mut compacted, entries, env, forms)?;
         compacted.commit()?;
         *self = compacted;
         Ok(())
@@ -513,6 +514,10 @@ impl Lockbox {
         path: PathBuf,
         entries: Vec<crate::toc_entry::TocEntry>,
         env: std::collections::BTreeMap<crate::EnvName, crate::env_btree::EnvValue>,
+        forms: (
+            std::collections::BTreeMap<String, crate::form::FormDefinition>,
+            std::collections::BTreeMap<crate::LockboxPath, crate::form::FormRecord>,
+        ),
     ) -> Result<()> {
         let temp_path = compact_temp_path(&path);
         let _ = fs::remove_file(&temp_path);
@@ -526,7 +531,7 @@ impl Lockbox {
                 self.lockbox_id,
                 options,
             )?;
-            self.populate_compacted(&mut compacted, entries, env)?;
+            self.populate_compacted(&mut compacted, entries, env, forms)?;
             compacted.commit()?;
             drop(compacted);
             replace_file_with_compacted(&temp_path, &path)?;
@@ -545,6 +550,10 @@ impl Lockbox {
         compacted: &mut Lockbox,
         entries: Vec<crate::toc_entry::TocEntry>,
         env: std::collections::BTreeMap<crate::EnvName, crate::env_btree::EnvValue>,
+        forms: (
+            std::collections::BTreeMap<String, crate::form::FormDefinition>,
+            std::collections::BTreeMap<crate::LockboxPath, crate::form::FormRecord>,
+        ),
     ) -> Result<()> {
         compacted.key_slots = self.key_slots.clone();
         compacted.key_directory_generation = self.key_directory_generation;
@@ -552,6 +561,12 @@ impl Lockbox {
 
         for (name, value) in env {
             compacted.set_env_value(name, value)?;
+        }
+        for (key, definition) in forms.0 {
+            compacted.set_form_definition_value(key, definition)?;
+        }
+        for (path, record) in forms.1 {
+            compacted.set_form_record_value(path, record)?;
         }
 
         for entry in entries {

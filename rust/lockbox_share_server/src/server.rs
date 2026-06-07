@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -38,7 +38,7 @@ pub fn run_listener(listener: TcpListener, store: Arc<ShareStore>) -> std::io::R
     });
 
     let worker_count = worker_count();
-    let (tx, rx) = mpsc::sync_channel::<TcpStream>(worker_count * 1024);
+    let (tx, rx) = mpsc::sync_channel::<TcpStream>(accepted_stream_queue_bound(worker_count));
     let rx = Arc::new(Mutex::new(rx));
     let limiter = Arc::new(RateLimiter::new(
         store.rate_limit_per_minute(),
@@ -65,6 +65,7 @@ pub fn run_listener(listener: TcpListener, store: Arc<ShareStore>) -> std::io::R
             })?;
     }
 
+    let mut last_accept_error_log = Instant::now() - Duration::from_secs(30);
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -72,7 +73,17 @@ pub fn run_listener(listener: TcpListener, store: Arc<ShareStore>) -> std::io::R
                     break;
                 }
             }
-            Err(err) => log_server_event(format!("accept failed: {err}")),
+            Err(err) => {
+                if is_accept_resource_pressure(&err) {
+                    if last_accept_error_log.elapsed() >= Duration::from_secs(10) {
+                        log_server_event(format!("accept deferred under resource pressure: {err}"));
+                        last_accept_error_log = Instant::now();
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                } else {
+                    log_server_event(format!("accept failed: {err}"));
+                }
+            }
         }
     }
     Ok(())
@@ -88,6 +99,14 @@ fn worker_count() -> usize {
         .unwrap_or(4)
         .saturating_mul(4)
         .clamp(4, 64)
+}
+
+fn accepted_stream_queue_bound(worker_count: usize) -> usize {
+    worker_count.saturating_mul(4).clamp(16, 256)
+}
+
+fn is_accept_resource_pressure(err: &std::io::Error) -> bool {
+    matches!(err.kind(), ErrorKind::WouldBlock) || matches!(err.raw_os_error(), Some(11 | 23 | 24))
 }
 
 pub struct RateLimiter {

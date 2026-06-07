@@ -1,16 +1,28 @@
 use super::{
-    encode_forget, encode_forget_all, encode_get, encode_key_response, encode_list,
-    encode_list_response, encode_put, encode_response_line, encode_stop, max_message_bytes,
-    parse_request, parse_response, AgentRequest, AgentResponse, CachedLockbox, SecretVec,
+    encode_control_err_response, encode_control_ok_response, encode_err_response, encode_forget,
+    encode_forget_all, encode_get, encode_key_response, encode_list, encode_list_response,
+    encode_miss_response, encode_ok_response, encode_put, encode_register_secret_activity,
+    encode_registered_response, encode_stop, encode_unregister_secret_activity, frame_header_len,
+    frame_message_type, frame_payload_len, is_control_message_type, max_message_bytes,
+    parse_control_request, parse_control_response, parse_request, parse_response, AgentRequest,
+    AgentResponse, CachedLockbox, ControlRequest, ControlResponse, SecretActivityKind, SecretVec,
     DEFAULT_TTL_SECONDS,
 };
+use crate::active_secret::ActiveSecretRegistry;
+use crate::agent_config::AgentConfig;
+use crate::agent_log::log_agent_event;
+use crate::sleep_watcher::{SleepEvent, SleepWatcher};
 use lockbox_core::LockboxId;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
 use std::io;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::{Command, Stdio};
 use std::ptr::{null, null_mut};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
@@ -47,14 +59,30 @@ struct CacheEntry {
 }
 
 pub(crate) fn serve_agent() -> io::Result<()> {
+    log_agent_event("agent starting");
     let current_user_sid = current_process_user_sid()?;
-    let mut cache = BTreeMap::<String, CacheEntry>::new();
+    let cache = Arc::new(Mutex::new(BTreeMap::<String, CacheEntry>::new()));
+    let config = AgentConfig::load();
+    log_agent_event(format!(
+        "agent config prevent_sleep={} terminate_on_suspend={}",
+        config.prevent_sleep, config.terminate_on_suspend
+    ));
+    let active = Arc::new(Mutex::new(ActiveSecretRegistry::new(config)));
     let mut last_activity = Instant::now();
+    start_sleep_cache_clearer(cache.clone(), active.clone());
 
     loop {
-        prune_expired(&mut cache);
-        if cache.is_empty() && last_activity.elapsed() > Duration::from_secs(IDLE_EXIT_SECONDS) {
-            return Ok(());
+        {
+            let mut cache = lock_cache(&cache)?;
+            log_pruned_expired(&mut cache);
+            let active_empty = lock_active(&active)?.is_empty();
+            if cache.is_empty()
+                && active_empty
+                && last_activity.elapsed() > Duration::from_secs(IDLE_EXIT_SECONDS)
+            {
+                log_agent_event("agent exiting after idle timeout");
+                return Ok(());
+            }
         }
 
         let pipe = create_pipe()?;
@@ -62,14 +90,88 @@ pub(crate) fn serve_agent() -> io::Result<()> {
         if let Err(err) = connected {
             return Err(err);
         }
+        log_agent_event("agent client connected");
 
         last_activity = Instant::now();
-        let stop = handle_client(pipe.as_raw(), &current_user_sid, &mut cache).unwrap_or(false);
+        let stop = {
+            let mut cache = match lock_cache(&cache) {
+                Ok(cache) => cache,
+                Err(err) => {
+                    log_agent_event(format!("agent cache lock failed: {err}"));
+                    return Err(err);
+                }
+            };
+            log_agent_event("agent cache locked");
+            match catch_unwind(AssertUnwindSafe(|| {
+                handle_client(pipe.as_raw(), &current_user_sid, &mut cache, &active)
+            })) {
+                Ok(Ok(stop)) => {
+                    log_agent_event("agent request handled");
+                    stop
+                }
+                Ok(Err(err)) => {
+                    log_agent_event(format!("agent request failed: {err}"));
+                    false
+                }
+                Err(_) => {
+                    log_agent_event("agent request panicked");
+                    false
+                }
+            }
+        };
         disconnect_pipe(pipe.as_raw());
         if stop {
+            log_agent_event("agent stopped by request");
             return Ok(());
         }
     }
+}
+
+fn start_sleep_cache_clearer(
+    cache: Arc<Mutex<BTreeMap<String, CacheEntry>>>,
+    active: Arc<Mutex<ActiveSecretRegistry>>,
+) {
+    let Ok(watcher) = SleepWatcher::start() else {
+        log_agent_event("sleep watcher unavailable");
+        return;
+    };
+    log_agent_event("sleep watcher started");
+    let _ = thread::Builder::new()
+        .name("lockbox-sleep-cache-clearer".to_string())
+        .spawn(move || {
+            while let Ok(event) = watcher.recv() {
+                if event == SleepEvent::SuspendRequested {
+                    if let Ok(mut cache) = cache.lock() {
+                        let count = cache.len();
+                        cache.clear();
+                        log_agent_event(format!(
+                            "suspend requested; cleared {count} cached lockboxes"
+                        ));
+                    }
+                    if let Ok(mut active) = active.lock() {
+                        active.suspend_requested();
+                    }
+                } else if event == SleepEvent::Resumed {
+                    log_agent_event("resume observed");
+                }
+            }
+        });
+}
+
+fn lock_cache(
+    cache: &Arc<Mutex<BTreeMap<String, CacheEntry>>>,
+) -> io::Result<std::sync::MutexGuard<'_, BTreeMap<String, CacheEntry>>> {
+    cache
+        .lock()
+        .map_err(|_| io::Error::other("session agent cache lock was poisoned"))
+}
+
+fn lock_active(
+    active: &Arc<Mutex<ActiveSecretRegistry>>,
+) -> io::Result<std::sync::MutexGuard<'_, ActiveSecretRegistry>> {
+    active
+        .lock()
+        .map_err(|_| io::Error::other("session agent activity lock was poisoned"))
 }
 
 pub(crate) fn verify_agent_transport_security() -> io::Result<()> {
@@ -79,13 +181,10 @@ pub(crate) fn verify_agent_transport_security() -> io::Result<()> {
 }
 
 pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
-    if open_pipe(&wide_pipe_name()).is_err() {
-        return Ok(None);
-    }
-    match request(&encode_get(lockbox_id)?)? {
-        AgentResponse::Key(key) => Ok(Some(key)),
-        AgentResponse::Miss => Ok(None),
-        response => invalid_agent_response(response),
+    match request_existing(&encode_get(lockbox_id)?)? {
+        Some(AgentResponse::Key(key)) => Ok(Some(key)),
+        Some(AgentResponse::Miss) | None => Ok(None),
+        Some(response) => invalid_agent_response(response),
     }
 }
 
@@ -99,33 +198,45 @@ pub(crate) fn put(
 }
 
 pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
-    if open_pipe(&wide_pipe_name()).is_err() {
-        return Ok(());
+    match request_existing(&encode_forget(lockbox_id)?)? {
+        Some(response) => expect_ok(response),
+        None => Ok(()),
     }
-    expect_ok(request(&encode_forget(lockbox_id)?)?)
 }
 
 pub(crate) fn forget_all() -> io::Result<()> {
-    if open_pipe(&wide_pipe_name()).is_err() {
-        return Ok(());
+    match request_existing(&encode_forget_all()?)? {
+        Some(response) => expect_ok(response),
+        None => Ok(()),
     }
-    expect_ok(request(&encode_forget_all()?)?)
 }
 
 pub(crate) fn stop() -> io::Result<()> {
-    if open_pipe(&wide_pipe_name()).is_err() {
-        return Ok(());
+    match request_existing(&encode_stop()?)? {
+        Some(response) => expect_ok(response),
+        None => Ok(()),
     }
-    expect_ok(request(&encode_stop()?)?)
 }
 
 pub(crate) fn list() -> io::Result<Vec<CachedLockbox>> {
-    if open_pipe(&wide_pipe_name()).is_err() {
-        return Ok(Vec::new());
+    match request_existing(&encode_list()?)? {
+        Some(AgentResponse::List(ids)) => Ok(ids),
+        None => Ok(Vec::new()),
+        Some(response) => invalid_agent_response(response),
     }
-    match request(&encode_list()?)? {
-        AgentResponse::List(ids) => Ok(ids),
-        response => invalid_agent_response(response),
+}
+
+pub(crate) fn register_secret_activity(kind: SecretActivityKind) -> io::Result<u64> {
+    match request_control(&encode_register_secret_activity(std::process::id(), kind)?)? {
+        ControlResponse::Registered(token) => Ok(token),
+        response => invalid_control_response(response),
+    }
+}
+
+pub(crate) fn unregister_secret_activity(pid: u32, token: u64) -> io::Result<()> {
+    match request_control_existing(&encode_unregister_secret_activity(pid, token)?)? {
+        Some(response) => expect_control_ok(response),
+        None => Ok(()),
     }
 }
 
@@ -142,10 +253,55 @@ fn request(message: &SecretVec) -> io::Result<AgentResponse> {
             open_pipe(&pipe_name)?
         }
     };
+    request_with_handle(handle, message)
+}
+
+fn request_existing(message: &SecretVec) -> io::Result<Option<AgentResponse>> {
+    let pipe_name = wide_pipe_name();
+    let Ok(handle) = open_pipe(&pipe_name) else {
+        return Ok(None);
+    };
+    request_with_handle(handle, message).map(Some)
+}
+
+fn request_control(message: &[u8]) -> io::Result<ControlResponse> {
+    let pipe_name = wide_pipe_name();
+    let handle = match open_pipe(&pipe_name) {
+        Ok(handle) => handle,
+        Err(_) => {
+            start_agent()?;
+            open_pipe(&pipe_name)?
+        }
+    };
+    request_control_with_handle(handle, message)
+}
+
+fn request_control_existing(message: &[u8]) -> io::Result<Option<ControlResponse>> {
+    let pipe_name = wide_pipe_name();
+    let Ok(handle) = open_pipe(&pipe_name) else {
+        return Ok(None);
+    };
+    request_control_with_handle(handle, message).map(Some)
+}
+
+fn request_with_handle(handle: OwnedHandle, message: &SecretVec) -> io::Result<AgentResponse> {
     message
         .with_bytes(|message| write_all(handle.as_raw(), message))
-        .map_err(io::Error::other)??;
-    parse_response(read_frame(handle.as_raw(), max_message_bytes())?)
+        .map_err(io::Error::other)?
+        .map_err(|err| io::Error::new(err.kind(), format!("agent pipe write failed: {err}")))?;
+    parse_response(
+        read_secure_frame(handle.as_raw(), max_message_bytes())
+            .map_err(|err| io::Error::new(err.kind(), format!("agent pipe read failed: {err}")))?,
+    )
+}
+
+fn request_control_with_handle(handle: OwnedHandle, message: &[u8]) -> io::Result<ControlResponse> {
+    write_all(handle.as_raw(), message)
+        .map_err(|err| io::Error::new(err.kind(), format!("agent pipe write failed: {err}")))?;
+    parse_control_response(
+        &read_plain_frame(handle.as_raw(), max_message_bytes())
+            .map_err(|err| io::Error::new(err.kind(), format!("agent pipe read failed: {err}")))?,
+    )
 }
 
 fn start_agent() -> io::Result<()> {
@@ -282,8 +438,10 @@ fn connect_pipe(pipe: HANDLE) -> io::Result<()> {
 }
 
 fn disconnect_pipe(pipe: HANDLE) {
-    // SAFETY: `pipe` is a connected named-pipe handle owned by the server loop.
-    // Disconnection does not close the handle; `OwnedHandle` closes it later.
+    // SAFETY: Disconnection does not close the handle; `OwnedHandle` closes it
+    // later. The response frame has already been written synchronously; forcing
+    // a server-side flush can deadlock with clients that issue a follow-up
+    // control request while the agent is still waiting for the pipe to drain.
     unsafe {
         DisconnectNamedPipe(pipe);
     }
@@ -339,28 +497,57 @@ fn handle_client(
     pipe: HANDLE,
     current_user_sid: &[u8],
     cache: &mut BTreeMap<String, CacheEntry>,
+    active: &Arc<Mutex<ActiveSecretRegistry>>,
 ) -> io::Result<bool> {
-    let request = read_frame(pipe, max_message_bytes())?;
-    if request.is_empty() {
-        return Ok(false);
-    }
+    let request = read_agent_frame(pipe, max_message_bytes())?;
     if !client_matches_current_user(pipe, current_user_sid)? {
+        log_agent_event("rejected agent request from different user");
         return Ok(false);
     }
+    log_agent_event("agent request user accepted");
     let mut stop = false;
-    let response = match parse_request(&request) {
+    let response = match request {
+        AgentFrame::Cache(request) => {
+            let response = handle_cache_request(&request, cache, &mut stop)?;
+            AgentReply::Cache(response)
+        }
+        AgentFrame::Control(request) => {
+            let response = handle_control_request(&request, active)?;
+            AgentReply::Control(response)
+        }
+    };
+    write_agent_reply(pipe, response)?;
+    Ok(stop)
+}
+
+fn handle_cache_request(
+    request: &SecretVec,
+    cache: &mut BTreeMap<String, CacheEntry>,
+    stop: &mut bool,
+) -> io::Result<SecretVec> {
+    let response = match parse_request(request) {
         Ok(AgentRequest::Get(lockbox_id)) => {
+            log_agent_event(format!("agent request get {lockbox_id}"));
             let now = Instant::now();
             match cache.get_mut(&lockbox_id) {
                 Some(entry) if entry.expires_at > now => {
                     entry.expires_at = now + Duration::from_secs(entry.ttl_seconds);
+                    log_agent_event(format!("cache hit {lockbox_id}"));
                     encode_key_response(&entry.key)?
                 }
-                _ => encode_response_line(b"MISS\n")?,
+                _ => {
+                    log_agent_event(format!("cache miss {lockbox_id}"));
+                    encode_miss_response()?
+                }
             }
         }
         Ok(AgentRequest::Put(lockbox_id, key, path, ttl_seconds)) => {
+            log_agent_event(format!("agent request put {lockbox_id}"));
             let ttl_seconds = ttl_seconds.unwrap_or(DEFAULT_TTL_SECONDS);
+            log_agent_event(format!(
+                "cached lockbox {lockbox_id} ttl_seconds={ttl_seconds} path={}",
+                path.as_deref().unwrap_or("")
+            ));
             cache.insert(
                 lockbox_id.clone(),
                 CacheEntry {
@@ -370,33 +557,65 @@ fn handle_client(
                     expires_at: Instant::now() + Duration::from_secs(ttl_seconds),
                 },
             );
-            encode_response_line(b"OK\n")?
+            encode_ok_response()?
         }
         Ok(AgentRequest::Forget(lockbox_id)) => {
+            log_agent_event(format!("agent request forget {lockbox_id}"));
             cache.remove(&lockbox_id);
-            encode_response_line(b"OK\n")?
+            log_agent_event(format!("forgot lockbox {lockbox_id}"));
+            encode_ok_response()?
         }
         Ok(AgentRequest::ForgetAll) => {
+            log_agent_event("agent request forget-all");
+            let count = cache.len();
             cache.clear();
-            encode_response_line(b"OK\n")?
+            log_agent_event(format!("forgot all cached lockboxes count={count}"));
+            encode_ok_response()?
         }
         Ok(AgentRequest::Stop) => {
+            log_agent_event("agent request stop");
+            let count = cache.len();
             cache.clear();
-            stop = true;
-            encode_response_line(b"OK\n")?
+            *stop = true;
+            log_agent_event(format!("stop requested; cleared {count} cached lockboxes"));
+            encode_ok_response()?
         }
         Ok(AgentRequest::List) => {
+            log_agent_event("agent request list");
+            log_agent_event(format!("listed cached lockboxes count={}", cache.len()));
             encode_list_response(cache.iter().map(|(id, entry)| CachedLockbox {
                 id: id.clone(),
                 path: entry.path.clone(),
             }))?
         }
-        Err(_) => encode_response_line(b"ERR invalid request\n")?,
+        Err(err) => {
+            log_agent_event(format!("agent request parse failed: {err}"));
+            encode_err_response("invalid request")?
+        }
     };
-    response
-        .with_bytes(|response| write_all(pipe, response))
-        .map_err(io::Error::other)??;
-    Ok(stop)
+    Ok(response)
+}
+
+fn handle_control_request(
+    request: &[u8],
+    active: &Arc<Mutex<ActiveSecretRegistry>>,
+) -> io::Result<Vec<u8>> {
+    match parse_control_request(request) {
+        Ok(ControlRequest::RegisterSecretActivity(pid, kind)) => {
+            log_agent_event("agent request register-secret-activity");
+            let token = lock_active(active)?.register(pid, kind)?;
+            encode_registered_response(token)
+        }
+        Ok(ControlRequest::UnregisterSecretActivity(pid, token)) => {
+            log_agent_event("agent request unregister-secret-activity");
+            lock_active(active)?.unregister(pid, token);
+            encode_control_ok_response()
+        }
+        Err(err) => {
+            log_agent_event(format!("agent control request parse failed: {err}"));
+            encode_control_err_response("invalid control request")
+        }
+    }
 }
 
 fn client_matches_current_user(pipe: HANDLE, current_user_sid: &[u8]) -> io::Result<bool> {
@@ -442,7 +661,7 @@ fn open_thread_token() -> io::Result<Option<OwnedHandle>> {
     let mut token: HANDLE = null_mut();
     // SAFETY: `token` is a valid out pointer and the current thread may have
     // an impersonation token after `ImpersonateNamedPipeClient`.
-    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 0, &mut token) };
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
     if opened == 0 {
         let err = last_error();
         if err == ERROR_NO_TOKEN {
@@ -539,38 +758,94 @@ fn write_all(handle: HANDLE, mut bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn read_frame(handle: HANDLE, max_bytes: usize) -> io::Result<SecretVec> {
-    let mut out = SecretVec::new();
-    let mut header = Vec::new();
-    loop {
-        let byte = read_one_byte(handle)?;
-        header.push(byte);
-        if header.len() > max_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "message too large",
-            ));
-        }
-        out.try_push(byte).map_err(io::Error::other)?;
-        if byte == b'\n' {
-            break;
-        }
+enum AgentFrame {
+    Cache(SecretVec),
+    Control(Vec<u8>),
+}
+
+enum AgentReply {
+    Cache(SecretVec),
+    Control(Vec<u8>),
+}
+
+fn read_agent_frame(handle: HANDLE, max_bytes: usize) -> io::Result<AgentFrame> {
+    let mut header = vec![0u8; frame_header_len()];
+    read_exact_plain(handle, &mut header)?;
+    let payload_len = frame_payload_len(&header)?;
+    let frame_len = checked_frame_len(header.len(), payload_len, max_bytes)?;
+    let message_type = frame_message_type(&header)?;
+    if is_control_message_type(message_type) {
+        let mut frame = header;
+        frame.resize(frame_len, 0);
+        read_exact_plain(handle, &mut frame[frame_header_len()..])?;
+        Ok(AgentFrame::Control(frame))
+    } else {
+        let mut out = SecretVec::new();
+        out.try_extend_from_slice(&header)
+            .map_err(io::Error::other)?;
+        read_exact_secure(handle, payload_len, &mut out)?;
+        Ok(AgentFrame::Cache(out))
     }
-    let body_len = frame_body_len(&header)?;
-    let Some(frame_len) = out.len().checked_add(body_len) else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "message too large",
-        ));
-    };
+}
+
+fn read_secure_frame(handle: HANDLE, max_bytes: usize) -> io::Result<SecretVec> {
+    let mut header = vec![0u8; frame_header_len()];
+    read_exact_plain(handle, &mut header)?;
+    let payload_len = frame_payload_len(&header)?;
+    checked_frame_len(header.len(), payload_len, max_bytes)?;
+    let mut out = SecretVec::new();
+    out.try_extend_from_slice(&header)
+        .map_err(io::Error::other)?;
+    read_exact_secure(handle, payload_len, &mut out)?;
+    Ok(out)
+}
+
+fn read_plain_frame(handle: HANDLE, max_bytes: usize) -> io::Result<Vec<u8>> {
+    let mut header = vec![0u8; frame_header_len()];
+    read_exact_plain(handle, &mut header)?;
+    let payload_len = frame_payload_len(&header)?;
+    let frame_len = checked_frame_len(header.len(), payload_len, max_bytes)?;
+    let mut frame = header;
+    frame.resize(frame_len, 0);
+    read_exact_plain(handle, &mut frame[frame_header_len()..])?;
+    Ok(frame)
+}
+
+fn checked_frame_len(header_len: usize, payload_len: usize, max_bytes: usize) -> io::Result<usize> {
+    let frame_len = header_len
+        .checked_add(payload_len)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "message too large"))?;
     if frame_len > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "message too large",
         ));
     }
-    read_exact_secure(handle, body_len, &mut out)?;
-    Ok(out)
+    Ok(frame_len)
+}
+
+fn write_agent_reply(pipe: HANDLE, response: AgentReply) -> io::Result<()> {
+    match response {
+        AgentReply::Cache(response) => response
+            .with_bytes(|response| write_all(pipe, response))
+            .map_err(io::Error::other)?,
+        AgentReply::Control(response) => write_all(pipe, &response),
+    }
+}
+
+fn read_exact_plain(handle: HANDLE, mut out: &mut [u8]) -> io::Result<()> {
+    while !out.is_empty() {
+        let read = read_chunk(handle, out)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "message ended before frame header",
+            ));
+        }
+        let remaining = out.split_at_mut(read).1;
+        out = remaining;
+    }
+    Ok(())
 }
 
 fn read_exact_secure(handle: HANDLE, mut remaining: usize, out: &mut SecretVec) -> io::Result<()> {
@@ -589,17 +864,6 @@ fn read_exact_secure(handle: HANDLE, mut remaining: usize, out: &mut SecretVec) 
         remaining -= read;
     }
     Ok(())
-}
-
-fn read_one_byte(handle: HANDLE) -> io::Result<u8> {
-    let mut byte = [0u8; 1];
-    match read_chunk(handle, &mut byte)? {
-        1 => Ok(byte[0]),
-        _ => Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "message ended before frame header",
-        )),
-    }
 }
 
 fn read_chunk(handle: HANDLE, buffer: &mut [u8]) -> io::Result<usize> {
@@ -621,22 +885,18 @@ fn read_chunk(handle: HANDLE, buffer: &mut [u8]) -> io::Result<usize> {
     Ok(read as usize)
 }
 
-fn frame_body_len(header: &[u8]) -> io::Result<usize> {
-    let header = std::str::from_utf8(header)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "frame header is not UTF-8"))?;
-    let header = header.trim_end_matches(['\r', '\n']);
-    let parts: Vec<&str> = header.split_whitespace().collect();
-    match parts.as_slice() {
-        ["LBX1", "PUT", _, len] | ["KEY", len] => len
-            .parse::<usize>()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid frame body length")),
-        _ => Ok(0),
-    }
-}
-
 fn prune_expired(cache: &mut BTreeMap<String, CacheEntry>) {
     let now = Instant::now();
     cache.retain(|_, entry| entry.expires_at > now);
+}
+
+fn log_pruned_expired(cache: &mut BTreeMap<String, CacheEntry>) {
+    let before = cache.len();
+    prune_expired(cache);
+    let pruned = before.saturating_sub(cache.len());
+    if pruned != 0 {
+        log_agent_event(format!("pruned expired cached lockboxes count={pruned}"));
+    }
 }
 
 fn expect_ok(response: AgentResponse) -> io::Result<()> {
@@ -647,6 +907,17 @@ fn expect_ok(response: AgentResponse) -> io::Result<()> {
             format!("agent rejected request: {message}"),
         )),
         other => invalid_agent_response(other),
+    }
+}
+
+fn expect_control_ok(response: ControlResponse) -> io::Result<()> {
+    match response {
+        ControlResponse::Ok => Ok(()),
+        ControlResponse::Err(message) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("agent rejected control request: {message}"),
+        )),
+        other => invalid_control_response(other),
     }
 }
 
@@ -664,11 +935,34 @@ fn invalid_agent_response<T>(response: AgentResponse) -> io::Result<T> {
     ))
 }
 
-fn wide_pipe_name() -> Vec<u16> {
-    to_wide(&format!(
-        r"\\.\pipe\lockbox-agent-{}",
-        sanitize_name(&current_user())
+fn invalid_control_response<T>(response: ControlResponse) -> io::Result<T> {
+    let label = match response {
+        ControlResponse::Ok => "OK",
+        ControlResponse::Registered(_) => "REGISTERED",
+        ControlResponse::Err(_) => "ERR",
+    };
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("unexpected agent control response: {label}"),
     ))
+}
+
+fn wide_pipe_name() -> Vec<u16> {
+    to_wide(&format!(r"\\.\pipe\lockbox-agent-{}", pipe_scope()))
+}
+
+fn pipe_scope() -> String {
+    let user = sanitize_name(&current_user());
+    let Ok(agent_dir) = env::var("LOCKBOX_SESSION_AGENT_DIR") else {
+        return user;
+    };
+    format!("{user}-{:016x}", hash_value(&agent_dir))
+}
+
+fn hash_value(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn current_user() -> String {

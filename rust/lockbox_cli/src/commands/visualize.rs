@@ -15,6 +15,8 @@ fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
 
     let key_slot_count = lb.list_key_slots().len();
     let env_count = lb.list_env()?.len();
+    let form_definition_count = lb.list_form_definitions()?.len();
+    let form_record_count = lb.list_form_records()?.len();
     let mut file_count = 0usize;
     let mut symlink_count = 0usize;
     let mut total_file_bytes = 0u64;
@@ -40,6 +42,8 @@ fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
     println!("    files: {file_count}");
     println!("    symlinks: {symlink_count}");
     println!("    env vars: {env_count}");
+    println!("    form definitions: {form_definition_count}");
+    println!("    form records: {form_record_count}");
     println!("    key slots: {key_slot_count}");
     println!("    logical file bytes: {total_file_bytes}");
 
@@ -70,6 +74,8 @@ fn print_lockbox_visualization(lb: &Lockbox) -> CliResult<()> {
     println!("    partial files: {}", report.partial_files);
     println!("    corrupt records/pages: {}", report.corrupt_records);
     println!("    TOC recovered: {}", report.toc_recovered);
+    println!("    env recovered: {}", report.env_recovered);
+    println!("    forms recovered: {}", report.forms_recovered);
 
     Ok(())
 }

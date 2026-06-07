@@ -11,13 +11,17 @@
 /// Secure string type re-exported from `lockbox_core`.
 pub use lockbox_core::{SecretString, SecretVec};
 
+mod active_secret;
 mod agent_client;
+mod agent_config;
+mod agent_log;
 mod agent_protocol;
 mod content_key_store;
 mod hex;
 mod key_format;
 mod noop_store;
 mod platform_secret_store;
+mod sleep_watcher;
 mod vault;
 mod vault_directory;
 
@@ -28,18 +32,20 @@ mod unix;
 mod windows;
 
 pub use agent_client::{
-    forget, forget_all, get, is_running, list, put, serve_agent, stop,
-    verify_agent_transport_security, AgentClient,
+    begin_secret_activity, forget, forget_all, get, is_running, list, put, serve_agent, stop,
+    verify_agent_transport_security, AgentClient, SecretActivityGuard,
 };
-#[cfg(unix)]
-pub(crate) use agent_protocol::max_message_bytes;
-#[cfg(windows)]
-pub(crate) use agent_protocol::max_message_bytes;
+pub use agent_log::{agent_log_destination, agent_log_path};
 pub use agent_protocol::CachedLockbox;
+pub use agent_protocol::SecretActivityKind;
 pub(crate) use agent_protocol::{
-    encode_forget, encode_forget_all, encode_get, encode_key_response, encode_list,
-    encode_list_response, encode_put, encode_response_line, encode_stop, parse_request,
-    parse_response, AgentRequest, AgentResponse, DEFAULT_TTL_SECONDS,
+    encode_control_err_response, encode_control_ok_response, encode_err_response, encode_forget,
+    encode_forget_all, encode_get, encode_key_response, encode_list, encode_list_response,
+    encode_miss_response, encode_ok_response, encode_put, encode_register_secret_activity,
+    encode_registered_response, encode_stop, encode_unregister_secret_activity, frame_header_len,
+    frame_message_type, frame_payload_len, is_control_message_type, max_message_bytes,
+    parse_control_request, parse_control_response, parse_request, parse_response, AgentRequest,
+    AgentResponse, ControlRequest, ControlResponse, DEFAULT_TTL_SECONDS,
 };
 pub use content_key_store::ContentKeyStore;
 pub use hex::{decode_hex, encode_hex};

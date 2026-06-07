@@ -135,16 +135,19 @@ impl Lockbox {
             self.needs_packing = false;
         }
         self.stage_env_tree_redactions()?;
+        self.stage_form_tree_redactions()?;
         self.apply_pending_redactions()?;
         if self.toc_root.is_some()
             && self.dirty_toc_paths.is_empty()
             && !self.dirty_env
+            && !self.dirty_forms
             && !self.dirty_key_directory
             && !self.has_dirty_pages()
         {
             return Ok(());
         }
         self.env_root_offset = self.commit_env_tree()?;
+        self.form_root_offset = self.commit_form_tree()?;
         self.toc_root_offset = self.commit_toc_btree()?;
         let toc_root_offset = self.toc_root_offset;
         self.free_index_offset = self.write_free_index()?;
@@ -155,6 +158,7 @@ impl Lockbox {
             sequence: self.sequence,
             toc_root_offset: toc_root_offset,
             env_root_offset: self.env_root_offset,
+            form_root_offset: self.form_root_offset,
             free_index_root_offset: self.free_index_offset,
             key_directory_offset: self.key_directory_offset,
             key_directory_mirror_offsets: self.key_directory_mirror_offsets,
@@ -553,6 +557,7 @@ struct CommitRollback {
     commit_root_offset: u64,
     toc_root_offset: u64,
     env_root_offset: u64,
+    form_root_offset: u64,
     free_index_offset: u64,
     key_directory_offset: u64,
     key_directory_mirror_offsets: [u64; 2],
@@ -568,6 +573,12 @@ struct CommitRollback {
     env_root: Option<crate::env_btree::EnvTreeNode>,
     env_leaves: Vec<crate::env_btree::EnvLeaf>,
     dirty_env: bool,
+    form_definitions: Option<std::collections::BTreeMap<String, crate::form::FormDefinition>>,
+    form_records: Option<std::collections::BTreeMap<crate::LockboxPath, crate::form::FormRecord>>,
+    form_root: Option<crate::form_btree::FormTreeNode>,
+    form_leaves: Vec<crate::form_btree::FormLeaf>,
+    dirty_form_keys: std::collections::BTreeSet<String>,
+    dirty_forms: bool,
     free_space: crate::free_slot::FreeSpace,
     record_ref_counts: std::collections::HashMap<u64, usize, crate::fast_hash::FastBuildHasher>,
     pending_small_files:
@@ -586,6 +597,7 @@ impl CommitRollback {
             commit_root_offset: lockbox.commit_root_offset,
             toc_root_offset: lockbox.toc_root_offset,
             env_root_offset: lockbox.env_root_offset,
+            form_root_offset: lockbox.form_root_offset,
             free_index_offset: lockbox.free_index_offset,
             key_directory_offset: lockbox.key_directory_offset,
             key_directory_mirror_offsets: lockbox.key_directory_mirror_offsets,
@@ -600,6 +612,12 @@ impl CommitRollback {
             env_root: lockbox.env_root.clone(),
             env_leaves: lockbox.env_leaves.clone(),
             dirty_env: lockbox.dirty_env,
+            form_definitions: lockbox.form_definitions.borrow().clone(),
+            form_records: lockbox.form_records.borrow().clone(),
+            form_root: lockbox.form_root.clone(),
+            form_leaves: lockbox.form_leaves.clone(),
+            dirty_form_keys: lockbox.dirty_form_keys.clone(),
+            dirty_forms: lockbox.dirty_forms,
             free_space: lockbox.free_space.clone(),
             record_ref_counts: lockbox.record_ref_counts.clone(),
             pending_small_files: lockbox.pending_small_files.clone(),
@@ -616,6 +634,7 @@ impl CommitRollback {
         lockbox.commit_root_offset = self.commit_root_offset;
         lockbox.toc_root_offset = self.toc_root_offset;
         lockbox.env_root_offset = self.env_root_offset;
+        lockbox.form_root_offset = self.form_root_offset;
         lockbox.free_index_offset = self.free_index_offset;
         lockbox.key_directory_offset = self.key_directory_offset;
         lockbox.key_directory_mirror_offsets = self.key_directory_mirror_offsets;
@@ -630,6 +649,12 @@ impl CommitRollback {
         lockbox.env_root = self.env_root;
         lockbox.env_leaves = self.env_leaves;
         lockbox.dirty_env = self.dirty_env;
+        lockbox.form_definitions.replace(self.form_definitions);
+        lockbox.form_records.replace(self.form_records);
+        lockbox.form_root = self.form_root;
+        lockbox.form_leaves = self.form_leaves;
+        lockbox.dirty_form_keys = self.dirty_form_keys;
+        lockbox.dirty_forms = self.dirty_forms;
         lockbox.free_space = self.free_space;
         lockbox.record_ref_counts = self.record_ref_counts;
         lockbox.pending_small_files = self.pending_small_files;

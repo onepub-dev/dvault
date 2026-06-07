@@ -104,6 +104,8 @@ fn unlock_populates_cache_and_lock_clears_it() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("a.txt"));
+    assert_agent_log_contains(&agent_dir, "cached lockbox");
+    assert_agent_log_contains(&agent_dir, "cache hit");
 
     run(
         bin,
@@ -119,6 +121,7 @@ fn unlock_populates_cache_and_lock_clears_it() {
     );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("lockbox is locked"));
+    assert_agent_log_contains(&agent_dir, "forgot lockbox");
 
     let output = run_output(bin, &agent_dir, &vault_dir, &["vault", "sessions"]);
     assert!(
@@ -129,6 +132,17 @@ fn unlock_populates_cache_and_lock_clears_it() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "empty");
+}
+
+fn assert_agent_log_contains(agent_dir: &PathBuf, expected: &str) {
+    let log_path = agent_dir.join("agent.log");
+    let log = fs::read_to_string(&log_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", log_path.display()));
+    assert!(
+        log.contains(expected),
+        "expected agent log {} to contain {expected:?}; contents:\n{log}",
+        log_path.display()
+    );
 }
 
 fn run(bin: &str, agent_dir: &PathBuf, vault_dir: &PathBuf, args: &[&str]) {
@@ -184,6 +198,7 @@ fn command(bin: &str, agent_dir: &PathBuf, vault_dir: &PathBuf, args: &[&str]) -
         .env("LOCKBOX_PASSWORD", "test-password")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
         .env("LOCKBOX_SESSION_AGENT_DIR", agent_dir)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_dir.join("agent.log"))
         .env("LOCKBOX_VAULT_DIR", vault_dir);
     command
 }

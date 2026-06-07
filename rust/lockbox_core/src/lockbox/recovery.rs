@@ -4,16 +4,22 @@ use std::path::Path;
 use super::Lockbox;
 use crate::constants::DEFAULT_MAX_FILE_BYTES;
 use crate::crypto::strong_checksum;
+use crate::env_btree::{decode_env_node_secure, EnvNode, EnvValue};
 use crate::file_format::{
     decode_compression_frame_segment_payload_view, decode_index_records, decode_symlink_payload,
     decode_toc_node, read_header,
 };
+use crate::form_btree::{decode_form_node_secure, FormEntryValue, FormNode};
 use crate::lockbox_id::LockboxId;
 use crate::node_kind::NodeKind;
+use crate::page::PageObjectKind;
 use crate::page_scanner::PageScanner;
 use crate::record::{DecodedRecord, RecordKind};
 use crate::toc_entry::TocEntry;
-use crate::{Error, LockboxEntry, LockboxPath, RecoveryReport, Result};
+use crate::{
+    EnvName, Error, FormDefinition, FormRecord, FormTypeId, LockboxEntry, LockboxPath,
+    RecoveryReport, Result,
+};
 use zeroize::Zeroizing;
 
 /// Scans damaged lockbox storage and reports or salvages recoverable content.
@@ -33,6 +39,11 @@ impl RecoveryScanner {
                 partial_files: 0,
                 corrupt_records: 1,
                 toc_recovered: false,
+                env_recovered: false,
+                env_count: 0,
+                forms_recovered: false,
+                form_definition_count: 0,
+                form_record_count: 0,
             },
         }
     }
@@ -70,10 +81,12 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
     let mut toc_entries = BTreeMap::new();
     let mut corrupt_records = scan.corrupt_records;
     let mut toc_recovered = false;
+    let mut metadata = RecoveredMetadata::default();
 
     if let Ok((root_offset, _, _, _)) = read_header(&bytes) {
         if root_offset > 0 {
             if let Ok(commit_root) = scanner.commit_root_at(root_offset) {
+                metadata = recover_metadata_from_commit_root(&scanner, &commit_root);
                 if let Ok(decoded) =
                     decode_toc_btree_from_offset(&scanner, commit_root.toc_root_offset, 0)
                 {
@@ -129,6 +142,17 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
         partial_files,
         corrupt_records,
         toc_recovered,
+        env_recovered: metadata.env.is_some(),
+        env_count: metadata.env.as_ref().map_or(0, BTreeMap::len),
+        forms_recovered: metadata.forms.is_some(),
+        form_definition_count: metadata
+            .forms
+            .as_ref()
+            .map_or(0, |forms| latest_form_definition_count(&forms.definitions)),
+        form_record_count: metadata
+            .forms
+            .as_ref()
+            .map_or(0, |forms| forms.records.len()),
     }
 }
 
@@ -138,6 +162,15 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
     let scanner = PageScanner::new(&bytes, lockbox_id, &key_bytes);
     let scan = scanner.scan_records();
     let scanned_segments = collect_scanned_file_segments(&scan.records);
+    let metadata = read_header(&bytes)
+        .ok()
+        .and_then(|(root_offset, _, _, _)| {
+            (root_offset > 0)
+                .then(|| scanner.commit_root_at(root_offset).ok())
+                .flatten()
+        })
+        .map(|commit_root| recover_metadata_from_commit_root(&scanner, &commit_root))
+        .unwrap_or_default();
     let mut recovered = Lockbox::create_with_secret_key_and_options(
         crate::SecretVec::try_from_slice(&key_bytes)?,
         lockbox_id,
@@ -184,8 +217,143 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
             }
         }
     }
+    if let Some(env) = metadata.env {
+        for (name, value) in env {
+            recovered.set_env_value(name, value)?;
+        }
+    }
+    if let Some(forms) = metadata.forms {
+        for (key, definition) in forms.definitions {
+            recovered.set_form_definition_value(key, definition)?;
+        }
+        for (path, record) in forms.records {
+            recovered.set_form_record_value(path, record)?;
+        }
+    }
     recovered.commit()?;
     Ok(recovered)
+}
+
+#[derive(Default)]
+struct RecoveredMetadata {
+    env: Option<BTreeMap<EnvName, EnvValue>>,
+    forms: Option<RecoveredForms>,
+}
+
+struct RecoveredForms {
+    definitions: BTreeMap<String, FormDefinition>,
+    records: BTreeMap<LockboxPath, FormRecord>,
+}
+
+fn recover_metadata_from_commit_root(
+    scanner: &PageScanner<'_>,
+    commit_root: &crate::commit_root::CommitRoot,
+) -> RecoveredMetadata {
+    RecoveredMetadata {
+        env: recover_env_from_root(scanner, commit_root.env_root_offset).ok(),
+        forms: recover_forms_from_root(scanner, commit_root.form_root_offset).ok(),
+    }
+}
+
+fn recover_env_from_root(
+    scanner: &PageScanner<'_>,
+    root_offset: u64,
+) -> Result<BTreeMap<EnvName, EnvValue>> {
+    if root_offset == 0 {
+        return Ok(BTreeMap::new());
+    }
+    let mut env = BTreeMap::new();
+    decode_env_node_into(scanner, root_offset, &mut env, 0)?;
+    Ok(env)
+}
+
+fn decode_env_node_into(
+    scanner: &PageScanner<'_>,
+    offset: u64,
+    env: &mut BTreeMap<EnvName, EnvValue>,
+    depth: usize,
+) -> Result<()> {
+    if depth > 8 {
+        return Err(Error::CorruptRecord);
+    }
+    let payload = scanner.secure_object_payload_at(
+        offset,
+        &[PageObjectKind::EnvLeaf, PageObjectKind::EnvInternal],
+    )?;
+    match decode_env_node_secure(&payload)? {
+        EnvNode::Leaf(entries) => {
+            for entry in entries {
+                env.insert(EnvName::new(entry.name)?, entry.value);
+            }
+        }
+        EnvNode::Internal(children) => {
+            for child in children {
+                decode_env_node_into(scanner, child.offset, env, depth + 1)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn recover_forms_from_root(scanner: &PageScanner<'_>, root_offset: u64) -> Result<RecoveredForms> {
+    if root_offset == 0 {
+        return Ok(RecoveredForms {
+            definitions: BTreeMap::new(),
+            records: BTreeMap::new(),
+        });
+    }
+    let mut definitions = BTreeMap::new();
+    let mut records = BTreeMap::new();
+    decode_form_node_into(scanner, root_offset, &mut definitions, &mut records, 0)?;
+    Ok(RecoveredForms {
+        definitions,
+        records,
+    })
+}
+
+fn decode_form_node_into(
+    scanner: &PageScanner<'_>,
+    offset: u64,
+    definitions: &mut BTreeMap<String, FormDefinition>,
+    records: &mut BTreeMap<LockboxPath, FormRecord>,
+    depth: usize,
+) -> Result<()> {
+    if depth > 8 {
+        return Err(Error::CorruptRecord);
+    }
+    let payload = scanner.secure_object_payload_at(
+        offset,
+        &[PageObjectKind::FormLeaf, PageObjectKind::FormInternal],
+    )?;
+    match decode_form_node_secure(&payload)? {
+        FormNode::Leaf(entries) => {
+            for entry in entries {
+                match entry.value {
+                    FormEntryValue::Definition(definition) => {
+                        definitions.insert(entry.key, definition);
+                    }
+                    FormEntryValue::Record(record) => {
+                        records.insert(record.path.clone(), record);
+                    }
+                }
+            }
+        }
+        FormNode::Internal(children) => {
+            for child in children {
+                decode_form_node_into(scanner, child.offset, definitions, records, depth + 1)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn latest_form_definition_count(definitions: &BTreeMap<String, FormDefinition>) -> usize {
+    let mut latest = BTreeMap::<FormTypeId, u32>::new();
+    for definition in definitions.values() {
+        let revision = latest.entry(definition.type_id.clone()).or_default();
+        *revision = (*revision).max(definition.revision);
+    }
+    latest.len()
 }
 
 fn decode_toc_btree_from_offset(

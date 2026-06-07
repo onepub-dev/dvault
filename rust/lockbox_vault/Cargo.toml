@@ -1,8 +1,8 @@
 [package]
 name = "lockbox_vault"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2021"
-license-file = "../../LICENSE"
+license-file = "LICENSE"
 description = "Reusable Lockbox local vault and agent transport"
 
 [lib]
@@ -13,21 +13,30 @@ path = "src/lib.rs"
 base64ct = { version = "1", features = ["alloc"] }
 chacha20poly1305 = "0.10"
 getrandom = "0.2"
-lockbox_core = { path = "../lockbox_core", features = ["vault-bridge"] }
+lockbox_core = { version = "0.1.0-alpha.1", path = "../lockbox_core", features = ["vault-bridge"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 zeroize = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", default-features = false, features = [
     "crypto-rust",
     "sync-secret-service",
 ] }
+dbus = "0.9.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = [
     "apple-native",
+] }
+objc2-core-foundation = { version = "0.3.2", features = ["CFRunLoop"] }
+objc2-io-kit = { version = "0.3.2", default-features = false, features = [
+    "libc",
+    "pwr_mgt",
 ] }
 
 [target.'cfg(windows)'.dependencies]
@@ -39,8 +48,11 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_EventLog",
     "Win32_System_IO",
     "Win32_System_Memory",
+    "Win32_System_Power",
     "Win32_System_Pipes",
     "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
 ] }

@@ -34,13 +34,13 @@ pub(crate) use file_format::{
 };
 pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_vec};
 pub(crate) use model::{
-    compression_frame_manifest, entry, env_name, env_sensitivity, extract_policy, file_chunk,
+    compression_frame_manifest, entry, env_name, env_sensitivity, extract_policy, file_chunk, form,
     list_options, lockbox_id, node_kind, page_object_packer, record, recovery_report,
     recovery_report_options,
 };
 pub(crate) use paths::{host_path, lockbox_path};
 pub(crate) use storage::{cache_options, free_index, free_slot, memory_pressure, page_cache};
-pub(crate) use toc::{env_btree, page_tree, toc_btree, toc_codec, toc_entry};
+pub(crate) use toc::{env_btree, form_btree, page_tree, toc_btree, toc_codec, toc_entry};
 
 pub use cache_options::{CacheLimit, CacheStats, LockboxOptions, WorkerPolicy, WorkloadProfile};
 pub use entry::{LockboxEntry, LockboxEntryKind};
@@ -48,6 +48,10 @@ pub use env_name::{EnvName, EnvNamePattern};
 pub use env_sensitivity::EnvSensitivity;
 pub use error::{Error, Result};
 pub use extract_policy::ExtractPolicy;
+pub use form::{
+    FormDefinition, FormFieldDefinition, FormFieldKind, FormFieldValue, FormRecord, FormTypeId,
+    FormValue,
+};
 pub use key_slot::{
     LockboxKeySlot, LockboxKeySlotAlgorithm, LockboxKeySlotProtection, MAX_KEY_SLOT_NAME_BYTES,
 };

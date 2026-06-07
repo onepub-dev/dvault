@@ -1,12 +1,15 @@
 use crate::commit_root::{decode_commit_root, CommitRoot};
+use crate::crypto::derive_page_content_key;
 use crate::lockbox_id::LockboxId;
 use crate::page::{
-    decode_page, page_decode_slice, physical_page_size_from_page_slice, scan_page_records,
-    PageObjectKind, PAGE_MAGIC,
+    decode_page, decode_single_object_page_secure, page_decode_slice,
+    physical_page_size_from_page_slice, scan_page_records, PageObjectKind, PAGE_MAGIC,
 };
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::scan::Scan;
+use crate::secret_vec::SecureVec;
 use crate::{Error, Result};
+use zeroize::Zeroize;
 
 pub(crate) struct PageScanner<'a> {
     bytes: &'a [u8],
@@ -55,6 +58,33 @@ impl<'a> PageScanner<'a> {
             return Err(Error::CorruptRecord);
         };
         toc_object.with_payload(|payload| payload.to_vec())
+    }
+
+    pub(crate) fn secure_object_payload_at(
+        &self,
+        offset: u64,
+        expected: &[PageObjectKind],
+    ) -> Result<SecureVec> {
+        if self.bytes.get(checked_range(offset, 8)?) != Some(PAGE_MAGIC.as_slice()) {
+            return Err(Error::CorruptRecord);
+        }
+        let page = self.page_at(offset).ok_or(Error::Truncated)?;
+        let mut secure_page = SecureVec::try_from_slice(page)?;
+        let mut content_key = derive_page_content_key(self.key);
+        let decoded =
+            decode_single_object_page_secure(&mut secure_page, self.lockbox_id, &content_key)?;
+        content_key.zeroize();
+        let Some(object) = decoded
+            .objects
+            .into_iter()
+            .find(|object| expected.contains(&object.kind))
+        else {
+            return Err(Error::CorruptRecord);
+        };
+        Ok(object
+            .secure_payload()
+            .ok_or(Error::CorruptRecord)?
+            .try_clone()?)
     }
 
     pub(crate) fn record_at(&self, offset: u64) -> Result<DecodedRecord> {
@@ -116,8 +146,10 @@ fn record_kind_from_page_object(kind: PageObjectKind) -> Result<RecordKind> {
         PageObjectKind::TocLeaf | PageObjectKind::TocInternal => RecordKind::TocNode,
         PageObjectKind::CommitRoot => RecordKind::CommitRoot,
         PageObjectKind::FreeIndexLeaf | PageObjectKind::FreeIndexInternal => RecordKind::FreeIndex,
-        PageObjectKind::KeyDirectory | PageObjectKind::EnvLeaf | PageObjectKind::EnvInternal => {
-            return Err(Error::CorruptRecord);
-        }
+        PageObjectKind::KeyDirectory
+        | PageObjectKind::EnvLeaf
+        | PageObjectKind::EnvInternal
+        | PageObjectKind::FormLeaf
+        | PageObjectKind::FormInternal => return Err(Error::CorruptRecord),
     })
 }

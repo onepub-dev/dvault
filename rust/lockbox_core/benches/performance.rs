@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use lockbox_core::{
-    EnvName, ExtractPolicy, ListOptions, Lockbox, LockboxPath, LockboxProtection, SecretString,
-    SecretVec,
+    EnvName, ExtractPolicy, FormFieldDefinition, FormFieldKind, ListOptions, Lockbox, LockboxPath,
+    LockboxProtection, SecretString, SecretVec,
 };
 use lockbox_secure::read_access as secure_read_access;
 use std::fs;
@@ -313,6 +313,38 @@ fn bench_metadata_operations(c: &mut Criterion) {
         );
     });
 
+    let form_lockbox = prepared_forms_lockbox(10_000);
+    group.bench_function("list_forms_10000", |b| {
+        b.iter(|| {
+            let items = form_lockbox.list_form_records().unwrap();
+            black_box(items.len());
+        });
+    });
+
+    group.bench_function("get_form_field_10000", |b| {
+        b.iter(|| {
+            let value = form_lockbox
+                .get_form_field(&p("/forms/item-009999"), "username")
+                .unwrap()
+                .unwrap();
+            black_box(value.field_id);
+        });
+    });
+
+    group.bench_function("update_form_field_commit_1000", |b| {
+        b.iter_batched(
+            || prepared_forms_lockbox(1_000),
+            |mut lockbox| {
+                lockbox
+                    .set_form_field_normal(&p("/forms/item-000999"), "username", "updated")
+                    .unwrap();
+                lockbox.commit().unwrap();
+                black_box(lockbox.inspector().storage_len().unwrap() as usize);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
     group.bench_function("compact_16m_file_after_delete", |b| {
         b.iter_batched(
             || {
@@ -341,6 +373,48 @@ fn bench_metadata_operations(c: &mut Criterion) {
     });
 
     group.finish();
+}
+
+fn prepared_forms_lockbox(items: usize) -> Lockbox {
+    let mut lockbox = new_lockbox();
+    lockbox
+        .define_form(
+            "login",
+            "Login",
+            vec![
+                form_field("username", "Username", FormFieldKind::Text, true),
+                form_field("password", "Password", FormFieldKind::Secret, true),
+                form_field("site", "Site", FormFieldKind::Url, false),
+            ],
+        )
+        .unwrap();
+    let password = SecretString::try_from_bytes(b"secret".to_vec()).unwrap();
+    for index in 0..items {
+        let path = p(format!("/forms/item-{index:06}"));
+        lockbox
+            .create_form_record(&path, "login", &format!("Item {index:06}"))
+            .unwrap();
+        lockbox
+            .set_form_field_normal(&path, "username", &format!("user-{index:06}"))
+            .unwrap();
+        lockbox
+            .set_form_field_normal(&path, "site", "https://example.com")
+            .unwrap();
+        lockbox
+            .set_form_field_secret(&path, "password", &password)
+            .unwrap();
+    }
+    lockbox.commit().unwrap();
+    lockbox
+}
+
+fn form_field(id: &str, label: &str, kind: FormFieldKind, required: bool) -> FormFieldDefinition {
+    FormFieldDefinition {
+        id: id.to_string(),
+        label: label.to_string(),
+        kind,
+        required,
+    }
 }
 
 fn bench_secure_string_store(c: &mut Criterion) {

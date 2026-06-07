@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::payload::{self, PayloadType};
@@ -8,11 +9,15 @@ use crate::protocol::{self, Operation, ProtocolError, Status};
 use crate::topology::{self, ClusterTopology, TopologyRoute};
 
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 16 * 1024;
+const DEFAULT_RETRY_ATTEMPTS: usize = 3;
+const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(10);
+const DEFAULT_MAX_BACKOFF: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug)]
 pub struct ShareClient<T = HttpTransport> {
     transport: T,
     max_response_bytes: usize,
+    retry_policy: RetryPolicy,
 }
 
 #[derive(Clone, Debug)]
@@ -34,6 +39,23 @@ struct Endpoint {
     host: String,
     port: u16,
     path: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RetryPolicy {
+    attempts: usize,
+    initial_backoff: Duration,
+    max_backoff: Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            attempts: DEFAULT_RETRY_ATTEMPTS,
+            initial_backoff: DEFAULT_INITIAL_BACKOFF,
+            max_backoff: DEFAULT_MAX_BACKOFF,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,6 +146,7 @@ impl ShareClient<HttpTransport> {
         Ok(Self {
             transport: HttpTransport::new(server_url)?,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            retry_policy: RetryPolicy::default(),
         })
     }
 
@@ -149,6 +172,22 @@ impl ShareClientPool<HttpTransport> {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         for client in &mut self.clients {
             client.transport.timeout = timeout;
+        }
+        self
+    }
+
+    pub fn with_retry_policy(
+        mut self,
+        attempts: usize,
+        initial_backoff: Duration,
+        max_backoff: Duration,
+    ) -> Self {
+        for client in &mut self.clients {
+            client.retry_policy = RetryPolicy {
+                attempts: attempts.max(1),
+                initial_backoff,
+                max_backoff,
+            };
         }
         self
     }
@@ -364,11 +403,26 @@ impl<T: Transport> ShareClient<T> {
         Self {
             transport,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            retry_policy: RetryPolicy::default(),
         }
     }
 
     pub fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
         self.max_response_bytes = max_response_bytes;
+        self
+    }
+
+    pub fn with_retry_policy(
+        mut self,
+        attempts: usize,
+        initial_backoff: Duration,
+        max_backoff: Duration,
+    ) -> Self {
+        self.retry_policy = RetryPolicy {
+            attempts: attempts.max(1),
+            initial_backoff,
+            max_backoff,
+        };
         self
     }
 
@@ -380,8 +434,8 @@ impl<T: Transport> ShareClient<T> {
     ) -> Result<ShareResult, ClientError> {
         payload::validate_payload(payload)?;
         let body = protocol::encode_share_request(ttl_seconds, max_fetches, payload);
-        let response = self.transport.post_binary(&body)?;
-        let response = self.success_response(Operation::Share, &response)?;
+        let response =
+            self.request_with_retry(Operation::Share, &body, retry_single_client_error)?;
         let (share_code, delete_token, expires_at_unix_ms, max_fetches) =
             protocol::decode_share_response(&response.payload)?;
         Ok(ShareResult {
@@ -411,8 +465,8 @@ impl<T: Transport> ShareClient<T> {
 
     pub fn fetch(&self, share_code: &str) -> Result<FetchedShare, ClientError> {
         let body = protocol::encode_fetch_request(share_code);
-        let response = self.transport.post_binary(&body)?;
-        let response = self.success_response(Operation::Fetch, &response)?;
+        let response =
+            self.request_with_retry(Operation::Fetch, &body, retry_single_client_error)?;
         let (payload, expires_at_unix_ms, remaining_fetches) =
             protocol::decode_fetch_response(&response.payload)?;
         let payload_type = payload::validate_payload(&payload)?;
@@ -426,9 +480,39 @@ impl<T: Transport> ShareClient<T> {
 
     pub fn delete(&self, share_code: &str, delete_token: &[u8]) -> Result<bool, ClientError> {
         let body = protocol::encode_delete_request(share_code, delete_token);
-        let response = self.transport.post_binary(&body)?;
-        let response = self.success_response(Operation::Delete, &response)?;
+        let response =
+            self.request_with_retry(Operation::Delete, &body, retry_single_client_error)?;
         protocol::decode_delete_response(&response.payload).map_err(ClientError::from)
+    }
+
+    fn request_with_retry(
+        &self,
+        expected: Operation,
+        body: &[u8],
+        retry: impl Fn(&ClientError) -> bool,
+    ) -> Result<protocol::ResponseEnvelope, ClientError> {
+        let attempts = self.retry_policy.attempts.max(1);
+        let mut backoff = self.retry_policy.initial_backoff;
+        let mut last_error = None;
+        for attempt in 0..attempts {
+            match self
+                .transport
+                .post_binary(body)
+                .and_then(|response| self.success_response(expected, &response))
+            {
+                Ok(response) => return Ok(response),
+                Err(err) if retry(&err) && attempt + 1 < attempts => {
+                    last_error = Some(err);
+                    if !backoff.is_zero() {
+                        thread::sleep(backoff);
+                    }
+                    backoff = next_backoff(backoff, self.retry_policy.max_backoff);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| ClientError::Url("retry policy has no attempts".to_string())))
     }
 
     fn success_response(
@@ -684,6 +768,31 @@ fn retry_fetch_or_delete_error(err: &ClientError) -> bool {
                 ..
             }
     )
+}
+
+fn retry_single_client_error(err: &ClientError) -> bool {
+    matches!(
+        err,
+        ClientError::Http(_)
+            | ClientError::Server {
+                status: Status::StoreUnavailable | Status::RateLimited | Status::InternalError,
+                ..
+            }
+    ) || matches!(err, ClientError::Io(io) if retry_same_endpoint_io_error(io))
+}
+
+fn retry_same_endpoint_io_error(err: &std::io::Error) -> bool {
+    !matches!(
+        err.kind(),
+        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+    )
+}
+
+fn next_backoff(current: Duration, max: Duration) -> Duration {
+    if current.is_zero() {
+        return max.min(DEFAULT_INITIAL_BACKOFF);
+    }
+    current.saturating_mul(2).min(max)
 }
 
 fn parse_http_response(bytes: &[u8], max_body: usize) -> Result<Vec<u8>, ClientError> {

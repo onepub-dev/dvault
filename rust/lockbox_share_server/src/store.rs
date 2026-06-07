@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use crate::server_log::log_server_event;
 
+use crate::server_log::log_server_event;
 use getrandom::getrandom;
 use sha2::{Digest, Sha256};
 
@@ -36,8 +36,23 @@ const OUTBOX_MAGIC: &[u8; 4] = b"LBSO";
 const OUTBOX_HEADER_LEN: usize = 16;
 const OUTBOX_EVENT: u16 = 1;
 const OUTBOX_ACK: u16 = 2;
+const REPLICATION_STATE_MAGIC: &[u8; 8] = b"LBSR2\0\0\0";
+const REPLICATION_STATE_PERSIST_INTERVAL: usize = 1024;
 
 type RecordHash = [u8; HASH_LEN];
+
+#[derive(Debug, Default)]
+struct ReplicationState {
+    origins: HashMap<u8, ReplicationOriginState>,
+    accepted_since_persist: usize,
+}
+
+#[derive(Debug, Default)]
+struct ReplicationOriginState {
+    epoch: u64,
+    contiguous_sequence: u64,
+    gaps: HashSet<u64>,
+}
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -178,7 +193,7 @@ pub struct ShareStore {
     expired: AtomicU64,
     misses: AtomicU64,
     live: AtomicUsize,
-    replication_state: Mutex<HashMap<u8, (u64, u64)>>,
+    replication_state: Mutex<ReplicationState>,
     replication_state_path: PathBuf,
     replication_tx: Option<mpsc::SyncSender<ReplicationEventKind>>,
     replication_outbox_path: PathBuf,
@@ -638,13 +653,44 @@ impl ShareStore {
         sequence: u64,
     ) -> Result<bool, StoreError> {
         let mut state = self.replication_state.lock().unwrap();
-        if let Some((last_epoch, last_sequence)) = state.get(&origin) {
-            if epoch < *last_epoch || (epoch == *last_epoch && sequence <= *last_sequence) {
+        let should_persist_for_gap = {
+            let origin_state = state.origins.entry(origin).or_default();
+            if epoch < origin_state.epoch {
                 return Ok(false);
             }
+            if epoch > origin_state.epoch {
+                origin_state.epoch = epoch;
+                origin_state.contiguous_sequence = 0;
+                origin_state.gaps.clear();
+            }
+            if sequence <= origin_state.contiguous_sequence || origin_state.gaps.contains(&sequence)
+            {
+                return Ok(false);
+            }
+
+            let had_gaps = !origin_state.gaps.is_empty();
+            if sequence == origin_state.contiguous_sequence.saturating_add(1) {
+                origin_state.contiguous_sequence = sequence;
+                while origin_state
+                    .gaps
+                    .remove(&origin_state.contiguous_sequence.saturating_add(1))
+                {
+                    origin_state.contiguous_sequence =
+                        origin_state.contiguous_sequence.saturating_add(1);
+                }
+            } else {
+                origin_state.gaps.insert(sequence);
+            }
+            had_gaps || !origin_state.gaps.is_empty()
+        };
+
+        state.accepted_since_persist = state.accepted_since_persist.saturating_add(1);
+        if should_persist_for_gap
+            || state.accepted_since_persist >= REPLICATION_STATE_PERSIST_INTERVAL
+        {
+            store_replication_state(&self.replication_state_path, &state)?;
+            state.accepted_since_persist = 0;
         }
-        append_replication_state(&self.replication_state_path, origin, epoch, sequence)?;
-        state.insert(origin, (epoch, sequence));
         Ok(true)
     }
 
@@ -849,13 +895,13 @@ impl ShareStore {
                     event,
                 });
                 append_outbox_event(&self.replication_outbox_path, sequence, &request)?;
-                if send_replication_request(&[peer_url.to_string()], &request) {
+                if let Err(err) = send_replication_request(&[peer_url.to_string()], &request) {
+                    return Err(StoreError::Io(std::io::Error::other(format!(
+                        "replication peer {peer_url} did not accept resync event {sequence}: {err}"
+                    ))));
+                } else {
                     append_outbox_ack(&self.replication_outbox_path, sequence)?;
                     sent += 1;
-                } else {
-                    return Err(StoreError::Io(std::io::Error::other(format!(
-                        "replication peer {peer_url} did not accept resync event {sequence}"
-                    ))));
                 }
             }
         }
@@ -927,7 +973,7 @@ impl ShareStore {
     }
 
     fn delete_token_hash(&self, token: &[u8]) -> RecordHash {
-        keyed_hash(&self.secret, b"delete-token", token)
+        stable_hash(b"delete-token", token)
     }
 
     fn shard_for(&self, code_hash: &RecordHash) -> usize {
@@ -1110,41 +1156,108 @@ fn load_or_create_secret(state_dir: &std::path::Path) -> Result<[u8; 32], StoreE
     Ok(secret)
 }
 
-fn load_replication_state(path: &Path) -> Result<HashMap<u8, (u64, u64)>, StoreError> {
-    let mut state = HashMap::new();
+fn load_replication_state(path: &Path) -> Result<ReplicationState, StoreError> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(state),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ReplicationState::default());
+        }
         Err(err) => return Err(StoreError::Io(err)),
     };
-    for record in bytes.chunks_exact(17) {
-        let origin = record[0];
-        let epoch = u64::from_be_bytes([
-            record[1], record[2], record[3], record[4], record[5], record[6], record[7], record[8],
-        ]);
-        let sequence = u64::from_be_bytes([
-            record[9], record[10], record[11], record[12], record[13], record[14], record[15],
-            record[16],
-        ]);
-        let entry = state.entry(origin).or_insert((epoch, sequence));
-        if epoch > entry.0 || (epoch == entry.0 && sequence > entry.1) {
-            *entry = (epoch, sequence);
+    if !bytes.starts_with(REPLICATION_STATE_MAGIC) {
+        return Ok(ReplicationState::default());
+    }
+    let mut offset = REPLICATION_STATE_MAGIC.len();
+    let origin_count = read_u32(&bytes, &mut offset)? as usize;
+    let mut state = ReplicationState::default();
+    for _ in 0..origin_count {
+        let origin = read_u8(&bytes, &mut offset)?;
+        let epoch = read_u64(&bytes, &mut offset)?;
+        let contiguous_sequence = read_u64(&bytes, &mut offset)?;
+        let gap_count = read_u32(&bytes, &mut offset)? as usize;
+        let mut gaps = HashSet::with_capacity(gap_count);
+        for _ in 0..gap_count {
+            gaps.insert(read_u64(&bytes, &mut offset)?);
         }
+        state.origins.insert(
+            origin,
+            ReplicationOriginState {
+                epoch,
+                contiguous_sequence,
+                gaps,
+            },
+        );
     }
     Ok(state)
 }
 
-fn append_replication_state(
-    path: &Path,
-    origin: u8,
-    epoch: u64,
-    sequence: u64,
-) -> Result<(), StoreError> {
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(&[origin])?;
-    file.write_all(&epoch.to_be_bytes())?;
-    file.write_all(&sequence.to_be_bytes())?;
+fn store_replication_state(path: &Path, state: &ReplicationState) -> Result<(), StoreError> {
+    let mut bytes = Vec::with_capacity(16 + state.origins.len() * 32);
+    bytes.extend_from_slice(REPLICATION_STATE_MAGIC);
+    bytes.extend_from_slice(&(state.origins.len() as u32).to_be_bytes());
+    for (origin, origin_state) in &state.origins {
+        bytes.push(*origin);
+        bytes.extend_from_slice(&origin_state.epoch.to_be_bytes());
+        bytes.extend_from_slice(&origin_state.contiguous_sequence.to_be_bytes());
+        bytes.extend_from_slice(&(origin_state.gaps.len() as u32).to_be_bytes());
+        for gap in &origin_state.gaps {
+            bytes.extend_from_slice(&gap.to_be_bytes());
+        }
+    }
+    let mut tmp_path = path.to_path_buf();
+    tmp_path.set_extension("bin.tmp");
+    fs::write(&tmp_path, bytes)?;
+    fs::rename(tmp_path, path)?;
     Ok(())
+}
+
+fn read_u8(bytes: &[u8], offset: &mut usize) -> Result<u8, StoreError> {
+    if *offset >= bytes.len() {
+        return Err(StoreError::Io(std::io::Error::other(
+            "truncated replication state",
+        )));
+    }
+    let value = bytes[*offset];
+    *offset += 1;
+    Ok(value)
+}
+
+fn read_u32(bytes: &[u8], offset: &mut usize) -> Result<u32, StoreError> {
+    let end = offset.saturating_add(4);
+    if end > bytes.len() {
+        return Err(StoreError::Io(std::io::Error::other(
+            "truncated replication state",
+        )));
+    }
+    let value = u32::from_be_bytes([
+        bytes[*offset],
+        bytes[*offset + 1],
+        bytes[*offset + 2],
+        bytes[*offset + 3],
+    ]);
+    *offset = end;
+    Ok(value)
+}
+
+fn read_u64(bytes: &[u8], offset: &mut usize) -> Result<u64, StoreError> {
+    let end = offset.saturating_add(8);
+    if end > bytes.len() {
+        return Err(StoreError::Io(std::io::Error::other(
+            "truncated replication state",
+        )));
+    }
+    let value = u64::from_be_bytes([
+        bytes[*offset],
+        bytes[*offset + 1],
+        bytes[*offset + 2],
+        bytes[*offset + 3],
+        bytes[*offset + 4],
+        bytes[*offset + 5],
+        bytes[*offset + 6],
+        bytes[*offset + 7],
+    ]);
+    *offset = end;
+    Ok(value)
 }
 
 fn start_replication_worker(
@@ -1171,61 +1284,120 @@ fn start_replication_worker(
                 log_server_event(format!("replication outbox load failed: {err}"));
                 VecDeque::new()
             });
+            let mut last_retry_log = Instant::now() - Duration::from_secs(30);
             loop {
-                retry_pending_outbox(&outbox_path, &peer_urls, &mut pending);
-                match rx.recv_timeout(Duration::from_secs(1)) {
-                    Ok(kind) => {
-                        sequence = sequence.saturating_add(1);
-                        if let Err(err) = store_replication_sequence(&sequence_path, sequence) {
-                            log_server_event(format!("replication sequence persist failed: {err}"));
-                            continue;
-                        }
-                        let event = ReplicationEvent {
-                            origin_server_id,
-                            origin_epoch,
-                            origin_sequence: sequence,
-                            kind,
-                        };
-                        let request = encode_replication_request(&ReplicationRequest {
-                            authentication: sign_replication_event(token.as_bytes(), &event),
-                            event,
-                        });
-                        if let Err(err) = append_outbox_event(&outbox_path, sequence, &request) {
-                            log_server_event(format!("replication outbox append failed: {err}"));
-                            continue;
-                        }
-                        pending.push_back((sequence, request));
-                    }
+                let timeout = if pending.is_empty() {
+                    Duration::from_secs(1)
+                } else {
+                    Duration::from_millis(10)
+                };
+                match rx.recv_timeout(timeout) {
+                    Ok(kind) => queue_replication_event(
+                        kind,
+                        &mut sequence,
+                        &sequence_path,
+                        &outbox_path,
+                        &mut pending,
+                        origin_server_id,
+                        origin_epoch,
+                        token.as_bytes(),
+                    ),
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
+                for kind in rx.try_iter().take(8192) {
+                    queue_replication_event(
+                        kind,
+                        &mut sequence,
+                        &sequence_path,
+                        &outbox_path,
+                        &mut pending,
+                        origin_server_id,
+                        origin_epoch,
+                        token.as_bytes(),
+                    );
+                }
+                retry_pending_outbox(&outbox_path, &peer_urls, &mut pending, &mut last_retry_log);
             }
         })
         .ok()?;
     Some(tx)
 }
 
+fn queue_replication_event(
+    kind: ReplicationEventKind,
+    sequence: &mut u64,
+    sequence_path: &Path,
+    outbox_path: &Path,
+    pending: &mut VecDeque<(u64, Vec<u8>)>,
+    origin_server_id: u8,
+    origin_epoch: u64,
+    token: &[u8],
+) {
+    *sequence = sequence.saturating_add(1);
+    if let Err(err) = store_replication_sequence(sequence_path, *sequence) {
+        log_server_event(format!("replication sequence persist failed: {err}"));
+        return;
+    }
+    let event = ReplicationEvent {
+        origin_server_id,
+        origin_epoch,
+        origin_sequence: *sequence,
+        kind,
+    };
+    let request = encode_replication_request(&ReplicationRequest {
+        authentication: sign_replication_event(token, &event),
+        event,
+    });
+    if let Err(err) = append_outbox_event(outbox_path, *sequence, &request) {
+        log_server_event(format!("replication outbox append failed: {err}"));
+        return;
+    }
+    pending.push_back((*sequence, request));
+}
+
 fn retry_pending_outbox(
     outbox_path: &Path,
     peer_urls: &[String],
     pending: &mut VecDeque<(u64, Vec<u8>)>,
+    last_retry_log: &mut Instant,
 ) {
+    let attempted = pending.len();
+    let mut failed = 0usize;
+    let mut first_failure = None;
     let mut remaining = VecDeque::new();
     while let Some((sequence, request)) = pending.pop_front() {
-        if send_replication_request(peer_urls, &request) {
-            if let Err(err) = append_outbox_ack(outbox_path, sequence) {
-                log_server_event(format!("replication outbox ack failed: {err}"));
-                remaining.push_back((sequence, request));
+        match send_replication_request(peer_urls, &request) {
+            Ok(()) => {
+                if let Err(err) = append_outbox_ack(outbox_path, sequence) {
+                    log_server_event(format!("replication outbox ack failed: {err}"));
+                    remaining.push_back((sequence, request));
+                }
             }
-        } else {
-            remaining.push_back((sequence, request));
+            Err(err) => {
+                failed += 1;
+                if first_failure.is_none() {
+                    first_failure = Some(err);
+                }
+                remaining.push_back((sequence, request));
+                remaining.append(pending);
+                break;
+            }
         }
+    }
+    if failed > 0 && last_retry_log.elapsed() >= Duration::from_secs(10) {
+        let first_failure = first_failure.unwrap_or_else(|| "unknown failure".to_string());
+        log_server_event(format!(
+            "replication retry deferred {failed}/{attempted} pending event(s) for {} peer(s); first failure: {first_failure}",
+            peer_urls.len()
+        ));
+        *last_retry_log = Instant::now();
     }
     *pending = remaining;
 }
 
-fn send_replication_request(peer_urls: &[String], request: &[u8]) -> bool {
-    let mut all_ok = true;
+fn send_replication_request(peer_urls: &[String], request: &[u8]) -> Result<(), String> {
+    let mut first_failure = None;
     for peer_url in peer_urls {
         match HttpTransport::new(peer_url).and_then(|transport| {
             let response = transport.post_binary(request)?;
@@ -1234,21 +1406,21 @@ fn send_replication_request(peer_urls: &[String], request: &[u8]) -> bool {
         }) {
             Ok(response) if response.status == Status::Success => {}
             Ok(response) => {
-                all_ok = false;
-                log_server_event(format!(
-                    "replication peer {peer_url} returned {:?}",
-                    response.status
-                ))
+                if first_failure.is_none() {
+                    first_failure = Some(format!(
+                        "replication peer {peer_url} returned {:?}",
+                        response.status
+                    ));
+                }
             }
             Err(err) => {
-                all_ok = false;
-                log_server_event(format!(
-                    "replication peer {peer_url} failed: {err}"
-                ));
+                if first_failure.is_none() {
+                    first_failure = Some(format!("replication peer {peer_url} failed: {err}"));
+                }
             }
         }
     }
-    all_ok
+    first_failure.map_or(Ok(()), Err)
 }
 
 fn load_replication_sequence(path: &Path) -> Result<u64, StoreError> {
@@ -1348,6 +1520,17 @@ fn load_outbox_pending(path: &Path) -> Result<VecDeque<(u64, Vec<u8>)>, StoreErr
 fn keyed_hash(secret: &[u8; 32], domain: &[u8], value: &[u8]) -> RecordHash {
     let mut hasher = Sha256::new();
     hasher.update(secret);
+    hasher.update(domain);
+    hasher.update(value);
+    let full_hash: [u8; 32] = hasher.finalize().into();
+    let mut out = [0_u8; HASH_LEN];
+    out.copy_from_slice(&full_hash[..HASH_LEN]);
+    out
+}
+
+fn stable_hash(domain: &[u8], value: &[u8]) -> RecordHash {
+    let mut hasher = Sha256::new();
+    hasher.update(b"lockbox-share-server-stable-hash-v1");
     hasher.update(domain);
     hasher.update(value);
     let full_hash: [u8; 32] = hasher.finalize().into();
@@ -1695,6 +1878,91 @@ mod tests {
         assert_eq!(status.replication_pending, 1);
 
         let _ = fs::remove_dir_all(state_dir);
+    }
+
+    #[test]
+    fn replication_accepts_out_of_order_sequences() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "lockbox-share-out-of-order-test-{}",
+            unix_ms(SystemTime::now())
+        ));
+        let store = ShareStore::open(ServerConfig {
+            state_dir: state_dir.clone(),
+            promoted_owner_ids: vec![0],
+            ..ServerConfig::default()
+        })
+        .unwrap();
+
+        let second = replication_put_event(2, "0123456789002", "second");
+        let first = replication_put_event(1, "0123456789001", "first");
+
+        assert!(store.apply_replication_event(second.clone()).unwrap());
+        assert!(store.apply_replication_event(first.clone()).unwrap());
+        assert!(!store.apply_replication_event(second).unwrap());
+
+        assert_eq!(store.stats().live, 2);
+        assert!(store.fetch("0123456789001").is_ok());
+        assert!(store.fetch("0123456789002").is_ok());
+
+        let _ = fs::remove_dir_all(state_dir);
+    }
+
+    #[test]
+    fn delete_token_hashes_are_stable_across_replica_secrets() {
+        let state_a = std::env::temp_dir().join(format!(
+            "lockbox-share-token-hash-a-{}",
+            unix_ms(SystemTime::now())
+        ));
+        let state_b = std::env::temp_dir().join(format!(
+            "lockbox-share-token-hash-b-{}",
+            unix_ms(SystemTime::now())
+        ));
+        let store_a = ShareStore::open(ServerConfig {
+            state_dir: state_a.clone(),
+            ..ServerConfig::default()
+        })
+        .unwrap();
+        let store_b = ShareStore::open(ServerConfig {
+            state_dir: state_b.clone(),
+            ..ServerConfig::default()
+        })
+        .unwrap();
+
+        assert_ne!(store_a.secret, store_b.secret);
+        assert_eq!(
+            store_a.delete_token_hash(b"replicated-delete-token"),
+            store_b.delete_token_hash(b"replicated-delete-token")
+        );
+        assert_ne!(
+            store_a.code_hash("0123456789012"),
+            store_b.code_hash("0123456789012")
+        );
+
+        let _ = fs::remove_dir_all(state_a);
+        let _ = fs::remove_dir_all(state_b);
+    }
+
+    fn replication_put_event(sequence: u64, share_code: &str, label: &str) -> ReplicationEvent {
+        ReplicationEvent {
+            origin_server_id: 0,
+            origin_epoch: 1,
+            origin_sequence: sequence,
+            kind: ReplicationEventKind::PutShare {
+                share_code: share_code.to_string(),
+                delete_token_hash: [sequence as u8; HASH_LEN].to_vec(),
+                payload: payload::encode_contact_share(
+                    &format!("{label}@example.com"),
+                    b"public-key-material",
+                    &[1_u8; 32],
+                    &[2_u8; 24],
+                    1,
+                    2,
+                ),
+                expires_at_unix_ms: unix_ms(SystemTime::now()) + 60_000,
+                max_fetches: 2,
+                fetches: 0,
+            },
+        }
     }
 }
 

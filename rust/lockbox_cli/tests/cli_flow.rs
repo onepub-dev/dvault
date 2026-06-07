@@ -75,6 +75,16 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(env_verbose_help.contains("Secret values are encrypted the same way"));
     assert!(env_verbose_help.contains("require `env get --secret` to print"));
 
+    let form_help = run_output(bin, &["form", "--help"]);
+    assert_success(&form_help);
+    let form_help = String::from_utf8_lossy(&form_help.stdout);
+    assert!(form_help.contains("Manage typed multi-field form records."));
+    assert!(form_help.contains("define"));
+    assert!(form_help.contains("types"));
+    assert!(form_help.contains("add"));
+    assert!(form_help.contains("show"));
+    assert!(form_help.contains("rm"));
+
     let env_set_verbose_help = run_output(bin, &["env", "set", "--help", "--verbose"]);
     assert_success(&env_set_verbose_help);
     let env_set_verbose_help = String::from_utf8_lossy(&env_set_verbose_help.stdout);
@@ -243,6 +253,253 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(unlock_help.contains("--password-file <FILE>"));
     assert!(unlock_help.contains("--password-stdin"));
     assert!(!unlock_help.contains("--list"));
+}
+
+#[test]
+fn form_definitions_and_records_flow() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("forms-flow");
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("forms.lbox");
+    let lockbox = lockbox.to_string_lossy().to_string();
+
+    run(
+        bin,
+        &[
+            "form",
+            "define",
+            &lockbox,
+            "login",
+            "--name",
+            "Login",
+            "--field",
+            "username:text:required:Username",
+            "--field",
+            "password:secret:required:Password",
+            "--field",
+            "site:url",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "form",
+            "add",
+            &lockbox,
+            "/work/github",
+            "--type",
+            "login",
+            "--name",
+            "GitHub",
+            "--set",
+            "username=bsutton",
+            "--set",
+            "site=https://github.com",
+        ],
+    );
+    let secret_set = run_output_with_stdin(
+        bin,
+        &[
+            "form",
+            "set",
+            "--secret",
+            "--stdin",
+            &lockbox,
+            "/work/github",
+            "password",
+        ],
+        "correct horse\n",
+    );
+    assert_success(&secret_set);
+
+    let username = run_output(bin, &["form", "get", &lockbox, "/work/github", "username"]);
+    assert_success(&username);
+    assert_eq!(String::from_utf8_lossy(&username.stdout), "bsutton\n");
+
+    let refused = run_output(bin, &["form", "get", &lockbox, "/work/github", "password"]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("pass --secret"));
+
+    let password = run_output(
+        bin,
+        &[
+            "form",
+            "get",
+            "--secret",
+            &lockbox,
+            "/work/github",
+            "password",
+        ],
+    );
+    assert_success(&password);
+    assert_eq!(String::from_utf8_lossy(&password.stdout), "correct horse\n");
+
+    let inspect = run_output(bin, &["form", "show", &lockbox, "/work/github"]);
+    assert_success(&inspect);
+    let inspect = String::from_utf8_lossy(&inspect.stdout);
+    assert!(inspect.contains("field\tusername\tUsername\tbsutton"));
+    assert!(inspect.contains("field\tpassword\tPassword\t<secret>"));
+    assert!(!inspect.contains("correct horse"));
+
+    let list = run_output(bin, &["form", "list", &lockbox, "/work"]);
+    assert_success(&list);
+    let list = String::from_utf8_lossy(&list.stdout);
+    assert!(list.contains("/work/github"));
+    assert!(list.contains("GitHub"));
+
+    let definitions = run_output(bin, &["form", "types", &lockbox]);
+    assert_success(&definitions);
+    let definitions = String::from_utf8_lossy(&definitions.stdout);
+    assert!(definitions.contains("login"));
+    assert!(definitions.contains("Login"));
+
+    let interactive = run_output_with_stdin(
+        bin,
+        &[
+            "form",
+            "add",
+            &lockbox,
+            "/work/gitlab",
+            "--type",
+            "login",
+            "--interactive",
+        ],
+        "alice\ninteractive secret\n\n",
+    );
+    assert_success(&interactive);
+    let interactive_show = run_output(bin, &["form", "show", &lockbox, "/work/gitlab"]);
+    assert_success(&interactive_show);
+    let interactive_show = String::from_utf8_lossy(&interactive_show.stdout);
+    assert!(interactive_show.contains("name\tgitlab"));
+    assert!(interactive_show.contains("field\tusername\tUsername\talice"));
+    assert!(interactive_show.contains("field\tpassword\tPassword\t<secret>"));
+    assert!(!interactive_show.contains("interactive secret"));
+
+    run(
+        bin,
+        &[
+            "form",
+            "add",
+            &lockbox,
+            "/work/remove-me",
+            "--type",
+            "login",
+        ],
+    );
+    run(bin, &["form", "rm", &lockbox, "/work/remove-me"]);
+    let removed = run_output(bin, &["form", "show", &lockbox, "/work/remove-me"]);
+    assert!(!removed.status.success());
+
+    run(
+        bin,
+        &["env", "set", &lockbox, "/prod/API_KEY", "normal-key"],
+    );
+    let visualize = run_output(bin, &["visualize", &lockbox]);
+    assert_success(&visualize);
+    let visualize = String::from_utf8_lossy(&visualize.stdout);
+    assert!(visualize.contains("env vars: 1"));
+    assert!(visualize.contains("form definitions: 1"));
+    assert!(visualize.contains("form records: 2"));
+    assert!(visualize.contains("env recovered: true"));
+    assert!(visualize.contains("forms recovered: true"));
+
+    let report = run_output(bin, &["recover", "--report", &lockbox]);
+    assert_success(&report);
+    let report = String::from_utf8_lossy(&report.stdout);
+    assert!(report.contains("env_recovered"));
+    assert!(report.contains("forms_recovered"));
+    assert!(report.contains("form_record_count"));
+}
+
+#[test]
+fn form_interactive_edit_handles_definition_history_and_mismatched_record() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("forms-history-interactive");
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("forms.lbox");
+    let lockbox = lockbox.to_string_lossy().to_string();
+
+    run(
+        bin,
+        &[
+            "form",
+            "define",
+            &lockbox,
+            "login",
+            "--name",
+            "Login",
+            "--field",
+            "username:text:required:Username",
+            "--field",
+            "legacy:text:required:Legacy",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "form",
+            "add",
+            &lockbox,
+            "/work/history",
+            "--type",
+            "login",
+            "--name",
+            "History",
+            "--set",
+            "username=alice",
+            "--set",
+            "legacy=old",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "form",
+            "define",
+            &lockbox,
+            "login",
+            "--name",
+            "Login",
+            "--field",
+            "username:text:required:Username",
+            "--field",
+            "password:secret:required:Password",
+            "--field",
+            "site:url",
+        ],
+    );
+
+    let edit = run_output_with_stdin(
+        bin,
+        &["form", "edit", &lockbox, "/work/history", "--interactive"],
+        "revision secret\n\n",
+    );
+    assert_success(&edit);
+
+    let show = run_output(bin, &["form", "show", &lockbox, "/work/history"]);
+    assert_success(&show);
+    let show = String::from_utf8_lossy(&show.stdout);
+    assert!(show.contains("field\tusername\tUsername\talice"));
+    assert!(show.contains("field\tpassword\tPassword\t<secret>"));
+    assert!(show.contains("unknown-field\tlegacy\tLegacy"));
+    assert!(!show.contains("revision secret"));
+
+    let password = run_output(
+        bin,
+        &[
+            "form",
+            "get",
+            "--secret",
+            &lockbox,
+            "/work/history",
+            "password",
+        ],
+    );
+    assert_success(&password);
+    assert_eq!(
+        String::from_utf8_lossy(&password.stdout),
+        "revision secret\n"
+    );
 }
 
 #[test]
@@ -698,6 +955,8 @@ fn doctor_and_vault_sessions_report_agent_state() {
     let doctor = String::from_utf8_lossy(&doctor.stdout);
     assert!(doctor.contains("Session agent"));
     assert!(doctor.contains("running: no"));
+    assert!(doctor.contains("log:"));
+    assert!(doctor.contains(agent_root.to_str().unwrap()));
     assert_contains_in_order(
         &doctor,
         &[
@@ -1417,6 +1676,7 @@ fn vault_init_verify_wrong_password_reports_vault_specific_error() {
         .env("LOCKBOX_PASSWORD", "test-lockbox-password")
         .env("LOCKBOX_VAULT_PASSWORD", "wrong-vault-password")
         .env("LOCKBOX_SESSION_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(&agent_root))
         .env("LOCKBOX_VAULT_DIR", &vault_root)
         .output()
         .unwrap();
@@ -2343,6 +2603,7 @@ fn run_output_in(bin: &str, args: &[&str], vault_root: &PathBuf, agent_root: &Pa
         .env("LOCKBOX_KEY", "test-key")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
         .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(agent_root))
         .env("LOCKBOX_VAULT_DIR", vault_root)
         .output()
         .unwrap()
@@ -2370,6 +2631,7 @@ fn run_output_in_with_stdin(
         .env("LOCKBOX_KEY", "test-key")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
         .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(agent_root))
         .env("LOCKBOX_VAULT_DIR", vault_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2396,6 +2658,7 @@ fn run_output_without_content_key(
         .env("LOCKBOX_PASSWORD", "test-lockbox-password")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
         .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(agent_root))
         .env("LOCKBOX_VAULT_DIR", vault_root)
         .output()
         .unwrap()
@@ -2412,6 +2675,7 @@ fn run_output_without_lockbox_password(
         .args(args)
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
         .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(agent_root))
         .env("LOCKBOX_VAULT_DIR", vault_root);
     command
 }
@@ -2450,6 +2714,7 @@ fn run_output_without_content_key_with_stdin(
         .env("LOCKBOX_PASSWORD", "test-lockbox-password")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
         .env("LOCKBOX_SESSION_AGENT_DIR", agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(agent_root))
         .env("LOCKBOX_VAULT_DIR", vault_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2463,6 +2728,10 @@ fn run_output_without_content_key_with_stdin(
         .write_all(stdin.as_bytes())
         .unwrap();
     child.wait_with_output().unwrap()
+}
+
+fn agent_log_path(agent_root: &PathBuf) -> PathBuf {
+    agent_root.join("agent.log")
 }
 
 fn assert_success(output: &Output) {
@@ -2497,9 +2766,16 @@ fn unique_dir() -> PathBuf {
 
 fn unique_dir_named(label: &str) -> PathBuf {
     let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../target/test-tmp")
-        .join(format!("lockbox-{label}-{}-{counter}", std::process::id()))
+        .join(format!(
+            "lockbox-{label}-{}-{counter}-{nanos}",
+            std::process::id()
+        ))
 }
 
 fn short_target_dir(label: &str) -> PathBuf {

@@ -2,6 +2,7 @@ mod context;
 mod doctor;
 mod env;
 mod files;
+mod form;
 mod help;
 mod keys;
 mod output;
@@ -12,6 +13,7 @@ mod visualize;
 use clap::ArgMatches;
 use context::{Access, CliResult};
 use lockbox_core::{Error, SecretVec, WorkerPolicy};
+use lockbox_vault::SecretActivityKind;
 use std::env as std_env;
 
 pub(crate) fn run() -> CliResult<()> {
@@ -42,6 +44,9 @@ pub(crate) fn run() -> CliResult<()> {
     let (command, command_matches) = matches
         .subcommand()
         .ok_or_else(|| Error::InvalidInput("missing command".to_string()))?;
+    let _secret_activity = command_secret_activity(command)
+        .map(lockbox_vault::begin_secret_activity)
+        .transpose()?;
     let access = read_access(&matches, command)?;
 
     match command {
@@ -70,12 +75,27 @@ pub(crate) fn run() -> CliResult<()> {
             &access,
         )?,
         "env" => env::run(&env_args(command_matches)?, &access)?,
+        "form" => form::run(&form_args(command_matches)?, &access)?,
         "recover" => recovery::run(&recover_args(command_matches)?, &access)?,
         "visualize" => visualize::run(&one_arg(command_matches, "lockbox"), &access)?,
         _ => return Err(Error::InvalidInput(format!("unknown command: {command}")).into()),
     }
 
     Ok(())
+}
+
+fn command_secret_activity(command: &str) -> Option<SecretActivityKind> {
+    match command {
+        "unlock" => Some(SecretActivityKind::Unlock),
+        "add" | "extract" | "cat" | "list" | "rm" | "rename" | "visualize" => {
+            Some(SecretActivityKind::Open)
+        }
+        "env" => Some(SecretActivityKind::Env),
+        "form" => Some(SecretActivityKind::Form),
+        "recover" => Some(SecretActivityKind::Recovery),
+        "access" | "unlock-key" => Some(SecretActivityKind::Vault),
+        _ => None,
+    }
 }
 
 fn read_access(matches: &ArgMatches, command: &str) -> CliResult<Access> {
@@ -249,6 +269,77 @@ fn env_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
         }
         "rm" | "remove" => args.push(value(sub, "name")),
         _ => return Err(Error::InvalidInput(format!("unknown env command: {command}")).into()),
+    }
+    Ok(args)
+}
+
+fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    let (command, sub) = matches
+        .subcommand()
+        .ok_or_else(|| Error::InvalidInput("missing form command".to_string()))?;
+    let mut args = vec![command.to_string(), value(sub, "lockbox")];
+    match command {
+        "define" => {
+            args.push(value(sub, "alias"));
+            push_option(&mut args, sub, "name", "--name");
+            push_option(&mut args, sub, "type-id", "--type-id");
+            if let Some(fields) = sub.get_many::<String>("field") {
+                for field in fields {
+                    args.push("--field".to_string());
+                    args.push(field.clone());
+                }
+            }
+        }
+        "types" => {
+            push_option(&mut args, sub, "format", "--format");
+        }
+        "add" => {
+            args.push(value(sub, "path"));
+            push_option(&mut args, sub, "type", "--type");
+            push_option(&mut args, sub, "name", "--name");
+            if let Some(assignments) = sub.get_many::<String>("set") {
+                for assignment in assignments {
+                    args.push("--set".to_string());
+                    args.push(assignment.clone());
+                }
+            }
+            push_flag(&mut args, sub, "interactive", "--interactive");
+        }
+        "edit" => {
+            args.push(value(sub, "path"));
+            if let Some(assignments) = sub.get_many::<String>("set") {
+                for assignment in assignments {
+                    args.push("--set".to_string());
+                    args.push(assignment.clone());
+                }
+            }
+            push_flag(&mut args, sub, "interactive", "--interactive");
+        }
+        "set" => {
+            args.push(value(sub, "path"));
+            args.push(value(sub, "field"));
+            push_flag(&mut args, sub, "secret", "--secret");
+            if let Some(value) = sub.get_one::<String>("value") {
+                args.push(value.clone());
+            }
+            push_flag(&mut args, sub, "stdin", "--stdin");
+        }
+        "get" => {
+            args.push(value(sub, "path"));
+            args.push(value(sub, "field"));
+            push_flag(&mut args, sub, "secret", "--secret");
+        }
+        "show" => {
+            args.push(value(sub, "path"));
+        }
+        "list" => {
+            push_option(&mut args, sub, "format", "--format");
+            push_optional(&mut args, sub, "pattern");
+        }
+        "rm" => {
+            args.push(value(sub, "path"));
+        }
+        _ => return Err(Error::InvalidInput(format!("unknown form command: {command}")).into()),
     }
     Ok(args)
 }

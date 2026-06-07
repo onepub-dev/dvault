@@ -1,9 +1,10 @@
 use crate::{
     CacheLimit, EnvName, EnvNamePattern, EnvSensitivity, EnvValueRef, Error, ExtractPolicy,
-    ListOptions, Lockbox, LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm,
-    LockboxKeySlotProtection, LockboxOptions, LockboxPath, LockboxProtection, LockboxUnlock,
-    RecipientKeyPair, RecipientPublicKey, RecoveryReportOptions, RecoveryScanner, Result,
-    SecretString, WorkerPolicy, WorkloadProfile, MAX_KEY_SLOT_NAME_BYTES,
+    FormFieldDefinition, FormFieldKind, FormValue, ListOptions, Lockbox, LockboxEntry,
+    LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotProtection, LockboxOptions,
+    LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair, RecipientPublicKey,
+    RecoveryReportOptions, RecoveryScanner, Result, SecretString, SecretVec, WorkerPolicy,
+    WorkloadProfile, MAX_KEY_SLOT_NAME_BYTES,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -2591,6 +2592,265 @@ fn path_backed_compact_logically_rewrites_live_state() {
     let _ = std::fs::remove_file(path);
 }
 
+#[test]
+fn forms_persist_revisions_and_secret_values() {
+    let mut lb = Lockbox::create(KEY);
+    let definition = lb
+        .define_form(
+            "login",
+            "Login",
+            vec![
+                form_field("username", "Username", FormFieldKind::Text, true),
+                form_field("password", "Password", FormFieldKind::Secret, true),
+            ],
+        )
+        .unwrap();
+    lb.create_form_record(&p("/work/github"), "login", "GitHub")
+        .unwrap();
+    lb.set_form_field_normal(&p("/work/github"), "username", "bsutton")
+        .unwrap();
+    lb.set_form_field_secret(&p("/work/github"), "password", &password("secret-password"))
+        .unwrap();
+    lb.commit().unwrap();
+
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+    let record = reopened
+        .get_form_record(&p("/work/github"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.name, "GitHub");
+    assert_eq!(record.type_id, definition.type_id);
+    assert!(matches!(
+        reopened
+            .get_form_field(&p("/work/github"), "username")
+            .unwrap()
+            .unwrap()
+            .value,
+        FormValue::Normal(value) if value == "bsutton"
+    ));
+    let secret = reopened
+        .get_form_field(&p("/work/github"), "password")
+        .unwrap()
+        .unwrap();
+    match secret.value {
+        FormValue::Secret(value) => {
+            value
+                .with_str(|value| assert_eq!(value, "secret-password"))
+                .unwrap();
+        }
+        FormValue::Normal(_) => panic!("password field was not secret"),
+    }
+}
+
+#[test]
+fn form_alias_conflicts_require_type_ids() {
+    let mut lb = Lockbox::create(KEY);
+    let first = lb
+        .define_form(
+            "login",
+            "Login",
+            vec![form_field(
+                "username",
+                "Username",
+                FormFieldKind::Text,
+                true,
+            )],
+        )
+        .unwrap();
+    let second_type = crate::FormTypeId::new_random().unwrap();
+    let second = lb
+        .define_form_with_type_id(
+            second_type,
+            "login",
+            "Other Login",
+            vec![form_field("email", "Email", FormFieldKind::Email, true)],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        lb.resolve_form_definition("login"),
+        Err(Error::InvalidOperation(_))
+    ));
+    assert_eq!(
+        lb.resolve_form_definition(first.type_id.as_str())
+            .unwrap()
+            .fields[0]
+            .id,
+        "username"
+    );
+    assert_eq!(
+        lb.resolve_form_definition(second.type_id.as_str())
+            .unwrap()
+            .fields[0]
+            .id,
+        "email"
+    );
+}
+
+#[test]
+fn compact_preserves_form_state() {
+    let mut lb = Lockbox::create(KEY);
+    lb.add_file(&p("/payload.txt"), b"payload", false).unwrap();
+    lb.define_form(
+        "login",
+        "Login",
+        vec![form_field(
+            "username",
+            "Username",
+            FormFieldKind::Text,
+            true,
+        )],
+    )
+    .unwrap();
+    lb.create_form_record(&p("/github"), "login", "GitHub")
+        .unwrap();
+    lb.set_form_field_normal(&p("/github"), "username", "bsutton")
+        .unwrap();
+    lb.commit().unwrap();
+
+    lb.compact().unwrap();
+    let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
+    assert_eq!(reopened.get_file(&p("/payload.txt")).unwrap(), b"payload");
+    assert_eq!(
+        reopened
+            .get_form_field(&p("/github"), "username")
+            .unwrap()
+            .unwrap()
+            .field_id,
+        "username"
+    );
+}
+
+#[test]
+fn recovery_preserves_env_paths_and_forms_from_commit_root() {
+    let mut lb = Lockbox::create(KEY);
+    lb.add_file(&p("/payload.txt"), b"payload", false).unwrap();
+    lb.set_env(&env("/prod/API_KEY"), "normal-key").unwrap();
+    lb.set_secret_env(&env("/prod/TOKEN"), &password("secret-token"))
+        .unwrap();
+    lb.define_form(
+        "login",
+        "Login",
+        vec![
+            form_field("username", "Username", FormFieldKind::Text, true),
+            form_field("password", "Password", FormFieldKind::Secret, true),
+        ],
+    )
+    .unwrap();
+    lb.create_form_record(&p("/forms/github"), "login", "GitHub")
+        .unwrap();
+    lb.set_form_field_normal(&p("/forms/github"), "username", "bsutton")
+        .unwrap();
+    lb.set_form_field_secret(&p("/forms/github"), "password", &password("form-secret"))
+        .unwrap();
+    lb.commit().unwrap();
+    let bytes = lb.to_bytes();
+
+    let report = RecoveryScanner::scan_bytes(bytes.clone(), KEY);
+    assert!(report.toc_recovered);
+    assert!(report.env_recovered);
+    assert_eq!(report.env_count, 2);
+    assert!(report.forms_recovered);
+    assert_eq!(report.form_definition_count, 1);
+    assert_eq!(report.form_record_count, 1);
+
+    let recovered = RecoveryScanner::salvage_bytes(bytes, KEY).unwrap();
+    assert_eq!(recovered.get_file(&p("/payload.txt")).unwrap(), b"payload");
+    assert_eq!(
+        recovered.get_env(&env("/prod/API_KEY")).unwrap().as_deref(),
+        Some("normal-key")
+    );
+    recovered
+        .with_secret_env(&env("/prod/TOKEN"), |secret| {
+            secret
+                .with_str(|value| assert_eq!(value, "secret-token"))
+                .unwrap();
+        })
+        .unwrap()
+        .unwrap();
+    let username = recovered
+        .get_form_field(&p("/forms/github"), "username")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        username.value,
+        FormValue::Normal(value) if value == "bsutton"
+    ));
+    let password = recovered
+        .get_form_field(&p("/forms/github"), "password")
+        .unwrap()
+        .unwrap();
+    match password.value {
+        FormValue::Secret(secret) => {
+            secret
+                .with_str(|value| assert_eq!(value, "form-secret"))
+                .unwrap();
+        }
+        FormValue::Normal(_) => panic!("recovered form password was not secret"),
+    }
+}
+
+#[test]
+fn path_backed_recovery_preserves_env_paths_and_forms_from_commit_root() {
+    let path = temp_path("recovery-env-forms");
+    let key = b"test-key";
+    let mut lb = Lockbox::create_path(&path, key).unwrap();
+    lb.set_env(&env("/prod/API_KEY"), "normal-key").unwrap();
+    lb.define_form(
+        "login",
+        "Login",
+        vec![form_field(
+            "username",
+            "Username",
+            FormFieldKind::Text,
+            true,
+        )],
+    )
+    .unwrap();
+    lb.create_form_record(&p("/forms/github"), "login", "GitHub")
+        .unwrap();
+    lb.set_form_field_normal(&p("/forms/github"), "username", "bsutton")
+        .unwrap();
+    lb.commit().unwrap();
+    drop(lb);
+
+    let bytes = std::fs::read(&path).unwrap();
+    let report = RecoveryScanner::scan_bytes(bytes.clone(), key);
+    assert!(report.env_recovered);
+    assert_eq!(report.env_count, 1);
+    assert!(report.forms_recovered);
+    assert_eq!(report.form_definition_count, 1);
+    assert_eq!(report.form_record_count, 1);
+
+    let reopened = Lockbox::open_file(
+        &path,
+        LockboxUnlock::ContentKey(SecretVec::try_from_slice(key).unwrap()),
+    )
+    .unwrap();
+    let reopened_bytes = reopened.bytes().unwrap();
+    assert_eq!(bytes, reopened_bytes);
+    let reopened_bytes_report = RecoveryScanner::scan_bytes(reopened_bytes, key);
+    assert!(reopened_bytes_report.env_recovered);
+    let inspector_report = reopened.inspector().recovery_report();
+    assert!(inspector_report.env_recovered);
+    assert_eq!(inspector_report.env_count, 1);
+    assert!(inspector_report.forms_recovered);
+    assert_eq!(inspector_report.form_definition_count, 1);
+    assert_eq!(inspector_report.form_record_count, 1);
+
+    let recovered = RecoveryScanner::salvage_bytes(bytes, key).unwrap();
+    assert_eq!(
+        recovered.get_env(&env("/prod/API_KEY")).unwrap().as_deref(),
+        Some("normal-key")
+    );
+    assert!(recovered
+        .get_form_field(&p("/forms/github"), "username")
+        .unwrap()
+        .is_some());
+
+    let _ = std::fs::remove_file(path);
+}
+
 fn sample_lockbox() -> Vec<u8> {
     let mut lb = Lockbox::create(KEY);
     lb.add_file_from_reader(&p("/docs/a.txt"), Cursor::new(b"alpha"), false)
@@ -2625,4 +2885,13 @@ fn temp_path(label: &str) -> std::path::PathBuf {
 
 fn password(value: &str) -> SecretString {
     SecretString::try_from_bytes(value.as_bytes().to_vec()).unwrap()
+}
+
+fn form_field(id: &str, label: &str, kind: FormFieldKind, required: bool) -> FormFieldDefinition {
+    FormFieldDefinition {
+        id: id.to_string(),
+        label: label.to_string(),
+        kind,
+        required,
+    }
 }

@@ -159,6 +159,23 @@ fn report_rows(report: &RecoveryReport, output: Option<&str>) -> Vec<Vec<String>
             "toc_recovered".to_string(),
             report.toc_recovered.to_string(),
         ],
+        vec![
+            "env_recovered".to_string(),
+            report.env_recovered.to_string(),
+        ],
+        vec!["env_count".to_string(), report.env_count.to_string()],
+        vec![
+            "forms_recovered".to_string(),
+            report.forms_recovered.to_string(),
+        ],
+        vec![
+            "form_definition_count".to_string(),
+            report.form_definition_count.to_string(),
+        ],
+        vec![
+            "form_record_count".to_string(),
+            report.form_record_count.to_string(),
+        ],
     ];
     if let Some(output) = output {
         rows.push(vec!["output".to_string(), output.to_string()]);

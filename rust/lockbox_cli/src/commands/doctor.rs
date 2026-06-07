@@ -1,7 +1,8 @@
 use super::context::CliResult;
 use lockbox_vault::{
-    default_vault_path, get_platform_vault_password, is_running, platform_secret_store_disabled,
-    platform_secret_store_status, verify_agent_transport_security, SecretString, VaultDirectory,
+    agent_log_destination, default_vault_path, get_platform_vault_password, is_running,
+    platform_secret_store_disabled, platform_secret_store_status, verify_agent_transport_security,
+    SecretString, VaultDirectory,
 };
 use std::fs::OpenOptions;
 
@@ -47,6 +48,7 @@ pub(crate) fn run() -> CliResult<()> {
         }
     );
     println!("  running: {}", yes_no(is_running()));
+    println!("  log: {}", agent_log_destination());
     println!();
     println!("Known lockboxes");
     match default_vault_noninteractive() {

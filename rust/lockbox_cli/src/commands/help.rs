@@ -253,6 +253,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .arg(required("from", "Existing path inside the lockbox."))
                 .arg(required("to", "New path inside the lockbox.")),
             env_command(verbose),
+            form_command(verbose),
             access_command(verbose),
             vault_command(verbose),
             developer_command("visualize", "Print internal lockbox structure.")
@@ -301,6 +302,7 @@ Files
 
 Environment
   env             Store, retrieve, list, export, or remove environment values.
+  form            Manage typed multi-field form records.
 
 Sharing
   access          Manage who can unlock a lockbox.
@@ -510,6 +512,176 @@ fn env_command(verbose: bool) -> Command {
             .arg(required("lockbox", "Lockbox path."))
             .arg(required("name", "Environment variable name.")),
     )
+}
+
+fn form_command(verbose: bool) -> Command {
+    base_command("form", "Manage typed multi-field form records.")
+        .after_help(verbose_help(
+            verbose,
+            "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form add secrets.lbox /work/github --type login --name GitHub --set username=bsutton\n  lockbox form add secrets.lbox /work/github --type login --interactive\n  lockbox form show secrets.lbox /work/github",
+            "Context:\n  Forms store structured records inside a lockbox. Definitions are versioned by a stable type id and embedded in the lockbox, so shared lockboxes remain self-describing even when another party uses the same form alias for a different definition.",
+        ))
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("define")
+                .about("Create or revise a form definition.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form define secrets.lbox login --name Login --field username:text:required:User --field password:secret:required:Password\n\nField form:\n  FIELD[:KIND[:required[:LABEL]]]\n\nKinds:\n  text, secret, password, url, email, date, month, notes, number, otp",
+                    "Context:\n  Define creates a new form type for a new alias. If the alias already resolves to exactly one type, define appends a new definition revision. If an imported shared lockbox has conflicting aliases, pass --type-id to revise the intended type explicitly.",
+                ))
+                .arg(required("lockbox", "Lockbox path."))
+                .arg(required("alias", "Form alias."))
+                .arg(
+                    Arg::new("name")
+                        .long("name")
+                        .value_name("DISPLAY_NAME")
+                        .help("Human display name for this form type."),
+                )
+                .arg(
+                    Arg::new("type-id")
+                        .long("type-id")
+                        .value_name("TYPE_ID")
+                        .help("Revise or create this stable form type id."),
+                )
+                .arg(
+                    Arg::new("field")
+                        .long("field")
+                        .value_name("FIELD[:KIND[:required[:LABEL]]]")
+                        .action(ArgAction::Append)
+                        .required(true)
+                        .help("Add one field to the definition."),
+                ),
+        )
+        .subcommand(
+            Command::new("types")
+                .about("List form types.")
+                .arg(output_format_arg())
+                .arg(required("lockbox", "Lockbox path.")),
+        )
+        .subcommand(
+            Command::new("add")
+                .about("Add a form record.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox form add secrets.lbox /work/github --type login --name GitHub\n  lockbox form add secrets.lbox /work/github --type login --set username=bsutton --set site=https://github.com\n  lockbox form add secrets.lbox /work/github --type login --interactive",
+                    "Context:\n  Add creates one form record in the lockbox. Use --set for non-secret values known up front. Use --interactive to prompt for remaining fields, including secret fields without echoing them.",
+                ))
+                .arg(required("lockbox", "Lockbox path."))
+                .arg(required("path", "Form record path inside the lockbox."))
+                .arg(
+                    Arg::new("type")
+                        .long("type")
+                        .value_name("ALIAS_OR_TYPE_ID")
+                        .required(true)
+                        .help("Form definition alias or stable type id."),
+                )
+                .arg(
+                    Arg::new("name")
+                        .long("name")
+                        .value_name("RECORD_NAME")
+                        .help("Display name for this record. Defaults to the last path component."),
+                )
+                .arg(
+                    Arg::new("set")
+                        .long("set")
+                        .value_name("FIELD=VALUE")
+                        .action(ArgAction::Append)
+                        .help("Set one non-secret field while adding the form record."),
+                )
+                .arg(
+                    Arg::new("interactive")
+                        .long("interactive")
+                        .short('i')
+                        .action(ArgAction::SetTrue)
+                        .help("Prompt for fields that were not supplied with --set."),
+                ),
+        )
+        .subcommand(
+            Command::new("edit")
+                .about("Edit a form record.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox form edit secrets.lbox /work/github --set username=bsutton\n  lockbox form edit secrets.lbox /work/github --interactive",
+                    "Context:\n  Edit updates an existing form record. Use --interactive after a form type revision to fill fields that exist in the latest definition but are missing from the stored record.",
+                ))
+                .arg(required("lockbox", "Lockbox path."))
+                .arg(required("path", "Form record path."))
+                .arg(
+                    Arg::new("set")
+                        .long("set")
+                        .value_name("FIELD=VALUE")
+                        .action(ArgAction::Append)
+                        .help("Set one non-secret field while editing the form record."),
+                )
+                .arg(
+                    Arg::new("interactive")
+                        .long("interactive")
+                        .short('i')
+                        .action(ArgAction::SetTrue)
+                        .help("Prompt for fields missing from the current record."),
+                ),
+        )
+        .subcommand(
+            Command::new("set")
+                .about("Set one form field value.")
+                .arg(required("lockbox", "Lockbox path."))
+                .arg(required("path", "Form record path."))
+                .arg(required("field", "Field id."))
+                .arg(
+                    Arg::new("secret")
+                        .long("secret")
+                        .action(ArgAction::SetTrue)
+                        .help("Set a secret field value."),
+                )
+                .arg(
+                    Arg::new("value")
+                        .value_name("VALUE")
+                        .allow_hyphen_values(true)
+                        .conflicts_with("stdin")
+                        .help("Literal field value."),
+                )
+                .arg(
+                    Arg::new("stdin")
+                        .long("stdin")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with("value")
+                        .help("Read the field value from stdin."),
+                ),
+        )
+        .subcommand(
+            Command::new("get")
+                .about("Print one form field value.")
+                .arg(required("lockbox", "Lockbox path."))
+                .arg(required("path", "Form record path."))
+                .arg(required("field", "Field id."))
+                .arg(
+                    Arg::new("secret")
+                        .long("secret")
+                        .action(ArgAction::SetTrue)
+                        .help("Print a secret field value."),
+                ),
+        )
+        .subcommand(
+            Command::new("show")
+                .about("Show one form record.")
+                .arg(required("lockbox", "Lockbox path."))
+                .arg(required("path", "Form record path.")),
+        )
+        .subcommand(
+            Command::new("list")
+                .about("List form records.")
+                .arg(output_format_arg())
+                .arg(required("lockbox", "Lockbox path."))
+                .arg(optional("pattern", "Optional form record path or glob pattern.")),
+        )
+        .subcommand(
+            Command::new("rm")
+                .about("Remove one form record.")
+                .arg(required("lockbox", "Lockbox path."))
+                .arg(required("path", "Form record path.")),
+        )
 }
 
 fn access_command(verbose: bool) -> Command {

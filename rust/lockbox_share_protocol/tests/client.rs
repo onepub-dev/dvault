@@ -15,6 +15,38 @@ struct MockTransport {
     calls: std::rc::Rc<RefCell<usize>>,
 }
 
+#[derive(Clone)]
+struct FlakyTransport {
+    response: Vec<u8>,
+    calls: std::rc::Rc<RefCell<usize>>,
+}
+
+impl FlakyTransport {
+    fn new(response: Vec<u8>) -> Self {
+        Self {
+            response,
+            calls: std::rc::Rc::new(RefCell::new(0)),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        *self.calls.borrow()
+    }
+}
+
+impl Transport for FlakyTransport {
+    fn post_binary(&self, _body: &[u8]) -> Result<Vec<u8>, lockbox_share_protocol::ClientError> {
+        let mut calls = self.calls.borrow_mut();
+        *calls += 1;
+        if *calls == 1 {
+            return Err(lockbox_share_protocol::ClientError::Io(
+                std::io::ErrorKind::WouldBlock.into(),
+            ));
+        }
+        Ok(self.response.clone())
+    }
+}
+
 impl MockTransport {
     fn new(responses: Vec<Vec<u8>>) -> Self {
         Self {
@@ -95,6 +127,45 @@ fn client_decodes_share_fetch_and_delete_responses() {
     assert!(client
         .delete(&shared.share_code, &shared.delete_token)
         .unwrap());
+}
+
+#[test]
+fn client_retries_transient_transport_errors() {
+    let mut share_response = Vec::new();
+    protocol::put_u16(&mut share_response, protocol::MESSAGE_VERSION);
+    protocol::put_string(&mut share_response, "123456789012");
+    protocol::put_bytes(&mut share_response, b"delete-token");
+    protocol::put_u64(&mut share_response, 2);
+    protocol::put_u16(&mut share_response, 1);
+
+    let transport = FlakyTransport::new(protocol::encode_response(
+        Operation::Share,
+        Status::Success,
+        &share_response,
+    ));
+    let client = ShareClient::from_transport(transport.clone()).with_retry_policy(
+        2,
+        Duration::ZERO,
+        Duration::ZERO,
+    );
+
+    let shared = client
+        .share_contact(
+            900,
+            1,
+            ContactShare {
+                identity: "client@example.com",
+                public_key: b"public-key-material",
+                fingerprint: &[1_u8; 32],
+                share_nonce: &[2_u8; 24],
+                created_at_unix_ms: 1,
+                expires_at_unix_ms: 2,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(shared.share_code, "123456789012");
+    assert_eq!(transport.calls(), 2);
 }
 
 #[test]
@@ -303,7 +374,7 @@ fn topology_cache_round_trips_binary_documents() {
         .unwrap();
     assert_eq!(cached, topology);
     assert!(
-        lockbox_share_protocol::read_topology_cache(&path, Duration::from_secs(0))
+        lockbox_share_protocol::read_topology_cache(&path, Duration::from_millis(1))
             .unwrap()
             .is_some()
     );
