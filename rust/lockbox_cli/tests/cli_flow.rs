@@ -2215,6 +2215,17 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
             "env",
             "set",
             lockbox.to_str().unwrap(),
+            "EMPTY_VALUE",
+            "-v",
+            "",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "env",
+            "set",
+            lockbox.to_str().unwrap(),
             "-s",
             "API_TOKEN",
             "-f",
@@ -2262,6 +2273,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     assert_success(&listing);
     let listing = String::from_utf8_lossy(&listing.stdout);
     assert!(listing.contains("/APP_MODE"));
+    assert!(listing.contains("/EMPTY_VALUE"));
     assert!(listing.contains("/API_TOKEN\tsecret"));
     assert!(listing.contains("/production/APP_MODE"));
 
@@ -2370,6 +2382,30 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
         String::from_utf8_lossy(&secret_get.stdout).trim(),
         "file-secret"
     );
+
+    let empty_get = run_output(
+        bin,
+        &["env", "get", lockbox.to_str().unwrap(), "EMPTY_VALUE"],
+    );
+    assert_success(&empty_get);
+    assert_eq!(String::from_utf8_lossy(&empty_get.stdout), "\n");
+
+    let missing_get = run_output(bin, &["env", "get", lockbox.to_str().unwrap(), "MISSING"]);
+    assert!(!missing_get.status.success());
+    assert!(String::from_utf8_lossy(&missing_get.stderr).contains("not found"));
+
+    let missing_secret_get = run_output(
+        bin,
+        &[
+            "env",
+            "get",
+            lockbox.to_str().unwrap(),
+            "--secret",
+            "MISSING",
+        ],
+    );
+    assert!(!missing_secret_get.status.success());
+    assert!(String::from_utf8_lossy(&missing_secret_get.stderr).contains("not found"));
 
     let token_output = dir.join("api-token.txt");
     run(

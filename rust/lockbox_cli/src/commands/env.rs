@@ -122,9 +122,13 @@ fn get_env(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()
             value.with_bytes(|value| request.write_value_bytes(value))
         })? {
             write_result??;
+        } else {
+            return Err(Error::NotFound(format!("env {name}")).into());
         }
     } else if let Some(value) = lb.get_env(&name)? {
         request.write_value(&value)?;
+    } else {
+        return Err(Error::NotFound(format!("env {name}")).into());
     }
     Ok(())
 }
