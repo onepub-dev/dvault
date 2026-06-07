@@ -566,8 +566,9 @@ fn form_command(verbose: bool) -> Command {
                 ),
         )
         .subcommand(
-            Command::new("types")
+            Command::new("definitions")
                 .about("List form definitions.")
+                .visible_alias("types")
                 .arg(output_format_arg())
                 .arg(required("lockbox", "Lockbox path.")),
         )

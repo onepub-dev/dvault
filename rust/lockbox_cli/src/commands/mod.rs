@@ -291,7 +291,7 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 }
             }
         }
-        "types" => {
+        "definitions" | "types" => {
             push_option(&mut args, sub, "format", "--format");
         }
         "add" => {

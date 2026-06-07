@@ -92,7 +92,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let form_help = String::from_utf8_lossy(&form_help.stdout);
     assert!(form_help.contains("Manage typed multi-field form records."));
     assert!(form_help.contains("define"));
-    assert!(form_help.contains("types"));
+    assert!(form_help.contains("definitions"));
     assert!(form_help.contains("add"));
     assert!(form_help.contains("show"));
     assert!(form_help.contains("rm"));
@@ -451,7 +451,7 @@ fn form_definitions_and_records_flow() {
     assert!(list.contains("/work/github"));
     assert!(list.contains("GitHub"));
 
-    let definitions = run_output(bin, &["form", "types", &lockbox]);
+    let definitions = run_output(bin, &["form", "definitions", &lockbox]);
     assert_success(&definitions);
     let definitions = String::from_utf8_lossy(&definitions.stdout);
     assert!(definitions
@@ -462,6 +462,10 @@ fn form_definitions_and_records_flow() {
     assert!(!definitions.lines().next().unwrap_or("").contains("type_id"));
     assert!(definitions.contains("login"));
     assert!(definitions.contains("Login"));
+
+    let legacy_types = run_output(bin, &["form", "types", &lockbox]);
+    assert_success(&legacy_types);
+    assert!(String::from_utf8_lossy(&legacy_types.stdout).contains("login"));
 
     let interactive = run_output_with_stdin(
         bin,

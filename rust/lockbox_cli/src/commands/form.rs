@@ -15,7 +15,7 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
     let subcommand = require_arg(args, 0, "form command")?;
     match subcommand {
         "define" => define(&args[1..], access),
-        "types" => definitions(&args[1..], access),
+        "definitions" | "types" => definitions(&args[1..], access),
         "add" => add(&args[1..], access),
         "edit" => edit(&args[1..], access),
         "set" => set(&args[1..], access),
