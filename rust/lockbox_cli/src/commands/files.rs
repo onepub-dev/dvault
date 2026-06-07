@@ -10,9 +10,21 @@ use std::path::Path;
 use std::time::Instant;
 
 pub(crate) fn add(args: &[String], access: &Access, worker_policy: WorkerPolicy) -> CliResult<()> {
-    let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let source = require_arg(args, 1, "source")?;
+    let recursive = args.iter().any(|arg| arg == "--recursive" || arg == "-r");
+    let args = args
+        .iter()
+        .filter(|arg| !matches!(arg.as_str(), "--recursive" | "-r"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let lockbox_path = require_arg(&args, 0, "lockbox")?;
+    let source = require_arg(&args, 1, "source")?;
     let source_path = Path::new(source);
+    if source_path.is_dir() && !recursive {
+        return Err(Error::InvalidInput(
+            "source is a directory; pass --recursive to import its files".to_string(),
+        )
+        .into());
+    }
     let path = match args.get(2) {
         Some(path) => path.clone(),
         None => default_lockbox_path_for_source(source_path)?,

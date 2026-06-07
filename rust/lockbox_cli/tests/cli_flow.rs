@@ -44,6 +44,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_success(&add_help);
     let add_help = String::from_utf8_lossy(&add_help.stdout);
     assert!(add_help.contains("Usage: lockbox add"));
+    assert!(add_help.contains("-r, --recursive"));
     assert!(add_help.contains("<lockbox>"));
     assert!(add_help.contains("<source>"));
     assert!(add_help.contains("[lockbox-path]"));
@@ -55,7 +56,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(add_verbose_help.contains("--jobs <auto|1|N>"));
     assert!(add_verbose_help.contains("--key <RAW_CONTENT_KEY>"));
     assert!(add_verbose_help.contains("Context:"));
-    assert!(add_verbose_help.contains("imports a host file or directory"));
+    assert!(add_verbose_help.contains("Pass --recursive when the source is a directory"));
     assert_contains_in_order(
         &add_verbose_help,
         &[
@@ -1438,10 +1439,23 @@ fn add_can_default_destination_and_list_recursively() {
             source_file.to_str().unwrap(),
         ],
     );
+    let directory_without_recursive = run_output(
+        bin,
+        &[
+            "add",
+            lockbox.to_str().unwrap(),
+            source_dir.to_str().unwrap(),
+            "/copy",
+        ],
+    );
+    assert!(!directory_without_recursive.status.success());
+    assert!(String::from_utf8_lossy(&directory_without_recursive.stderr).contains("--recursive"));
+
     run(
         bin,
         &[
             "add",
+            "--recursive",
             lockbox.to_str().unwrap(),
             source_dir.to_str().unwrap(),
             "/copy",

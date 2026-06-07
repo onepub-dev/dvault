@@ -184,6 +184,7 @@ fn recover_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
 
 fn add_args(matches: &ArgMatches) -> Vec<String> {
     let mut args = two_args(matches, "lockbox", "source");
+    push_flag(&mut args, matches, "recursive", "--recursive");
     if let Some(path) = matches.get_one::<String>("lockbox-path") {
         args.push(path.clone());
     }

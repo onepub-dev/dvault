@@ -148,9 +148,16 @@ pub(crate) fn command(verbose: bool) -> Command {
             file_command("add", "Add a file or directory to a lockbox.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox add secrets.lbox ./notes.txt\n  lockbox add secrets.lbox ./project /project\n  lockbox add secrets.lbox ./large-dir /archive",
-                    "Context:\n  Add imports a host file or directory into an unlocked lockbox. If no destination path is supplied, files keep their filename at the lockbox root and directories import under the root. Use --jobs in verbose mode to tune large imports.",
+                    "Examples:\n  lockbox add secrets.lbox ./notes.txt\n  lockbox add --recursive secrets.lbox ./project /project\n  lockbox add -r secrets.lbox ./large-dir /archive",
+                    "Context:\n  Add imports a host file into an unlocked lockbox. Pass --recursive when the source is a directory. If no destination path is supplied, files keep their filename at the lockbox root and recursive directory imports go under the root. Use --jobs in verbose mode to tune large imports.",
                 ))
+                .arg(
+                    Arg::new("recursive")
+                        .short('r')
+                        .long("recursive")
+                        .action(ArgAction::SetTrue)
+                        .help("Recursively import a directory source."),
+                )
                 .arg(
                     Arg::new("jobs")
                         .long("jobs")
