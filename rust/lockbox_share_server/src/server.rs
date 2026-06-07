@@ -506,6 +506,7 @@ fn benchmark_payload(target_bytes: usize) -> Vec<u8> {
     payload::encode_contact_share(
         "bench@example.com",
         &public_key,
+        b"signing-public-key-material",
         &[7_u8; 32],
         &[9_u8; 24],
         1,

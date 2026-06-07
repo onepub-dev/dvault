@@ -72,6 +72,7 @@ fn client_decodes_share_fetch_and_delete_responses() {
     let payload = lockbox_share_protocol::encode_contact_share(
         "client@example.com",
         b"public-key-material",
+        b"signing-public-key-material",
         &[1_u8; 32],
         &[2_u8; 24],
         1,
@@ -108,6 +109,7 @@ fn client_decodes_share_fetch_and_delete_responses() {
             ContactShare {
                 identity: "client@example.com",
                 public_key: b"public-key-material",
+                signing_public_key: b"signing-public-key-material",
                 fingerprint: &[1_u8; 32],
                 share_nonce: &[2_u8; 24],
                 created_at_unix_ms: 1,
@@ -156,6 +158,7 @@ fn client_retries_transient_transport_errors() {
             ContactShare {
                 identity: "client@example.com",
                 public_key: b"public-key-material",
+                signing_public_key: b"signing-public-key-material",
                 fingerprint: &[1_u8; 32],
                 share_nonce: &[2_u8; 24],
                 created_at_unix_ms: 1,
@@ -191,6 +194,7 @@ fn client_pool_fetches_from_later_server_when_first_misses() {
     let payload = lockbox_share_protocol::encode_contact_share(
         "cluster@example.com",
         b"public-key-material",
+        b"signing-public-key-material",
         &[1_u8; 32],
         &[2_u8; 24],
         1,
@@ -232,6 +236,7 @@ fn client_pool_prefers_server_id_from_share_code_prefix() {
     let payload = lockbox_share_protocol::encode_contact_share(
         "cluster@example.com",
         b"public-key-material",
+        b"signing-public-key-material",
         &[1_u8; 32],
         &[2_u8; 24],
         1,
@@ -270,6 +275,7 @@ fn client_pool_uses_topology_failover_order() {
     let payload = lockbox_share_protocol::encode_contact_share(
         "cluster@example.com",
         b"public-key-material",
+        b"signing-public-key-material",
         &[1_u8; 32],
         &[2_u8; 24],
         1,
@@ -394,6 +400,7 @@ fn replication_request_round_trips_binary_events() {
             payload: lockbox_share_protocol::encode_contact_share(
                 "replica@example.com",
                 b"public-key-material",
+                b"signing-public-key-material",
                 &[1_u8; 32],
                 &[2_u8; 24],
                 1,

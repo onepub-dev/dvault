@@ -1,7 +1,7 @@
 use lockbox_core::vault_bridge::VaultUnlock;
 use lockbox_core::{
-    Error, Lockbox, LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair, Result,
-    SecretVec,
+    Error, Lockbox, LockboxPath, LockboxProtection, LockboxUnlock, OwnerSigningKeyPair,
+    RecipientKeyPair, Result, SecretVec,
 };
 use lockbox_vault::{
     export_private_key, import_private_key_file, ContentKeyStore, IdentityGenerationStatus,
@@ -288,7 +288,7 @@ fn vault_directory_rejects_newer_structure_versions() {
     assert!(matches!(
         VaultDirectory::unlock_or_create(&root, &vault_password),
         Err(Error::Configuration(message))
-            if message.contains("newer than this Lockbox build supports")
+            if message.contains("newer than this reVault build supports")
     ));
 
     let _ = fs::remove_dir_all(root);
@@ -406,16 +406,25 @@ fn vault_directory_public_crud_helpers_flow() {
     assert!(!vault.private_key_exists("default").unwrap());
 
     let recipient = keypair.public_key();
+    let signing = OwnerSigningKeyPair::generate().unwrap().public_key();
     assert!(!vault.trusted_recipient_exists("alice").unwrap());
     vault.store_trusted_recipient("alice", &recipient).unwrap();
+    vault
+        .store_trusted_recipient_signing_key("alice", &signing)
+        .unwrap();
     assert!(vault.trusted_recipient_exists("alice").unwrap());
     assert_eq!(vault.load_trusted_recipient("alice").unwrap(), recipient);
+    assert_eq!(
+        vault.load_trusted_recipient_signing_key("alice").unwrap(),
+        signing
+    );
     let recipients = vault.list_trusted_recipients().unwrap();
     assert_eq!(recipients.len(), 1);
     assert_eq!(recipients[0].name, "alice");
     assert_eq!(recipients[0].key, recipient);
     vault.delete_trusted_recipient("alice").unwrap();
     assert!(!vault.trusted_recipient_exists("alice").unwrap());
+    assert!(vault.load_trusted_recipient_signing_key("alice").is_err());
 
     assert_eq!(vault.key_directory_backup_count().unwrap(), 0);
     let password = SecretString::try_from_bytes(b"pw".to_vec()).unwrap();
@@ -448,6 +457,11 @@ fn vault_directory_tracks_identity_generations_and_rotation() {
 
     let original = RecipientKeyPair::generate().unwrap();
     vault.store_private_key("default", &original).unwrap();
+    let original_signing_public = vault
+        .load_owner_signing_key_generation("default", 1)
+        .unwrap()
+        .public_key()
+        .to_bytes();
 
     let history = vault.list_identity_generations("default").unwrap();
     assert_eq!(history.active_generation, 1);
@@ -491,6 +505,11 @@ fn vault_directory_tracks_identity_generations_and_rotation() {
         original.private_key_record().unwrap()
     );
     let active = vault.load_private_key("default").unwrap();
+    let active_signing_public = vault
+        .load_owner_signing_key("default")
+        .unwrap()
+        .public_key()
+        .to_bytes();
     assert_eq!(
         vault
             .load_private_key_generation("default", 2)
@@ -503,6 +522,15 @@ fn vault_directory_tracks_identity_generations_and_rotation() {
         active.private_key_record().unwrap(),
         original.private_key_record().unwrap()
     );
+    assert_eq!(
+        vault
+            .load_owner_signing_key_generation("default", 2)
+            .unwrap()
+            .public_key()
+            .to_bytes(),
+        active_signing_public
+    );
+    assert_ne!(active_signing_public, original_signing_public);
     assert_eq!(
         vault.list_private_keys().unwrap(),
         vec!["default".to_string()]

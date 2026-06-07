@@ -285,6 +285,7 @@ impl<T: Transport> ShareClientPool<T> {
         let payload = payload::encode_contact_share(
             contact.identity,
             contact.public_key,
+            contact.signing_public_key,
             contact.fingerprint,
             contact.share_nonce,
             contact.created_at_unix_ms,
@@ -455,6 +456,7 @@ impl<T: Transport> ShareClient<T> {
         let payload = payload::encode_contact_share(
             contact.identity,
             contact.public_key,
+            contact.signing_public_key,
             contact.fingerprint,
             contact.share_nonce,
             contact.created_at_unix_ms,
@@ -592,6 +594,7 @@ impl Transport for HttpTransport {
 pub struct ContactShare<'a> {
     pub identity: &'a str,
     pub public_key: &'a [u8],
+    pub signing_public_key: &'a [u8],
     pub fingerprint: &'a [u8],
     pub share_nonce: &'a [u8],
     pub created_at_unix_ms: u64,

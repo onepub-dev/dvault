@@ -20,6 +20,7 @@ fn contact_payload(label: &str) -> Vec<u8> {
     lockbox_share_protocol::payload::encode_contact_share(
         &format!("{label}@example.com"),
         b"public-key-material",
+        b"signing-public-key-material",
         &[1_u8; 32],
         &[2_u8; 24],
         1,
@@ -33,6 +34,7 @@ fn key_replacement_payload(label: &str) -> Vec<u8> {
             identity: &format!("{label}@example.com"),
             old_fingerprint: &[3_u8; 32],
             new_public_key: b"replacement-public-key-material",
+            new_signing_public_key: b"replacement-signing-public-key-material",
             new_fingerprint: &[4_u8; 32],
             replacement_nonce: &[5_u8; 24],
             signature_by_old_key: b"signature-by-old-key",
@@ -522,6 +524,7 @@ fn client_api_can_share_fetch_and_delete() {
             ContactShare {
                 identity: "client@example.com",
                 public_key: b"public-key-material",
+                signing_public_key: b"signing-public-key-material",
                 fingerprint: &[1_u8; 32],
                 share_nonce: &[2_u8; 24],
                 created_at_unix_ms: 1,

@@ -3,7 +3,7 @@ use super::context::{
     remember_default_vault_password, require_arg, CliResult,
 };
 use super::output::{output_format_from_args, print_records};
-use lockbox_core::{Error, RecipientKeyPair, RecipientPublicKey};
+use lockbox_core::{Error, OwnerSigningPublicKey, RecipientKeyPair, RecipientPublicKey};
 use lockbox_share_protocol::{ContactShare, ShareClientPool};
 use lockbox_vault::{
     default_vault_dir, default_vault_path, disable_platform_secret_store,
@@ -187,14 +187,14 @@ fn init(args: &[String]) -> CliResult<()> {
         println!("Use `lockbox vault init --overwrite` only when replacing the vault.");
         return Ok(());
     } else {
-        println!("This will create the local Lockbox vault.");
+        println!("This will create the local reVault vault.");
         println!("Path: {}", path.display());
         println!();
         println!("The vault stores identities, contacts, and");
         println!("key-directory backups for lockboxes you create or share.");
         println!();
         println!("Choose a vault password you can back up safely. If you lose it,");
-        println!("Lockbox cannot recover the private keys stored in this vault.");
+        println!("reVault cannot recover the private keys stored in this vault.");
     }
     let password = read_new_vault_password()?;
     let vault = VaultDirectory::unlock_or_create_default(&password)?;
@@ -274,6 +274,10 @@ fn share_publish(args: &[String]) -> CliResult<()> {
     let vault = default_vault()?;
     let keypair = vault.load_private_key(identity)?;
     let public_key = keypair.public_key().to_bytes();
+    let signing_public_key = vault
+        .load_owner_signing_key(identity)?
+        .public_key()
+        .to_bytes();
     let now = unix_ms_now();
     let ttl_seconds = options.ttl_seconds.unwrap_or(900);
     let expires_at = now.saturating_add(ttl_seconds as u64 * 1000);
@@ -286,6 +290,7 @@ fn share_publish(args: &[String]) -> CliResult<()> {
         ContactShare {
             identity,
             public_key: &public_key,
+            signing_public_key: &signing_public_key,
             fingerprint: &fingerprint,
             share_nonce: &nonce,
             created_at_unix_ms: now,
@@ -312,14 +317,20 @@ fn share_receive(args: &[String]) -> CliResult<()> {
     let fetched = pool.fetch(share_code)?;
     let contact = lockbox_share_protocol::decode_contact_share(&fetched.payload)?;
     let recipient = RecipientPublicKey::from_bytes(&contact.public_key)?;
+    let signing_public = OwnerSigningPublicKey::from_bytes(&contact.signing_public_key)?;
     let vault = default_vault()?;
     if vault.trusted_recipient_exists(contact_name)? && !options.overwrite {
         return Err(Error::AlreadyExists(format!("contact {contact_name}")).into());
     }
     vault.store_trusted_recipient(contact_name, &recipient)?;
+    vault.store_trusted_recipient_signing_key(contact_name, &signing_public)?;
     println!("contact={contact_name}");
     println!("identity={}", contact.identity);
     println!("fingerprint={}", encode_hex(&contact.fingerprint));
+    println!(
+        "signing_fingerprint={}",
+        encode_hex(&public_key_fingerprint(&contact.signing_public_key))
+    );
     Ok(())
 }
 

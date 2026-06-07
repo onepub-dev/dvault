@@ -74,6 +74,7 @@ pub fn validate_payload(bytes: &[u8]) -> Result<PayloadType, PayloadError> {
 pub fn encode_contact_share(
     identity: &str,
     public_key: &[u8],
+    signing_public_key: &[u8],
     fingerprint: &[u8],
     share_nonce: &[u8],
     created_at_unix_ms: u64,
@@ -82,6 +83,7 @@ pub fn encode_contact_share(
     let mut body = Vec::new();
     put_string(&mut body, identity);
     put_bytes(&mut body, public_key);
+    put_bytes(&mut body, signing_public_key);
     put_bytes(&mut body, fingerprint);
     put_bytes(&mut body, share_nonce);
     put_u64(&mut body, created_at_unix_ms);
@@ -93,6 +95,7 @@ pub fn encode_contact_share(
 pub struct DecodedContactShare {
     pub identity: String,
     pub public_key: Vec<u8>,
+    pub signing_public_key: Vec<u8>,
     pub fingerprint: Vec<u8>,
     pub share_nonce: Vec<u8>,
     pub created_at_unix_ms: u64,
@@ -108,6 +111,7 @@ pub fn decode_contact_share(bytes: &[u8]) -> Result<DecodedContactShare, Payload
     Ok(DecodedContactShare {
         identity: reader.string(254)?,
         public_key: reader.bytes(4096)?,
+        signing_public_key: reader.bytes(4096)?,
         fingerprint: reader.bytes(128)?,
         share_nonce: reader.bytes(64)?,
         created_at_unix_ms: reader.u64()?,
@@ -119,6 +123,7 @@ pub struct SignedKeyReplacement<'a> {
     pub identity: &'a str,
     pub old_fingerprint: &'a [u8],
     pub new_public_key: &'a [u8],
+    pub new_signing_public_key: &'a [u8],
     pub new_fingerprint: &'a [u8],
     pub replacement_nonce: &'a [u8],
     pub signature_by_old_key: &'a [u8],
@@ -137,6 +142,7 @@ pub fn encode_signed_key_replacement(replacement: SignedKeyReplacement<'_>) -> V
     put_string(&mut body, replacement.identity);
     put_bytes(&mut body, replacement.old_fingerprint);
     put_bytes(&mut body, replacement.new_public_key);
+    put_bytes(&mut body, replacement.new_signing_public_key);
     put_bytes(&mut body, replacement.new_fingerprint);
     put_bytes(&mut body, replacement.replacement_nonce);
     put_bytes(&mut body, replacement.signature_by_old_key);
@@ -149,6 +155,7 @@ pub struct UnsignedKeyReplacement<'a> {
     pub identity: &'a str,
     pub old_fingerprint: &'a [u8],
     pub new_public_key: &'a [u8],
+    pub new_signing_public_key: &'a [u8],
     pub new_fingerprint: &'a [u8],
     pub replacement_nonce: &'a [u8],
     pub created_at_unix_ms: u64,
@@ -160,6 +167,7 @@ pub fn encode_unsigned_key_replacement(replacement: UnsignedKeyReplacement<'_>) 
     put_string(&mut body, replacement.identity);
     put_bytes(&mut body, replacement.old_fingerprint);
     put_bytes(&mut body, replacement.new_public_key);
+    put_bytes(&mut body, replacement.new_signing_public_key);
     put_bytes(&mut body, replacement.new_fingerprint);
     put_bytes(&mut body, replacement.replacement_nonce);
     put_u64(&mut body, replacement.created_at_unix_ms);
@@ -172,6 +180,8 @@ fn validate_contact_share(reader: &mut PayloadReader<'_>) -> Result<(), PayloadE
     validate_identity(&identity)?;
     let public_key = reader.bytes(4096)?;
     validate_non_empty(&public_key)?;
+    let signing_public_key = reader.bytes(4096)?;
+    validate_non_empty(&signing_public_key)?;
     let fingerprint = reader.bytes(128)?;
     validate_fingerprint(&fingerprint)?;
     let nonce = reader.bytes(64)?;
@@ -188,6 +198,8 @@ fn validate_signed_key_replacement(reader: &mut PayloadReader<'_>) -> Result<(),
     validate_fingerprint(&old_fingerprint)?;
     let new_public_key = reader.bytes(4096)?;
     validate_non_empty(&new_public_key)?;
+    let new_signing_public_key = reader.bytes(4096)?;
+    validate_non_empty(&new_signing_public_key)?;
     let new_fingerprint = reader.bytes(128)?;
     validate_fingerprint(&new_fingerprint)?;
     let nonce = reader.bytes(64)?;
@@ -206,6 +218,8 @@ fn validate_unsigned_key_replacement(reader: &mut PayloadReader<'_>) -> Result<(
     validate_fingerprint(&old_fingerprint)?;
     let new_public_key = reader.bytes(4096)?;
     validate_non_empty(&new_public_key)?;
+    let new_signing_public_key = reader.bytes(4096)?;
+    validate_non_empty(&new_signing_public_key)?;
     let new_fingerprint = reader.bytes(128)?;
     validate_fingerprint(&new_fingerprint)?;
     let nonce = reader.bytes(64)?;

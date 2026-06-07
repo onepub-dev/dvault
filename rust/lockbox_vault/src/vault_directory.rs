@@ -1,7 +1,7 @@
 use lockbox_core::{
     EnvName, Error, ListOptions, Lockbox, LockboxEntryKind, LockboxId, LockboxPath,
-    LockboxProtection, LockboxUnlock, RecipientKeyPair, RecipientPublicKey, Result, SecretString,
-    SecretVec,
+    LockboxProtection, LockboxUnlock, OwnerSigningKeyPair, OwnerSigningPublicKey, RecipientKeyPair,
+    RecipientPublicKey, Result, SecretString, SecretVec,
 };
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -74,7 +74,7 @@ pub struct IdentityHistory {
     pub generations: Vec<IdentityGeneration>,
 }
 
-/// Password-protected local vault file for native Lockbox metadata.
+/// Password-protected local vault file for native reVault metadata.
 ///
 /// A `VaultDirectory` stores its data in `local-vault.lbox` under a private
 /// directory. It can hold recipient private keys, trusted recipient public keys,
@@ -147,8 +147,13 @@ impl VaultDirectory {
         let private_record = export_private_key(keypair, KeyFormat::RawHex)?;
         let value = SecretString::from_secure_vec(private_record);
         self.put_secret_env_record(&env_name, &value)?;
+        if !self.owner_signing_key_exists(name)? {
+            self.store_owner_signing_key_current_only(name, &OwnerSigningKeyPair::generate()?)?;
+        }
         if self.read_identity_history(name)?.is_none() {
             self.store_private_key_generation(name, 1, keypair)?;
+            let signing_key = self.load_owner_signing_key(name)?;
+            self.store_owner_signing_key_generation(name, 1, &signing_key)?;
             let now = unix_ms(SystemTime::now());
             self.write_identity_history(&IdentityHistory {
                 name: name.to_string(),
@@ -177,6 +182,18 @@ impl VaultDirectory {
         let mut bytes = SecretVec::new();
         secret.append_to_secure_vec(&mut bytes)?;
         import_private_key(bytes)
+    }
+
+    /// Loads the owner signing key associated with a vault identity.
+    ///
+    /// Older vault identities did not have a separate signing key. The first
+    /// load lazily creates one so future lockbox commits can be signed without
+    /// deriving signing material from the lockbox content key.
+    pub fn load_owner_signing_key(&self, name: &str) -> Result<OwnerSigningKeyPair> {
+        if !self.owner_signing_key_exists(name)? {
+            self.store_owner_signing_key_current_only(name, &OwnerSigningKeyPair::generate()?)?;
+        }
+        self.load_owner_signing_key_existing(name)
     }
 
     /// Returns whether a private key exists under `name`.
@@ -210,9 +227,14 @@ impl VaultDirectory {
                     name,
                     generation.index,
                 )?)?;
+                self.delete_secret_env_record_if_exists(&owner_signing_key_generation_env_name(
+                    name,
+                    generation.index,
+                )?)?;
             }
             self.delete_record_if_exists(&identity_history_record_path(name)?)?;
         }
+        self.delete_secret_env_record_if_exists(&owner_signing_key_env_name(name)?)?;
         self.delete_secret_env_record_if_exists(&private_key_env_name(name)?)
     }
 
@@ -240,8 +262,11 @@ impl VaultDirectory {
             .unwrap_or(0)
             .saturating_add(1);
         let keypair = RecipientKeyPair::generate()?;
+        let signing_key = OwnerSigningKeyPair::generate()?;
         self.store_private_key_current_only(name, &keypair)?;
+        self.store_owner_signing_key_current_only(name, &signing_key)?;
         self.store_private_key_generation(name, new_index, &keypair)?;
+        self.store_owner_signing_key_generation(name, new_index, &signing_key)?;
         history.active_generation = new_index;
         history.generations.push(IdentityGeneration {
             index: new_index,
@@ -270,6 +295,27 @@ impl VaultDirectory {
         import_private_key(bytes)
     }
 
+    /// Loads one owner signing-key generation by index.
+    pub fn load_owner_signing_key_generation(
+        &self,
+        name: &str,
+        index: u16,
+    ) -> Result<OwnerSigningKeyPair> {
+        let env_name = owner_signing_key_generation_env_name(name, index)?;
+        let secret = self
+            .lockbox
+            .borrow()
+            .with_secret_env(&env_name, SecretString::try_clone)?
+            .transpose()?
+            .ok_or_else(|| {
+                Error::NotFound(format!("vault owner signing key {name} generation {index}"))
+            })?;
+        let mut bytes = SecretVec::new();
+        secret.append_to_secure_vec(&mut bytes)?;
+        decode_hex_secret_in_place(&mut bytes)?;
+        OwnerSigningKeyPair::from_private_key_record(bytes)
+    }
+
     /// Stores a trusted recipient public key under `name`.
     ///
     /// Names must contain only ASCII letters, digits, `-`, or `_`.
@@ -277,9 +323,28 @@ impl VaultDirectory {
         self.put_record(&trusted_recipient_record_path(name)?, &key.to_bytes())
     }
 
+    /// Stores the trusted signing public key associated with a contact.
+    pub fn store_trusted_recipient_signing_key(
+        &self,
+        name: &str,
+        key: &OwnerSigningPublicKey,
+    ) -> Result<()> {
+        self.put_record_replace(
+            &trusted_recipient_signing_record_path(name)?,
+            &key.to_bytes(),
+        )
+    }
+
     /// Loads a trusted recipient public key by name.
     pub fn load_trusted_recipient(&self, name: &str) -> Result<RecipientPublicKey> {
         RecipientPublicKey::from_bytes(&self.get_record(&trusted_recipient_record_path(name)?)?)
+    }
+
+    /// Loads the trusted signing public key associated with a contact.
+    pub fn load_trusted_recipient_signing_key(&self, name: &str) -> Result<OwnerSigningPublicKey> {
+        OwnerSigningPublicKey::from_bytes(
+            &self.get_record(&trusted_recipient_signing_record_path(name)?)?,
+        )
     }
 
     /// Returns whether a trusted recipient exists under `name`.
@@ -293,6 +358,7 @@ impl VaultDirectory {
 
     /// Deletes the trusted recipient stored under `name`, if present.
     pub fn delete_trusted_recipient(&self, name: &str) -> Result<()> {
+        self.delete_record_if_exists(&trusted_recipient_signing_record_path(name)?)?;
         self.delete_record_if_exists(&trusted_recipient_record_path(name)?)
     }
 
@@ -300,6 +366,9 @@ impl VaultDirectory {
     pub fn list_trusted_recipients(&self) -> Result<Vec<StoredTrustedRecipient>> {
         let mut out = Vec::new();
         for name in self.list_record_names("/trusted_recipients", ".pub")? {
+            if name.ends_with(".signing") {
+                continue;
+            }
             out.push(StoredTrustedRecipient {
                 key: self.load_trusted_recipient(&name)?,
                 name,
@@ -454,15 +523,15 @@ impl VaultDirectory {
             Some(CURRENT_VAULT_STRUCTURE_VERSION) => Ok(()),
             Some(version) if version > CURRENT_VAULT_STRUCTURE_VERSION => {
                 Err(Error::Configuration(format!(
-                    "local vault structure version {version} is newer than this Lockbox build supports ({CURRENT_VAULT_STRUCTURE_VERSION}); upgrade Lockbox before using this vault"
+                    "local vault structure version {version} is newer than this reVault build supports ({CURRENT_VAULT_STRUCTURE_VERSION}); upgrade reVault before using this vault"
                 )))
             }
             Some(version) => Err(Error::Configuration(format!(
-                "local vault structure version {version} cannot be migrated by this Lockbox build"
+                "local vault structure version {version} cannot be migrated by this reVault build"
             ))),
             None if initialize_missing => self.write_structure_version(CURRENT_VAULT_STRUCTURE_VERSION),
             None => Err(Error::Configuration(
-                "local vault structure version is missing; recreate the vault with this Lockbox build"
+                "local vault structure version is missing; recreate the vault with this reVault build"
                     .to_string(),
             )),
         }
@@ -490,6 +559,36 @@ impl VaultDirectory {
         self.put_secret_env_record(&private_key_env_name(name)?, &value)
     }
 
+    fn owner_signing_key_exists(&self, name: &str) -> Result<bool> {
+        let lockbox = self.lockbox.borrow();
+        Ok(lockbox
+            .env_sensitivity(&owner_signing_key_env_name(name)?)?
+            .is_some())
+    }
+
+    fn load_owner_signing_key_existing(&self, name: &str) -> Result<OwnerSigningKeyPair> {
+        let secret = self
+            .lockbox
+            .borrow()
+            .with_secret_env(&owner_signing_key_env_name(name)?, SecretString::try_clone)?
+            .transpose()?
+            .ok_or_else(|| Error::NotFound(format!("vault owner signing key {name}")))?;
+        let mut bytes = SecretVec::new();
+        secret.append_to_secure_vec(&mut bytes)?;
+        decode_hex_secret_in_place(&mut bytes)?;
+        OwnerSigningKeyPair::from_private_key_record(bytes)
+    }
+
+    fn store_owner_signing_key_current_only(
+        &self,
+        name: &str,
+        keypair: &OwnerSigningKeyPair,
+    ) -> Result<()> {
+        let value =
+            SecretString::from_secure_vec(hex_encode_secret(keypair.private_key_record()?)?);
+        self.put_secret_env_record(&owner_signing_key_env_name(name)?, &value)
+    }
+
     fn store_private_key_generation(
         &self,
         name: &str,
@@ -501,12 +600,25 @@ impl VaultDirectory {
         self.put_secret_env_record(&private_key_generation_env_name(name, index)?, &value)
     }
 
+    fn store_owner_signing_key_generation(
+        &self,
+        name: &str,
+        index: u16,
+        keypair: &OwnerSigningKeyPair,
+    ) -> Result<()> {
+        let value =
+            SecretString::from_secure_vec(hex_encode_secret(keypair.private_key_record()?)?);
+        self.put_secret_env_record(&owner_signing_key_generation_env_name(name, index)?, &value)
+    }
+
     fn ensure_identity_history(&self, name: &str) -> Result<IdentityHistory> {
         if let Some(history) = self.read_identity_history(name)? {
             return Ok(history);
         }
         let keypair = self.load_private_key(name)?;
         self.store_private_key_generation(name, 1, &keypair)?;
+        let signing_key = self.load_owner_signing_key(name)?;
+        self.store_owner_signing_key_generation(name, 1, &signing_key)?;
         let history = IdentityHistory {
             name: name.to_string(),
             active_generation: 1,
@@ -564,6 +676,22 @@ fn private_key_generation_env_name(name: &str, index: u16) -> Result<EnvName> {
     ))
 }
 
+fn owner_signing_key_env_name(name: &str) -> Result<EnvName> {
+    let name = validate_record_name(name)?;
+    EnvName::new(format!(
+        "LOCKBOX_VAULT_SIGNING_KEY_{}",
+        encode_name_hex(name)
+    ))
+}
+
+fn owner_signing_key_generation_env_name(name: &str, index: u16) -> Result<EnvName> {
+    let name = validate_record_name(name)?;
+    EnvName::new(format!(
+        "LOCKBOX_VAULT_SIGNING_KEY_{}_GEN_{index:04}",
+        encode_name_hex(name)
+    ))
+}
+
 fn private_key_name_from_env(name: &str) -> Option<Result<String>> {
     let name = name.strip_prefix('/').unwrap_or(name);
     let hex = name.strip_prefix("LOCKBOX_VAULT_PRIVATE_KEY_")?;
@@ -578,6 +706,13 @@ fn private_key_name_from_env(name: &str) -> Option<Result<String>> {
 fn trusted_recipient_record_path(name: &str) -> Result<LockboxPath> {
     LockboxPath::new(format!(
         "/trusted_recipients/{}.pub",
+        validate_record_name(name)?
+    ))
+}
+
+fn trusted_recipient_signing_record_path(name: &str) -> Result<LockboxPath> {
+    LockboxPath::new(format!(
+        "/trusted_recipients/{}.signing.pub",
         validate_record_name(name)?
     ))
 }
@@ -619,6 +754,60 @@ fn decode_structure_version(bytes: &[u8]) -> Result<u32> {
     }
     text.parse::<u32>()
         .map_err(|_| Error::CorruptVaultRecord("vault structure version is too large".to_string()))
+}
+
+fn hex_encode_secret(mut bytes: SecretVec) -> Result<SecretVec> {
+    let original_len = bytes.len();
+    bytes.resize_zeroed(original_len * 2)?;
+    bytes.with_mut_bytes(|bytes| {
+        for index in (0..original_len).rev() {
+            let byte = bytes[index];
+            bytes[index * 2] = secret_hex_char(byte >> 4);
+            bytes[index * 2 + 1] = secret_hex_char(byte & 0x0f);
+        }
+    })?;
+    Ok(bytes)
+}
+
+fn decode_hex_secret_in_place(bytes: &mut SecretVec) -> Result<()> {
+    bytes.with_mut_bytes(|bytes| {
+        let len = bytes.len();
+        if len % 2 != 0 {
+            return Err(Error::InvalidKeyMaterial(
+                "owner signing key hex has odd length".to_string(),
+            ));
+        }
+        let mut write = 0usize;
+        let mut read = 0usize;
+        while read < len {
+            let high = secret_hex_digit(bytes[read])?;
+            let low = secret_hex_digit(bytes[read + 1])?;
+            bytes[write] = (high << 4) | low;
+            write += 1;
+            read += 2;
+        }
+        for byte in &mut bytes[write..] {
+            *byte = 0;
+        }
+        Ok::<_, Error>(write)
+    })??;
+    bytes.truncate(bytes.len() / 2)?;
+    Ok(())
+}
+
+fn secret_hex_digit(byte: u8) -> Result<u8> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(Error::InvalidKeyMaterial(
+            "owner signing key hex contains non-hex digits".to_string(),
+        )),
+    }
+}
+
+fn secret_hex_char(value: u8) -> u8 {
+    b"0123456789abcdef"[value as usize]
 }
 
 fn encode_known_lockbox(record: &KnownLockbox) -> Vec<u8> {
@@ -861,7 +1050,7 @@ fn default_vault_dir_for_os() -> Result<PathBuf> {
     let base = env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .ok_or_else(|| Error::Configuration("LOCALAPPDATA is not set".to_string()))?;
-    Ok(base.join("Lockbox").join("vault"))
+    Ok(base.join("reVault").join("vault"))
 }
 
 #[cfg(target_os = "macos")]
@@ -870,7 +1059,7 @@ fn default_vault_dir_for_os() -> Result<PathBuf> {
     Ok(home
         .join("Library")
         .join("Application Support")
-        .join("Lockbox")
+        .join("reVault")
         .join("vault"))
 }
 

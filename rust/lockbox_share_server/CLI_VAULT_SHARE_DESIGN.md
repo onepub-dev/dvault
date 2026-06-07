@@ -1,9 +1,9 @@
-# Lockbox Share CLI and Vault Design
+# reVault Share CLI and Vault Design
 
 ## Purpose
 
 This document defines the client-side sharing, verification, contact storage,
-and key replacement flows for the Lockbox share server.
+and key replacement flows for the reVault share server.
 
 The share server is only a rendezvous store. It does not verify identity, key
 ownership, key continuity, or trust. Those decisions belong in the CLI and the
@@ -361,7 +361,7 @@ ContactRecord {
     contact_status: u16
     current_public_key: bytes
     current_fingerprint: bytes
-    current_signing_public_key: optional bytes
+    current_signing_public_key: bytes
     verified_at_unix_ms: optional u64
     updated_at_unix_ms: u64
     pending_replacement: optional PendingReplacement
@@ -414,7 +414,7 @@ PendingReplacement {
     old_fingerprint: bytes
     new_public_key: bytes
     new_fingerprint: bytes
-    new_signing_public_key: optional bytes
+    new_signing_public_key: bytes
     replacement_nonce: bytes
     signature_by_old_key: optional bytes
     verification_code_hash: bytes

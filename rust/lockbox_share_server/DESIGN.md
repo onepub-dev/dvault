@@ -1,14 +1,14 @@
-# Lockbox Share Server Design
+# reVault Share Server Design
 
 ## Purpose
 
 The share server is a high-throughput rendezvous service for short-lived
-Lockbox contact sharing requests. It helps one client publish a candidate
+reVault contact sharing requests. It helps one client publish a candidate
 public key payload and another client fetch that payload by share code.
 
 The server must not be trusted for identity, key ownership, or verification.
 It only relays candidate key material. Trust decisions remain local and
-explicit in the Lockbox client.
+explicit in the reVault client.
 
 Redundant deployment and failover are covered in
 [`REDUNDANCY.md`](REDUNDANCY.md). The initial production deployment is still a
@@ -306,6 +306,7 @@ candidate key payload.
 ```text
 identity
 public_key
+signing_public_key
 public_key_fingerprint
 share_nonce
 created_at_unix_ms
@@ -318,6 +319,7 @@ expires_at_unix_ms
 identity
 old_public_key_fingerprint
 new_public_key
+new_signing_public_key
 new_public_key_fingerprint
 replacement_nonce
 signature_by_old_key
@@ -331,6 +333,7 @@ expires_at_unix_ms
 identity
 old_public_key_fingerprint
 new_public_key
+new_signing_public_key
 new_public_key_fingerprint
 replacement_nonce
 created_at_unix_ms
@@ -699,7 +702,7 @@ Example systemd unit:
 
 ```text
 [Unit]
-Description=Lockbox Share Rendezvous Server
+Description=reVault Share Rendezvous Server
 After=network-online.target
 Wants=network-online.target
 

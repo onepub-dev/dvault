@@ -538,6 +538,7 @@ fn contact_payload(label: &str) -> Vec<u8> {
     encode_contact_share(
         &format!("{label}@example.com"),
         b"public-key-material",
+        b"signing-public-key-material",
         &[1_u8; 32],
         &[2_u8; 24],
         1,
