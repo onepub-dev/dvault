@@ -30,9 +30,10 @@ mod api_tests;
 mod compression_regression_tests;
 
 pub(crate) use file_format::{
-    commit_root, key_directory, page, page_buffer, page_inspection, page_scanner, payload,
+    commit_auth, commit_root, key_directory, page, page_buffer, page_inspection, page_scanner,
+    payload,
 };
-pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_vec};
+pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_vec, signing};
 pub(crate) use model::{
     compression_frame_manifest, entry, env_name, env_sensitivity, extract_policy, file_chunk, form,
     list_options, lockbox_id, node_kind, page_object_packer, record, recovery_report,
@@ -67,3 +68,4 @@ pub use page_inspection::{PageInspection, PageObjectInspection};
 pub use recovery_report::RecoveryReport;
 pub use recovery_report_options::RecoveryReportOptions;
 pub use secret_vec::{SecretString, SecretVec};
+pub use signing::{OwnerSigningKeyPair, OwnerSigningPublicKey};

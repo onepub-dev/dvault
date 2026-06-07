@@ -8,6 +8,7 @@ pub(crate) enum RecordKind {
     TocNode = 8,
     CommitRoot = 9,
     FreeIndex = 10,
+    CommitAuth = 11,
 }
 
 #[derive(Debug, Clone)]

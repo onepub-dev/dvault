@@ -11,6 +11,7 @@ use crate::key_slot::{next_key_slot_id, random_content_key, random_salt, KeySlot
 use crate::key_wrap::{RecipientKeyPair, RecipientPublicKey};
 use crate::lockbox_id::LockboxId;
 use crate::secret_vec::{SecretString, SecretVec};
+use crate::signing::OwnerSigningKeyPair;
 use crate::storage::{Storage, StorageBackend};
 use crate::{Error, LockboxEntryKind, LockboxOptions, Result};
 use std::fs;
@@ -23,6 +24,7 @@ pub struct UnlockedContentKey {
     /// Lockbox id associated with the unlocked key.
     pub lockbox_id: LockboxId,
     key: SecretVec,
+    read_only: bool,
 }
 
 /// Key material used when creating a new lockbox file.
@@ -90,11 +92,15 @@ impl UnlockedContentKey {
 
     #[cfg(test)]
     pub fn open_bytes(self, bytes: Vec<u8>) -> Result<Lockbox> {
-        Lockbox::open_storage_with_secret_key(
+        let mut lockbox = Lockbox::open_storage_with_secret_key(
             StorageBackend::memory(bytes),
             self.key,
             LockboxOptions::default(),
-        )
+        )?;
+        if self.read_only {
+            lockbox.mark_read_only();
+        }
+        Ok(lockbox)
     }
 
     /// Open a lockbox file with this unlocked content key.
@@ -103,7 +109,12 @@ impl UnlockedContentKey {
     /// if authentication fails, or corrupt/truncated errors if the lockbox
     /// structure cannot be parsed.
     pub fn open_path(self, path: &Path) -> Result<Lockbox> {
-        Lockbox::open_path_with_secret_key_options(path, self.key, LockboxOptions::default())
+        let mut lockbox =
+            Lockbox::open_path_with_secret_key_options(path, self.key, LockboxOptions::default())?;
+        if self.read_only {
+            lockbox.mark_read_only();
+        }
+        Ok(lockbox)
     }
 }
 
@@ -114,6 +125,23 @@ impl Lockbox {
     /// `Error::SecurityLimitExceeded` if key material cannot be generated or
     /// wrapped, and storage/encoding errors from the initial commit.
     pub fn create_file(path: &Path, protection: LockboxProtection<'_>) -> Result<Self> {
+        Self::create_file_with_optional_owner_signing_key(path, protection, None)
+    }
+
+    /// Create a new lockbox file and sign its initial commit with `signing_key`.
+    pub fn create_file_with_owner_signing_key(
+        path: &Path,
+        protection: LockboxProtection<'_>,
+        signing_key: OwnerSigningKeyPair,
+    ) -> Result<Self> {
+        Self::create_file_with_optional_owner_signing_key(path, protection, Some(signing_key))
+    }
+
+    fn create_file_with_optional_owner_signing_key(
+        path: &Path,
+        protection: LockboxProtection<'_>,
+        signing_key: Option<OwnerSigningKeyPair>,
+    ) -> Result<Self> {
         let mut lockbox = match protection {
             LockboxProtection::ContentKey(key) => Self::create_path_with_secret_key_and_options(
                 path,
@@ -151,6 +179,9 @@ impl Lockbox {
                 lockbox
             }
         };
+        if let Some(signing_key) = signing_key {
+            lockbox.set_owner_signing_key(signing_key);
+        }
         lockbox.commit()?;
         Ok(lockbox)
     }
@@ -166,7 +197,24 @@ impl Lockbox {
     /// when the supplied unlock material cannot authenticate the content key, or
     /// corrupt/truncated errors if the lockbox structure cannot be parsed.
     pub fn open_file(path: &Path, unlock: LockboxUnlock<'_>) -> Result<Self> {
-        match unlock {
+        Self::open_file_with_optional_owner_signing_key(path, unlock, None)
+    }
+
+    /// Open a lockbox file and attach `signing_key` for future commits.
+    pub fn open_file_with_owner_signing_key(
+        path: &Path,
+        unlock: LockboxUnlock<'_>,
+        signing_key: OwnerSigningKeyPair,
+    ) -> Result<Self> {
+        Self::open_file_with_optional_owner_signing_key(path, unlock, Some(signing_key))
+    }
+
+    fn open_file_with_optional_owner_signing_key(
+        path: &Path,
+        unlock: LockboxUnlock<'_>,
+        signing_key: Option<OwnerSigningKeyPair>,
+    ) -> Result<Self> {
+        let mut lockbox = match unlock {
             LockboxUnlock::ContentKey(key) => {
                 Self::open_path_with_secret_key_options(path, key, LockboxOptions::default())
             }
@@ -178,7 +226,11 @@ impl Lockbox {
                 let unlocked = Self::unlock_path_with_recipient(path, &recipient)?;
                 unlocked.open_path(path)
             }
+        }?;
+        if let Some(signing_key) = signing_key {
+            lockbox.set_owner_signing_key(signing_key);
         }
+        Ok(lockbox)
     }
 
     #[cfg(feature = "vault-bridge")]
@@ -215,6 +267,7 @@ impl Lockbox {
                 return Ok(UnlockedContentKey {
                     lockbox_id: directory.lockbox_id,
                     key: SecretVec::try_from_vec(key)?,
+                    read_only: false,
                 });
             }
         }
@@ -235,6 +288,7 @@ impl Lockbox {
                 return Ok(UnlockedContentKey {
                     lockbox_id: directory.lockbox_id,
                     key: SecretVec::try_from_vec(key)?,
+                    read_only: false,
                 });
             }
         }
@@ -255,6 +309,7 @@ impl Lockbox {
             return Ok(UnlockedContentKey {
                 lockbox_id: directory.lockbox_id,
                 key: SecretVec::try_from_vec(key)?,
+                read_only: false,
             });
         }
         Err(Error::InvalidKey)
@@ -287,6 +342,7 @@ impl Lockbox {
                 return Ok(UnlockedContentKey {
                     lockbox_id: directory.lockbox_id,
                     key: SecretVec::try_from_vec(key)?,
+                    read_only: true,
                 });
             }
         }
@@ -307,6 +363,7 @@ impl Lockbox {
                 return Ok(UnlockedContentKey {
                     lockbox_id: directory.lockbox_id,
                     key: SecretVec::try_from_vec(key)?,
+                    read_only: true,
                 });
             }
         }
@@ -327,6 +384,7 @@ impl Lockbox {
             return Ok(UnlockedContentKey {
                 lockbox_id: directory.lockbox_id,
                 key: SecretVec::try_from_vec(key)?,
+                read_only: true,
             });
         }
         Err(Error::InvalidKey)
@@ -700,7 +758,9 @@ fn key_directories_from_bytes(
     bytes: &[u8],
 ) -> Result<Vec<crate::key_directory::DecodedKeyDirectory>> {
     let mut directories = Vec::new();
-    if let Ok((_, _, key_directory_offset, lockbox_id)) = read_header(bytes) {
+    if let Ok(header) = read_header(bytes) {
+        let key_directory_offset = header.key_directory_offset;
+        let lockbox_id = header.lockbox_id;
         if let Ok(directory) = read_key_directory(bytes, key_directory_offset, Some(lockbox_id)) {
             directories.push(directory);
         }
@@ -729,7 +789,9 @@ fn key_directories_from_storage(
 ) -> Result<Vec<crate::key_directory::DecodedKeyDirectory>> {
     let header = storage.read_at(0, crate::constants::HEADER_LEN)?;
     let mut directories = Vec::new();
-    if let Ok((_, _, key_directory_offset, lockbox_id)) = read_header(&header) {
+    if let Ok(header) = read_header(&header) {
+        let key_directory_offset = header.key_directory_offset;
+        let lockbox_id = header.lockbox_id;
         if let Ok(directory) = crate::key_directory::read_key_directory_via_page_cache(
             storage,
             key_directory_offset,

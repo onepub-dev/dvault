@@ -69,6 +69,7 @@ pub(crate) fn decode_index_records(record: &DecodedRecord) -> Result<Vec<TocEntr
         | RecordKind::EnvDelete
         | RecordKind::TocNode
         | RecordKind::CommitRoot
+        | RecordKind::CommitAuth
         | RecordKind::FreeIndex => Ok(Vec::new()),
     }
 }

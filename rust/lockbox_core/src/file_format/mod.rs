@@ -1,3 +1,4 @@
+pub(crate) mod commit_auth;
 pub(crate) mod commit_root;
 pub(crate) mod header;
 pub(crate) mod key_directory;

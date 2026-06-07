@@ -45,6 +45,7 @@ pub(crate) enum PageObjectKind {
     EnvInternal = 14,
     FormLeaf = 15,
     FormInternal = 16,
+    CommitAuth = 17,
 }
 
 pub(crate) fn page_size_for_objects(objects: &[PageObject]) -> usize {
@@ -158,6 +159,7 @@ impl PageObjectKind {
             14 => Ok(Self::EnvInternal),
             15 => Ok(Self::FormLeaf),
             16 => Ok(Self::FormInternal),
+            17 => Ok(Self::CommitAuth),
             _ => Err(Error::CorruptRecord),
         }
     }
@@ -864,6 +866,7 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Option<RecordKind> {
         PageObjectKind::Delete => Some(RecordKind::Delete),
         PageObjectKind::TocLeaf | PageObjectKind::TocInternal => Some(RecordKind::TocNode),
         PageObjectKind::CommitRoot => Some(RecordKind::CommitRoot),
+        PageObjectKind::CommitAuth => Some(RecordKind::CommitAuth),
         PageObjectKind::FreeIndexLeaf | PageObjectKind::FreeIndexInternal => {
             Some(RecordKind::FreeIndex)
         }
@@ -878,6 +881,7 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Option<RecordKind> {
 fn page_object_kind_name(kind: PageObjectKind) -> &'static str {
     match kind {
         PageObjectKind::CommitRoot => "commit-root",
+        PageObjectKind::CommitAuth => "commit-auth",
         PageObjectKind::TocLeaf => "toc-leaf",
         PageObjectKind::TocInternal => "toc-internal",
         PageObjectKind::FileData => "file-data",

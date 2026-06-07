@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::Lockbox;
+use crate::commit_auth::{commit_auth_message, decode_commit_auth};
 use crate::constants::DEFAULT_MAX_FILE_BYTES;
 use crate::crypto::strong_checksum;
 use crate::env_btree::{decode_env_node_secure, EnvNode, EnvValue};
@@ -15,6 +16,7 @@ use crate::node_kind::NodeKind;
 use crate::page::PageObjectKind;
 use crate::page_scanner::PageScanner;
 use crate::record::{DecodedRecord, RecordKind};
+use crate::signing::verify_commit_signatures;
 use crate::toc_entry::TocEntry;
 use crate::{
     EnvName, Error, FormDefinition, FormRecord, FormTypeId, LockboxEntry, LockboxPath,
@@ -83,17 +85,12 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
     let mut toc_recovered = false;
     let mut metadata = RecoveredMetadata::default();
 
-    if let Ok((root_offset, _, _, _)) = read_header(&bytes) {
-        if root_offset > 0 {
-            if let Ok(commit_root) = scanner.commit_root_at(root_offset) {
-                metadata = recover_metadata_from_commit_root(&scanner, &commit_root);
-                if let Ok(decoded) =
-                    decode_toc_btree_from_offset(&scanner, commit_root.toc_root_offset, 0)
-                {
-                    toc_entries = decoded;
-                    toc_recovered = true;
-                }
-            }
+    if let Some(commit_root) = header_commit_root_for_recovery(&scanner, &bytes) {
+        metadata = recover_metadata_from_commit_root(&scanner, &commit_root);
+        if let Ok(decoded) = decode_toc_btree_from_offset(&scanner, commit_root.toc_root_offset, 0)
+        {
+            toc_entries = decoded;
+            toc_recovered = true;
         }
     }
 
@@ -162,13 +159,7 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
     let scanner = PageScanner::new(&bytes, lockbox_id, &key_bytes);
     let scan = scanner.scan_records();
     let scanned_segments = collect_scanned_file_segments(&scan.records);
-    let metadata = read_header(&bytes)
-        .ok()
-        .and_then(|(root_offset, _, _, _)| {
-            (root_offset > 0)
-                .then(|| scanner.commit_root_at(root_offset).ok())
-                .flatten()
-        })
+    let metadata = header_commit_root_for_recovery(&scanner, &bytes)
         .map(|commit_root| recover_metadata_from_commit_root(&scanner, &commit_root))
         .unwrap_or_default();
     let mut recovered = Lockbox::create_with_secret_key_and_options(
@@ -232,6 +223,34 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
     }
     recovered.commit()?;
     Ok(recovered)
+}
+
+fn header_commit_root_for_recovery(
+    scanner: &PageScanner<'_>,
+    bytes: &[u8],
+) -> Option<crate::commit_root::CommitRoot> {
+    let header = read_header(bytes).ok()?;
+    if header.commit_auth_offset == 0 {
+        return (header.commit_root_offset > 0)
+            .then(|| scanner.commit_root_at(header.commit_root_offset).ok())
+            .flatten();
+    }
+    let auth_payload = scanner
+        .commit_auth_payload_at(header.commit_auth_offset)
+        .ok()?;
+    let auth = decode_commit_auth(&auth_payload).ok()?;
+    let message = commit_auth_message(&auth).ok()?;
+    verify_commit_signatures(&message, &auth.signatures).ok()?;
+    if auth.commit_root_offset != header.commit_root_offset {
+        return None;
+    }
+    let root_payload = scanner
+        .commit_root_payload_at(auth.commit_root_offset)
+        .ok()?;
+    if strong_checksum(&root_payload) != auth.commit_root_digest {
+        return None;
+    }
+    crate::commit_root::decode_commit_root(&root_payload).ok()
 }
 
 #[derive(Default)]

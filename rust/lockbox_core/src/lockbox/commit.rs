@@ -1,4 +1,5 @@
 use super::Lockbox;
+use crate::commit_auth::{commit_auth_digest, commit_auth_message, encode_commit_auth, CommitAuth};
 use crate::commit_root::{encode_commit_root, CommitRoot};
 use crate::file_format::{
     encode_toc_internal, encode_toc_leaf, toc_child_groups, toc_leaf_groups, write_header,
@@ -89,7 +90,7 @@ impl Lockbox {
     ) -> Result<Self> {
         let path = HostPath::new(path);
         let mut bytes = vec![0; crate::constants::HEADER_LEN];
-        write_header(&mut bytes, 0, 0, 0, lockbox_id);
+        write_header(&mut bytes, 0, 0, 0, lockbox_id, 0);
         let mut lockbox = Self::open_storage_with_secret_key(
             StorageBackend::create_file(path.as_path(), &bytes)?,
             key,
@@ -115,6 +116,12 @@ impl Lockbox {
     /// cannot be written. On error, in-memory metadata is rolled back to the
     /// state before the commit attempt.
     pub fn commit(&mut self) -> Result<()> {
+        if self.read_only {
+            return Err(Error::InvalidOperation(
+                "recipient-opened lockboxes are read-only; copy the lockbox before editing"
+                    .to_string(),
+            ));
+        }
         let rollback = CommitRollback::capture(self);
         match self.commit_inner() {
             Ok(()) => Ok(()),
@@ -154,6 +161,8 @@ impl Lockbox {
         self.sequence += 1;
         self.flush_dirty_pages()?;
         self.write_key_directory_mirrors_if_dirty()?;
+        let previous_commit_auth_offset = self.commit_auth_offset;
+        let previous_commit_auth_digest = self.commit_auth_digest;
         let commit_root_payload = encode_commit_root(&CommitRoot {
             sequence: self.sequence,
             toc_root_offset: toc_root_offset,
@@ -166,7 +175,27 @@ impl Lockbox {
             previous_commit_root_offset: self.commit_root_offset,
             flags: 0,
         });
+        let commit_root_digest = crate::crypto::strong_checksum(&commit_root_payload);
         self.commit_root_offset = self.append_commit_root_page(commit_root_payload)?;
+        let lockbox_id = self.lockbox_id;
+        let sequence = self.sequence;
+        let commit_root_offset = self.commit_root_offset;
+        let signer = self.ensure_owner_signing_key()?;
+        let mut auth = CommitAuth {
+            lockbox_id,
+            sequence,
+            commit_root_offset,
+            commit_root_digest,
+            previous_auth_offset: previous_commit_auth_offset,
+            previous_auth_digest: previous_commit_auth_digest,
+            flags: 0,
+            signatures: signer.empty_signatures(),
+        };
+        let message = commit_auth_message(&auth)?;
+        auth.signatures = signer.sign(&message);
+        let commit_auth_payload = encode_commit_auth(&auth)?;
+        self.commit_auth_digest = commit_auth_digest(&commit_auth_payload);
+        self.commit_auth_offset = self.append_commit_auth_page(commit_auth_payload)?;
         self.flush_dirty_pages()?;
         let sequence = self.sequence;
         let key_directory_offset = self.key_directory_offset;
@@ -178,6 +207,7 @@ impl Lockbox {
             sequence,
             key_directory_offset,
             lockbox_id,
+            self.commit_auth_offset,
         );
         self.storage.write_at(0, &header)?;
         self.publish_redacted_free_slots();
@@ -550,11 +580,20 @@ impl Lockbox {
         self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
         Ok(page_offset)
     }
+
+    fn append_commit_auth_page(&mut self, payload: Vec<u8>) -> Result<u64> {
+        let page_offset = self.next_append_page_offset()?;
+        let object = PageObject::new(PageObjectKind::CommitAuth, self.sequence, payload);
+        self.write_decoded_page_at(page_offset, self.sequence, vec![object])?;
+        Ok(page_offset)
+    }
 }
 
 struct CommitRollback {
     sequence: u64,
     commit_root_offset: u64,
+    commit_auth_offset: u64,
+    commit_auth_digest: [u8; 32],
     toc_root_offset: u64,
     env_root_offset: u64,
     form_root_offset: u64,
@@ -595,6 +634,8 @@ impl CommitRollback {
         Self {
             sequence: lockbox.sequence,
             commit_root_offset: lockbox.commit_root_offset,
+            commit_auth_offset: lockbox.commit_auth_offset,
+            commit_auth_digest: lockbox.commit_auth_digest,
             toc_root_offset: lockbox.toc_root_offset,
             env_root_offset: lockbox.env_root_offset,
             form_root_offset: lockbox.form_root_offset,
@@ -632,6 +673,8 @@ impl CommitRollback {
     fn restore(self, lockbox: &mut Lockbox) {
         lockbox.sequence = self.sequence;
         lockbox.commit_root_offset = self.commit_root_offset;
+        lockbox.commit_auth_offset = self.commit_auth_offset;
+        lockbox.commit_auth_digest = self.commit_auth_digest;
         lockbox.toc_root_offset = self.toc_root_offset;
         lockbox.env_root_offset = self.env_root_offset;
         lockbox.form_root_offset = self.form_root_offset;
@@ -775,8 +818,11 @@ mod tests {
         lb.commit().unwrap();
 
         let bytes = lb.to_bytes();
-        let (header_root_offset, _, _, _) = crate::file_format::read_header(&bytes).unwrap();
+        let header = crate::file_format::read_header(&bytes).unwrap();
+        let header_root_offset = header.commit_root_offset;
         assert_eq!(header_root_offset, lb.commit_root_offset);
+        assert_eq!(header.commit_auth_offset, lb.commit_auth_offset);
+        assert_ne!(header.commit_auth_offset, 0);
         assert_ne!(header_root_offset, lb.toc_root_offset);
 
         let page = crate::page::page_decode_slice(&bytes, header_root_offset as usize).unwrap();
@@ -795,6 +841,77 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(commit_root.toc_root_offset, lb.toc_root_offset);
+    }
+
+    #[test]
+    fn signed_commit_round_trips_after_reopen() {
+        let mut lb = Lockbox::create("secret");
+        lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
+        lb.commit().unwrap();
+        let first_auth = lb.commit_auth_offset;
+
+        let mut reopened = Lockbox::open(lb.to_bytes(), "secret").unwrap();
+        reopened
+            .add_file(&p("/docs/b.txt"), b"bravo", false)
+            .unwrap();
+        reopened.commit().unwrap();
+
+        assert_ne!(reopened.commit_auth_offset, first_auth);
+        assert_eq!(
+            reopened.read_file_range(&p("/docs/a.txt"), 0, 100).unwrap(),
+            b"alpha"
+        );
+        assert_eq!(
+            reopened.read_file_range(&p("/docs/b.txt"), 0, 100).unwrap(),
+            b"bravo"
+        );
+    }
+
+    #[test]
+    fn open_rejects_tampered_signed_commit_auth_page() {
+        let mut lb = Lockbox::create("secret");
+        lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
+        lb.commit().unwrap();
+
+        let mut bytes = lb.to_bytes();
+        let auth_offset = crate::file_format::read_header(&bytes)
+            .unwrap()
+            .commit_auth_offset as usize;
+        bytes[auth_offset + crate::page::PAGE_HEADER_LEN + 4] ^= 0x01;
+
+        assert!(Lockbox::open(bytes, "secret").is_err());
+    }
+
+    #[test]
+    fn open_rejects_tampered_signed_commit_root_page() {
+        let mut lb = Lockbox::create("secret");
+        lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
+        lb.commit().unwrap();
+
+        let mut bytes = lb.to_bytes();
+        let root_offset = crate::file_format::read_header(&bytes)
+            .unwrap()
+            .commit_root_offset as usize;
+        bytes[root_offset + crate::page::PAGE_HEADER_LEN + 4] ^= 0x01;
+
+        assert!(Lockbox::open(bytes, "secret").is_err());
+    }
+
+    #[test]
+    fn recipient_opened_lockbox_cannot_commit_changes() {
+        let recipient = crate::RecipientKeyPair::generate().unwrap();
+        let mut lb = Lockbox::create_with_recipient(&recipient.public_key()).unwrap();
+        lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
+        lb.commit().unwrap();
+
+        let mut opened = Lockbox::open_with_recipient(lb.to_bytes(), &recipient).unwrap();
+        opened.add_file(&p("/docs/b.txt"), b"bravo", false).unwrap();
+
+        assert!(matches!(
+            opened.commit(),
+            Err(crate::Error::InvalidOperation(message))
+                if message.contains("recipient-opened lockboxes are read-only")
+        ));
     }
 
     #[test]

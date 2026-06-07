@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::commit_auth::{commit_auth_digest, commit_auth_message, decode_commit_auth, CommitAuth};
 use crate::commit_root::decode_commit_root;
 use crate::compression_frame_manifest::CompressionFrameSlice;
 use crate::constants::HEADER_LEN;
@@ -27,6 +28,7 @@ use crate::page::{
 use crate::page_cache::{PageCache, PageReadKey, PageSecurity, PageWritePolicy};
 use crate::record::{DecodedRecord, RecordHeader, RecordKind};
 use crate::secret_vec::SecretVec;
+use crate::signing::{verify_commit_signatures, OwnerSigningKeyPair};
 use crate::storage::{Storage, StorageBackend};
 use crate::toc_entry::TocEntry;
 use crate::{
@@ -111,6 +113,8 @@ pub struct Lockbox {
     key: SecretVec,
     sequence: u64,
     commit_root_offset: u64,
+    commit_auth_offset: u64,
+    commit_auth_digest: [u8; 32],
     toc_root_offset: u64,
     env_root_offset: u64,
     form_root_offset: u64,
@@ -120,6 +124,8 @@ pub struct Lockbox {
     key_directory_generation: u64,
     dirty_key_directory: bool,
     lockbox_id: LockboxId,
+    read_only: bool,
+    owner_signing_key: Option<OwnerSigningKeyPair>,
     key_slots: Vec<KeySlot>,
     toc_entries: BTreeMap<LockboxPath, TocEntry>,
     toc_root: Option<TocTreeNode>,
@@ -157,6 +163,8 @@ impl Lockbox {
             key: self.key.try_clone()?,
             sequence: self.sequence,
             commit_root_offset: self.commit_root_offset,
+            commit_auth_offset: self.commit_auth_offset,
+            commit_auth_digest: self.commit_auth_digest,
             toc_root_offset: self.toc_root_offset,
             env_root_offset: self.env_root_offset,
             form_root_offset: self.form_root_offset,
@@ -166,6 +174,12 @@ impl Lockbox {
             key_directory_generation: self.key_directory_generation,
             dirty_key_directory: self.dirty_key_directory,
             lockbox_id: self.lockbox_id,
+            read_only: self.read_only,
+            owner_signing_key: self
+                .owner_signing_key
+                .as_ref()
+                .map(OwnerSigningKeyPair::try_clone)
+                .transpose()?,
             key_slots: self.key_slots.clone(),
             toc_entries: self.toc_entries.clone(),
             toc_root: self.toc_root.clone(),
@@ -233,12 +247,14 @@ impl Lockbox {
         options: LockboxOptions,
     ) -> Self {
         let mut bytes = vec![0; HEADER_LEN];
-        write_header(&mut bytes, 0, 0, 0, lockbox_id);
+        write_header(&mut bytes, 0, 0, 0, lockbox_id, 0);
         Self {
             storage: StorageBackend::memory(bytes),
             key,
             sequence: 0,
             commit_root_offset: 0,
+            commit_auth_offset: 0,
+            commit_auth_digest: [0; 32],
             toc_root_offset: 0,
             env_root_offset: 0,
             form_root_offset: 0,
@@ -248,6 +264,10 @@ impl Lockbox {
             key_directory_generation: 0,
             dirty_key_directory: false,
             lockbox_id,
+            read_only: false,
+            owner_signing_key: Some(
+                OwnerSigningKeyPair::generate().expect("system random source failed"),
+            ),
             key_slots: Vec::new(),
             toc_entries: BTreeMap::new(),
             toc_root: None,
@@ -316,21 +336,34 @@ impl Lockbox {
         } else {
             None
         };
-        let (header_root_offset, sequence, header_key_directory_offset, lockbox_id) =
-            match header_result {
-                Ok(header) => header,
-                Err(_) => {
-                    let Some(key_directory) = scanned_key_directory.as_ref() else {
-                        return Err(Error::CorruptHeader);
-                    };
-                    (0, 0, key_directory.offset, key_directory.lockbox_id)
-                }
-            };
+        let (
+            header_root_offset,
+            header_auth_offset,
+            sequence,
+            header_key_directory_offset,
+            lockbox_id,
+        ) = match header_result {
+            Ok(header) => (
+                header.commit_root_offset,
+                header.commit_auth_offset,
+                header.sequence,
+                header.key_directory_offset,
+                header.lockbox_id,
+            ),
+            Err(_) => {
+                let Some(key_directory) = scanned_key_directory.as_ref() else {
+                    return Err(Error::CorruptHeader);
+                };
+                (0, 0, 0, key_directory.offset, key_directory.lockbox_id)
+            }
+        };
         let mut lockbox = Self {
             storage,
             key,
             sequence,
             commit_root_offset: 0,
+            commit_auth_offset: 0,
+            commit_auth_digest: [0; 32],
             toc_root_offset: 0,
             env_root_offset: 0,
             form_root_offset: 0,
@@ -340,6 +373,8 @@ impl Lockbox {
             key_directory_generation: 0,
             dirty_key_directory: false,
             lockbox_id,
+            read_only: false,
+            owner_signing_key: None,
             key_slots: Vec::new(),
             toc_entries: BTreeMap::new(),
             toc_root: None,
@@ -371,7 +406,24 @@ impl Lockbox {
         };
 
         let mut toc_root_offset = header_root_offset;
-        if header_root_offset > 0 {
+        if header_auth_offset > 0 {
+            let Some((auth_offset, auth_digest, auth, commit_root)) =
+                lockbox.find_valid_commit_from_auth_chain(header_auth_offset)?
+            else {
+                return Err(Error::CorruptRecord);
+            };
+            lockbox.commit_auth_offset = auth_offset;
+            lockbox.commit_auth_digest = auth_digest;
+            lockbox.commit_root_offset = auth.commit_root_offset;
+            lockbox.sequence = commit_root.sequence;
+            lockbox.key_directory_offset = commit_root.key_directory_offset;
+            lockbox.key_directory_mirror_offsets = commit_root.key_directory_mirror_offsets;
+            lockbox.key_directory_generation = commit_root.key_directory_generation;
+            lockbox.free_index_offset = commit_root.free_index_root_offset;
+            lockbox.env_root_offset = commit_root.env_root_offset;
+            lockbox.form_root_offset = commit_root.form_root_offset;
+            toc_root_offset = commit_root.toc_root_offset;
+        } else if header_root_offset > 0 {
             let commit_root = match lockbox.read_commit_root_at(header_root_offset) {
                 Ok(commit_root) => {
                     lockbox.commit_root_offset = header_root_offset;
@@ -435,6 +487,14 @@ impl Lockbox {
     /// Return the stable id embedded in this lockbox.
     pub fn lockbox_id(&self) -> LockboxId {
         self.lockbox_id
+    }
+
+    pub(crate) fn mark_read_only(&mut self) {
+        self.read_only = true;
+    }
+
+    pub fn set_owner_signing_key(&mut self, keypair: OwnerSigningKeyPair) {
+        self.owner_signing_key = Some(keypair);
     }
 
     /// Set cache behavior tuned for the caller's expected access pattern.
@@ -540,6 +600,93 @@ impl Lockbox {
             offset,
             object_id: object.id,
             payload: object.with_payload(|payload| payload.to_vec())?,
+        })
+    }
+
+    pub(crate) fn read_and_verify_commit_auth_at(
+        &self,
+        offset: u64,
+    ) -> Result<(CommitAuth, [u8; 32])> {
+        let payload = self.read_commit_auth_payload_at(offset)?;
+        let digest = commit_auth_digest(&payload);
+        let auth = decode_commit_auth(&payload)?;
+        if auth.lockbox_id != self.lockbox_id {
+            return Err(Error::CorruptRecord);
+        }
+        let message = commit_auth_message(&auth)?;
+        verify_commit_signatures(&message, &auth.signatures)?;
+        Ok((auth, digest))
+    }
+
+    pub(crate) fn find_valid_commit_from_auth_chain(
+        &self,
+        mut offset: u64,
+    ) -> Result<Option<(u64, [u8; 32], CommitAuth, crate::commit_root::CommitRoot)>> {
+        let mut expected_digest = None;
+        while offset != 0 {
+            let Ok((auth, digest)) = self.read_and_verify_commit_auth_at(offset) else {
+                return Ok(None);
+            };
+            if let Some(expected) = expected_digest {
+                if digest != expected {
+                    return Ok(None);
+                }
+            }
+            if let Ok(root) = self.read_verified_commit_root_from_auth(&auth) {
+                return Ok(Some((offset, digest, auth, root)));
+            }
+            if auth.previous_auth_offset == 0 {
+                return Ok(None);
+            }
+            expected_digest = Some(auth.previous_auth_digest);
+            offset = auth.previous_auth_offset;
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn read_verified_commit_root_from_auth(
+        &self,
+        auth: &CommitAuth,
+    ) -> Result<crate::commit_root::CommitRoot> {
+        let payload = self.read_commit_root_payload_at(auth.commit_root_offset)?;
+        if crate::crypto::strong_checksum(&payload) != auth.commit_root_digest {
+            return Err(Error::CorruptRecord);
+        }
+        let root = decode_commit_root(&payload)?;
+        if root.sequence != auth.sequence {
+            return Err(Error::CorruptRecord);
+        }
+        Ok(root)
+    }
+
+    pub(crate) fn read_commit_root_payload_at(&self, offset: u64) -> Result<Vec<u8>> {
+        self.with_page(offset, |page| {
+            let object = page
+                .objects
+                .iter()
+                .find(|object| object.kind == PageObjectKind::CommitRoot)
+                .ok_or(Error::CorruptRecord)?;
+            object.with_payload(|payload| payload.to_vec())
+        })
+    }
+
+    pub(crate) fn read_commit_auth_payload_at(&self, offset: u64) -> Result<Vec<u8>> {
+        self.with_page(offset, |page| {
+            let object = page
+                .objects
+                .iter()
+                .find(|object| object.kind == PageObjectKind::CommitAuth)
+                .ok_or(Error::CorruptRecord)?;
+            object.with_payload(|payload| payload.to_vec())
+        })
+    }
+
+    pub(crate) fn ensure_owner_signing_key(&mut self) -> Result<&OwnerSigningKeyPair> {
+        if self.owner_signing_key.is_none() {
+            self.owner_signing_key = Some(OwnerSigningKeyPair::generate()?);
+        }
+        self.owner_signing_key.as_ref().ok_or_else(|| {
+            Error::InvalidOperation("lockbox owner signing key is not available".to_string())
         })
     }
 
@@ -1135,6 +1282,7 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Result<RecordKind> {
         PageObjectKind::Delete => Ok(RecordKind::Delete),
         PageObjectKind::TocLeaf | PageObjectKind::TocInternal => Ok(RecordKind::TocNode),
         PageObjectKind::CommitRoot => Ok(RecordKind::CommitRoot),
+        PageObjectKind::CommitAuth => Ok(RecordKind::CommitAuth),
         PageObjectKind::FreeIndexLeaf | PageObjectKind::FreeIndexInternal => {
             Ok(RecordKind::FreeIndex)
         }

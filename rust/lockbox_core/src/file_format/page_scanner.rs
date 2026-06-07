@@ -31,6 +31,11 @@ impl<'a> PageScanner<'a> {
     }
 
     pub(crate) fn commit_root_at(&self, offset: u64) -> Result<CommitRoot> {
+        let payload = self.commit_root_payload_at(offset)?;
+        decode_commit_root(&payload)
+    }
+
+    pub(crate) fn commit_root_payload_at(&self, offset: u64) -> Result<Vec<u8>> {
         let page = self.page_at(offset).ok_or(Error::Truncated)?;
         let decoded = decode_page(page, self.lockbox_id, self.key)?;
         let Some(commit_root_object) = decoded
@@ -40,7 +45,20 @@ impl<'a> PageScanner<'a> {
         else {
             return Err(Error::CorruptRecord);
         };
-        commit_root_object.with_payload(decode_commit_root)?
+        commit_root_object.with_payload(|payload| payload.to_vec())
+    }
+
+    pub(crate) fn commit_auth_payload_at(&self, offset: u64) -> Result<Vec<u8>> {
+        let page = self.page_at(offset).ok_or(Error::Truncated)?;
+        let decoded = decode_page(page, self.lockbox_id, self.key)?;
+        let Some(auth_object) = decoded
+            .objects
+            .iter()
+            .find(|object| object.kind == PageObjectKind::CommitAuth)
+        else {
+            return Err(Error::CorruptRecord);
+        };
+        auth_object.with_payload(|payload| payload.to_vec())
     }
 
     pub(crate) fn toc_node_payload_at(&self, offset: u64) -> Result<Vec<u8>> {
@@ -145,6 +163,7 @@ fn record_kind_from_page_object(kind: PageObjectKind) -> Result<RecordKind> {
         PageObjectKind::Delete => RecordKind::Delete,
         PageObjectKind::TocLeaf | PageObjectKind::TocInternal => RecordKind::TocNode,
         PageObjectKind::CommitRoot => RecordKind::CommitRoot,
+        PageObjectKind::CommitAuth => RecordKind::CommitAuth,
         PageObjectKind::FreeIndexLeaf | PageObjectKind::FreeIndexInternal => RecordKind::FreeIndex,
         PageObjectKind::KeyDirectory
         | PageObjectKind::EnvLeaf

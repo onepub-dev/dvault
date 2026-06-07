@@ -6,12 +6,22 @@ use crate::{Error, Result};
 const HEADER_VERSION: u16 = 1;
 const HEADER_CHECKSUM_START: usize = 64;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LockboxHeader {
+    pub(crate) commit_root_offset: u64,
+    pub(crate) sequence: u64,
+    pub(crate) key_directory_offset: u64,
+    pub(crate) lockbox_id: LockboxId,
+    pub(crate) commit_auth_offset: u64,
+}
+
 pub(crate) fn write_header(
     bytes: &mut Vec<u8>,
-    toc_root_offset: u64,
+    commit_root_offset: u64,
     sequence: u64,
     key_directory_offset: u64,
     lockbox_id: LockboxId,
+    commit_auth_offset: u64,
 ) {
     if bytes.len() < HEADER_LEN {
         bytes.resize(HEADER_LEN, 0);
@@ -20,15 +30,16 @@ pub(crate) fn write_header(
     bytes[0..8].copy_from_slice(HEADER_MAGIC);
     bytes[8..10].copy_from_slice(&HEADER_VERSION.to_le_bytes());
     bytes[12..16].copy_from_slice(&(HEADER_LEN as u32).to_le_bytes());
-    bytes[16..24].copy_from_slice(&toc_root_offset.to_le_bytes());
+    bytes[16..24].copy_from_slice(&commit_root_offset.to_le_bytes());
     bytes[24..32].copy_from_slice(&sequence.to_le_bytes());
     bytes[32..40].copy_from_slice(&key_directory_offset.to_le_bytes());
     bytes[40..56].copy_from_slice(lockbox_id.as_bytes());
+    bytes[56..64].copy_from_slice(&commit_auth_offset.to_le_bytes());
     let digest = strong_checksum(&bytes[0..HEADER_CHECKSUM_START]);
     bytes[HEADER_CHECKSUM_START..HEADER_LEN].copy_from_slice(&digest);
 }
 
-pub(crate) fn read_header(bytes: &[u8]) -> Result<(u64, u64, u64, LockboxId)> {
+pub(crate) fn read_header(bytes: &[u8]) -> Result<LockboxHeader> {
     if bytes.len() < HEADER_LEN {
         return Err(Error::Truncated);
     }
@@ -44,21 +55,22 @@ pub(crate) fn read_header(bytes: &[u8]) -> Result<(u64, u64, u64, LockboxId)> {
     if u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize != HEADER_LEN {
         return Err(Error::CorruptHeader);
     }
-    if bytes[56..HEADER_CHECKSUM_START]
-        .iter()
-        .any(|byte| *byte != 0)
-    {
-        return Err(Error::CorruptHeader);
-    }
     let expected = strong_checksum(&bytes[0..HEADER_CHECKSUM_START]);
     if bytes[HEADER_CHECKSUM_START..HEADER_LEN] != expected {
         return Err(Error::CorruptHeader);
     }
-    let toc_root_offset = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    let commit_root_offset = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
     let sequence = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
     let key_directory_offset = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
     let lockbox_id = LockboxId::from_bytes(bytes[40..56].try_into().unwrap());
-    Ok((toc_root_offset, sequence, key_directory_offset, lockbox_id))
+    let commit_auth_offset = u64::from_le_bytes(bytes[56..64].try_into().unwrap());
+    Ok(LockboxHeader {
+        commit_root_offset,
+        sequence,
+        key_directory_offset,
+        lockbox_id,
+        commit_auth_offset,
+    })
 }
 
 /// Read the lockbox id from encoded lockbox header bytes.
@@ -67,8 +79,7 @@ pub(crate) fn read_header(bytes: &[u8]) -> Result<(u64, u64, u64, LockboxId)> {
 /// lockbox header.
 #[cfg(feature = "vault-bridge")]
 pub fn read_lockbox_id(bytes: &[u8]) -> Result<LockboxId> {
-    let (_, _, _, lockbox_id) = read_header(bytes)?;
-    Ok(lockbox_id)
+    Ok(read_header(bytes)?.lockbox_id)
 }
 
 #[cfg(test)]
@@ -88,6 +99,7 @@ mod tests {
             0x1112_1314_1516_1718,
             0x2122_2324_2526_2728,
             lockbox_id,
+            0x3132_3334_3536_3738,
         );
 
         assert_eq!(&bytes[0..8], HEADER_MAGIC);
@@ -107,13 +119,18 @@ mod tests {
         );
         assert_eq!(&bytes[40..56], lockbox_id.as_bytes());
         assert_eq!(
+            &bytes[56..64],
+            &[0x38, 0x37, 0x36, 0x35, 0x34, 0x33, 0x32, 0x31]
+        );
+        assert_eq!(
             read_header(&bytes).unwrap(),
-            (
-                0x0102_0304_0506_0708,
-                0x1112_1314_1516_1718,
-                0x2122_2324_2526_2728,
-                lockbox_id
-            )
+            LockboxHeader {
+                commit_root_offset: 0x0102_0304_0506_0708,
+                sequence: 0x1112_1314_1516_1718,
+                key_directory_offset: 0x2122_2324_2526_2728,
+                lockbox_id,
+                commit_auth_offset: 0x3132_3334_3536_3738,
+            }
         );
     }
 
@@ -121,7 +138,7 @@ mod tests {
     fn header_rejects_public_checksum_tampering() {
         let lockbox_id = LockboxId::new_random().unwrap();
         let mut bytes = Vec::new();
-        write_header(&mut bytes, 1, 2, 3, lockbox_id);
+        write_header(&mut bytes, 1, 2, 3, lockbox_id, 4);
 
         bytes[16] ^= 0x01;
 
