@@ -460,7 +460,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                         args.push(value(share_sub, "share-code"));
                         args.push(value(share_sub, "contact-name"));
                     }
-                    "delete" | "rm" => {
+                    "remove" | "rm" | "delete" => {
                         push_share_options(&mut args, share_sub);
                         args.push(value(share_sub, "share-code"));
                         args.push(value(share_sub, "delete-token"));
@@ -474,7 +474,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 }
             } else {
                 return Err(Error::InvalidInput(
-                    "missing vault share command; use `lockbox vault share publish`, `lockbox vault share receive`, or `lockbox vault share delete`"
+                    "missing vault share command; use `lockbox vault share publish`, `lockbox vault share receive`, or `lockbox vault share remove`"
                         .to_string(),
                 )
                 .into());

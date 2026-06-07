@@ -36,9 +36,9 @@ fn share_command(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
         Some("publish") => share_publish(&args[1..]),
         Some("receive") | Some("fetch") => share_receive(&args[1..]),
-        Some("delete") | Some("rm") => share_delete(&args[1..]),
+        Some("remove") | Some("rm") | Some("delete") => share_delete(&args[1..]),
         _ => Err(Error::InvalidInput(
-            "missing vault share command; use `lockbox vault share publish`, `lockbox vault share receive`, or `lockbox vault share delete`"
+            "missing vault share command; use `lockbox vault share publish`, `lockbox vault share receive`, or `lockbox vault share remove`"
                 .to_string(),
         )
         .into()),
@@ -298,7 +298,16 @@ fn share_publish(args: &[String]) -> CliResult<()> {
         },
     )?;
     println!("share_code={}", result.share_code);
+    println!("fingerprint={}", encode_hex(&fingerprint));
     println!("delete_token={}", encode_hex(&result.delete_token));
+    println!(
+        "delete_token_purpose=use this token with `lockbox vault share remove {} <delete-token>` to remove the pending share before it expires",
+        result.share_code
+    );
+    println!(
+        "expires_at_utc={}",
+        format_unix_ms_utc(result.expires_at_unix_ms)
+    );
     println!("expires_at_unix_ms={}", result.expires_at_unix_ms);
     Ok(())
 }
@@ -494,6 +503,30 @@ fn unix_ms_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn format_unix_ms_utc(unix_ms: u64) -> String {
+    let seconds = (unix_ms / 1000) as i64;
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    format!("{year:04}/{month:02}/{day:02} {hour:02}:{minute:02} UTC")
+}
+
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2).div_euclid(153);
+    let day = doy - (153 * mp + 2).div_euclid(5) + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
 }
 
 fn decode_hex(value: &str) -> CliResult<Vec<u8>> {
@@ -847,4 +880,18 @@ fn set_private_key_permissions(path: &str) -> CliResult<()> {
 #[cfg(not(unix))]
 fn set_private_key_permissions(_path: &str) -> CliResult<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_unix_ms_utc;
+
+    #[test]
+    fn share_expiry_uses_human_readable_utc_time() {
+        assert_eq!(format_unix_ms_utc(0), "1970/01/01 00:00 UTC");
+        assert_eq!(
+            format_unix_ms_utc(1_783_032_923_000),
+            "2026/07/02 22:55 UTC"
+        );
+    }
 }

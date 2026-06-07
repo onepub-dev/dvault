@@ -978,7 +978,7 @@ fn vault_command(verbose: bool) -> Command {
                 .disable_help_subcommand(true)
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault share publish\n  lockbox vault share receive 0123456789012 alice\n  lockbox vault share delete 0123456789012 <delete-token>",
+                    "Examples:\n  lockbox vault share publish\n  lockbox vault share receive 0123456789012 alice\n  lockbox vault share remove 0123456789012 <delete-token>",
                     "Context:\n  Vault share publishes or receives typed contact-share payloads through the configured binary share server protocol. Configure share.server or share.topology_url in the vault config YAML, or pass --server/--topology-url.",
                 ))
                 .subcommand_required(true)
@@ -1018,8 +1018,9 @@ fn vault_command(verbose: bool) -> Command {
                         .arg(required("contact-name", "Contact name to save.")),
                 )
                 .subcommand(
-                    Command::new("delete")
-                        .about("Delete a pending share with its delete token.")
+                    Command::new("remove")
+                        .about("Remove a pending share with its delete token.")
+                        .alias("delete")
                         .visible_alias("rm")
                         .arg(share_server_arg())
                         .arg(share_topology_arg())

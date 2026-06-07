@@ -159,6 +159,12 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(
         vault_identity_create_help.contains("lockbox vault identity export laptop ./laptop.pub")
     );
+
+    let vault_share_help = run_output(bin, &["vault", "share", "--help"]);
+    assert_success(&vault_share_help);
+    let vault_share_help = String::from_utf8_lossy(&vault_share_help.stdout);
+    assert!(vault_share_help.contains("remove"));
+    assert!(vault_share_help.contains("lockbox vault share remove"));
     assert!(!vault_identity_create_help.contains("export-public"));
     assert!(vault_identity_create_help.contains("lockbox vault identity create laptop\n"));
     assert!(!vault_identity_create_help.contains("[public-key-output]"));
