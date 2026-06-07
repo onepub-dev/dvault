@@ -96,6 +96,12 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(form_help.contains("show"));
     assert!(form_help.contains("rm"));
 
+    let form_define_help = run_output(bin, &["form", "define", "--help"]);
+    assert_success(&form_define_help);
+    let form_define_help = String::from_utf8_lossy(&form_define_help.stdout);
+    assert!(form_define_help.contains("--definition-id <DEFINITION_ID>"));
+    assert!(!form_define_help.contains("--type-id"));
+
     let form_define_error = run_output(bin, &["form", "define", "test.lbox"]);
     assert!(!form_define_error.status.success());
     let form_define_error = String::from_utf8_lossy(&form_define_error.stderr);
@@ -367,6 +373,8 @@ fn form_definitions_and_records_flow() {
     let inspect = run_output(bin, &["form", "show", &lockbox, "/work/github"]);
     assert_success(&inspect);
     let inspect = String::from_utf8_lossy(&inspect.stdout);
+    assert!(inspect.contains("definition_id\t"));
+    assert!(!inspect.contains("type_id\t"));
     assert!(inspect.contains("field\tusername\tUsername\tbsutton"));
     assert!(inspect.contains("field\tpassword\tPassword\t<secret>"));
     assert!(!inspect.contains("correct horse"));
@@ -374,12 +382,20 @@ fn form_definitions_and_records_flow() {
     let list = run_output(bin, &["form", "list", &lockbox, "/work"]);
     assert_success(&list);
     let list = String::from_utf8_lossy(&list.stdout);
+    assert!(list.lines().next().unwrap_or("").contains("definition_id"));
+    assert!(!list.lines().next().unwrap_or("").contains("type_id"));
     assert!(list.contains("/work/github"));
     assert!(list.contains("GitHub"));
 
     let definitions = run_output(bin, &["form", "types", &lockbox]);
     assert_success(&definitions);
     let definitions = String::from_utf8_lossy(&definitions.stdout);
+    assert!(definitions
+        .lines()
+        .next()
+        .unwrap_or("")
+        .contains("definition_id"));
+    assert!(!definitions.lines().next().unwrap_or("").contains("type_id"));
     assert!(definitions.contains("login"));
     assert!(definitions.contains("Login"));
 

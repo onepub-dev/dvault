@@ -282,7 +282,7 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
         "define" => {
             args.push(value(sub, "alias"));
             push_option(&mut args, sub, "name", "--name");
-            push_option(&mut args, sub, "type-id", "--type-id");
+            push_option(&mut args, sub, "definition-id", "--definition-id");
             if let Some(fields) = sub.get_many::<String>("field") {
                 for field in fields {
                     args.push("--field".to_string());

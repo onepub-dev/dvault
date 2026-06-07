@@ -37,12 +37,12 @@ fn define(args: &[String], access: &Access) -> CliResult<()> {
                 index += 1;
                 name = require_arg(args, index, "--name value")?.to_string();
             }
-            "--type-id" => {
+            "--definition-id" | "--type-id" => {
                 index += 1;
                 type_id = Some(lockbox_core::FormTypeId::new(require_arg(
                     args,
                     index,
-                    "--type-id value",
+                    "--definition-id value",
                 )?)?);
             }
             "--field" => {
@@ -96,7 +96,7 @@ fn definitions(args: &[String], access: &Access) -> CliResult<()> {
         })
         .collect::<Vec<_>>();
     print_records(
-        &["alias", "type_id", "revision", "name", "fields"],
+        &["alias", "definition_id", "revision", "name", "fields"],
         rows,
         format,
     )?;
@@ -305,7 +305,7 @@ fn inspect(args: &[String], access: &Access) -> CliResult<()> {
     println!("path\t{}", record.path);
     println!("name\t{}", record.name);
     println!("alias\t{}", record.definition_alias);
-    println!("type_id\t{}", record.type_id);
+    println!("definition_id\t{}", record.type_id);
     println!("revision\t{}", record.definition_revision);
     for field in &definition.fields {
         let value = record
@@ -356,7 +356,7 @@ fn list(args: &[String], access: &Access) -> CliResult<()> {
         })
         .collect::<Vec<_>>();
     print_records(
-        &["path", "name", "alias", "type_id", "revision"],
+        &["path", "name", "alias", "definition_id", "revision"],
         rows,
         format,
     )?;

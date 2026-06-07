@@ -519,7 +519,7 @@ fn form_command(verbose: bool) -> Command {
         .after_help(verbose_help(
             verbose,
             "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form add secrets.lbox /work/github --type login --name GitHub --set username=bsutton\n  lockbox form add secrets.lbox /work/github --type login --interactive\n  lockbox form show secrets.lbox /work/github",
-            "Context:\n  Forms store structured records inside a lockbox. Definitions are versioned by a stable type id and embedded in the lockbox, so shared lockboxes remain self-describing even when another party uses the same form alias for a different definition.",
+            "Context:\n  Forms store structured records inside a lockbox. Definitions are versioned by a stable definition id and embedded in the lockbox, so shared lockboxes remain self-describing even when another party uses the same form alias for a different definition.",
         ))
         .subcommand_required(true)
         .arg_required_else_help(true)
@@ -532,7 +532,7 @@ fn form_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form define secrets.lbox login --name Login --field username:text:required:User --field password:secret:required:Password\n\nField form:\n  FIELD[:KIND[:required[:LABEL]]]\n\nKinds:\n  text, secret, password, url, email, date, month, notes, number, otp",
-                    "Context:\n  Define creates a new form type for a new alias. If the alias already resolves to exactly one type, define appends a new definition revision. If an imported shared lockbox has conflicting aliases, pass --type-id to revise the intended type explicitly.",
+                    "Context:\n  Define creates a new form definition for a new alias. If the alias already resolves to exactly one definition, define appends a new revision. If an imported shared lockbox has conflicting aliases, pass --definition-id to revise the intended definition explicitly.",
                 ))
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("alias", "Form alias."))
@@ -540,13 +540,14 @@ fn form_command(verbose: bool) -> Command {
                     Arg::new("name")
                         .long("name")
                         .value_name("DISPLAY_NAME")
-                        .help("Human display name for this form type."),
+                        .help("Human display name for this form definition."),
                 )
                 .arg(
-                    Arg::new("type-id")
-                        .long("type-id")
-                        .value_name("TYPE_ID")
-                        .help("Revise or create this stable form type id."),
+                    Arg::new("definition-id")
+                        .long("definition-id")
+                        .alias("type-id")
+                        .value_name("DEFINITION_ID")
+                        .help("Revise or create this stable form definition id."),
                 )
                 .arg(
                     Arg::new("field")
@@ -559,7 +560,7 @@ fn form_command(verbose: bool) -> Command {
         )
         .subcommand(
             Command::new("types")
-                .about("List form types.")
+                .about("List form definitions.")
                 .arg(output_format_arg())
                 .arg(required("lockbox", "Lockbox path.")),
         )
@@ -576,9 +577,9 @@ fn form_command(verbose: bool) -> Command {
                 .arg(
                     Arg::new("type")
                         .long("type")
-                        .value_name("ALIAS_OR_TYPE_ID")
+                        .value_name("ALIAS_OR_DEFINITION_ID")
                         .required(true)
-                        .help("Form definition alias or stable type id."),
+                        .help("Form definition alias or stable definition id."),
                 )
                 .arg(
                     Arg::new("name")
@@ -607,7 +608,7 @@ fn form_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox form edit secrets.lbox /work/github --set username=bsutton\n  lockbox form edit secrets.lbox /work/github --interactive",
-                    "Context:\n  Edit updates an existing form record. Use --interactive after a form type revision to fill fields that exist in the latest definition but are missing from the stored record.",
+                    "Context:\n  Edit updates an existing form record. Use --interactive after a form definition revision to fill fields that exist in the latest definition but are missing from the stored record.",
                 ))
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("path", "Form record path."))
