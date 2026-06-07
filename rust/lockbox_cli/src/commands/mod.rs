@@ -329,6 +329,8 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             args.push(value(sub, "path"));
             args.push(value(sub, "field"));
             push_flag(&mut args, sub, "secret", "--secret");
+            push_option(&mut args, sub, "output", "--output");
+            push_flag(&mut args, sub, "overwrite", "--overwrite");
         }
         "show" => {
             args.push(value(sub, "path"));

@@ -123,6 +123,14 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(env_get_help.contains("--output <FILE>"));
     assert!(env_get_help.contains("lockbox env get --secret --output api-token.txt"));
 
+    let form_get_help = run_output(bin, &["form", "get", "--help"]);
+    assert_success(&form_get_help);
+    let form_get_help = String::from_utf8_lossy(&form_get_help.stdout);
+    assert!(form_get_help.contains("lockbox form get secrets.lbox /work/github username"));
+    assert!(form_get_help.contains("lockbox form get --secret"));
+    assert!(form_get_help.contains("--output <FILE>"));
+    assert!(form_get_help.contains("--overwrite"));
+
     let env_export_help = run_output(bin, &["env", "export", "--help"]);
     assert_success(&env_export_help);
     let env_export_help = String::from_utf8_lossy(&env_export_help.stdout);
@@ -370,6 +378,55 @@ fn form_definitions_and_records_flow() {
     );
     assert_success(&password);
     assert_eq!(String::from_utf8_lossy(&password.stdout), "correct horse\n");
+
+    let password_output = dir.join("password.txt");
+    let password_file = run_output(
+        bin,
+        &[
+            "form",
+            "get",
+            "--secret",
+            "--output",
+            password_output.to_str().unwrap(),
+            &lockbox,
+            "/work/github",
+            "password",
+        ],
+    );
+    assert_success(&password_file);
+    assert!(password_file.stdout.is_empty());
+    assert_eq!(fs::read(&password_output).unwrap(), b"correct horse");
+
+    let rejected_password_file = run_output(
+        bin,
+        &[
+            "form",
+            "get",
+            "--secret",
+            "--output",
+            password_output.to_str().unwrap(),
+            &lockbox,
+            "/work/github",
+            "password",
+        ],
+    );
+    assert!(!rejected_password_file.status.success());
+    assert_eq!(fs::read(&password_output).unwrap(), b"correct horse");
+
+    run(
+        bin,
+        &[
+            "form",
+            "get",
+            "--output",
+            password_output.to_str().unwrap(),
+            "--overwrite",
+            &lockbox,
+            "/work/github",
+            "username",
+        ],
+    );
+    assert_eq!(fs::read(&password_output).unwrap(), b"bsutton");
 
     let inspect = run_output(bin, &["form", "show", &lockbox, "/work/github"]);
     assert_success(&inspect);

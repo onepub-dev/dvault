@@ -664,6 +664,11 @@ fn form_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("get")
                 .about("Print one form field value.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox form get secrets.lbox /work/github username\n  lockbox form get --secret secrets.lbox /work/github password\n  lockbox form get --secret --output password.txt secrets.lbox /work/github password",
+                    "Context:\n  Form get reads one field from a form record. Secret fields require --secret so accidental terminal output is an explicit user choice. Use --output when the exact bytes should go to a file.",
+                ))
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("path", "Form record path."))
                 .arg(required("field", "Field id."))
@@ -672,6 +677,19 @@ fn form_command(verbose: bool) -> Command {
                         .long("secret")
                         .action(ArgAction::SetTrue)
                         .help("Print a secret field value."),
+                )
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .value_name("FILE")
+                        .help("Write the field value to this file."),
+                )
+                .arg(
+                    Arg::new("overwrite")
+                        .long("overwrite")
+                        .requires("output")
+                        .action(ArgAction::SetTrue)
+                        .help("Replace the output file if it already exists."),
                 ),
         )
         .subcommand(

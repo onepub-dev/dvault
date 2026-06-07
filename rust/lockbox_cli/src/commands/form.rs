@@ -1,4 +1,7 @@
-use std::io::{Read, Write};
+use std::{
+    fs,
+    io::{Read, Write},
+};
 
 use lockbox_core::{
     Error, FormFieldDefinition, FormFieldKind, FormValue, LockboxPath, SecretString,
@@ -269,28 +272,126 @@ fn remove(args: &[String], access: &Access) -> CliResult<()> {
 }
 
 fn get(args: &[String], access: &Access) -> CliResult<()> {
-    let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let path = form_record_path(require_arg(args, 1, "form path")?)?;
-    let field_id = require_arg(args, 2, "field id")?;
-    let reveal_secret = args.iter().skip(3).any(|arg| arg == "--secret");
-    let lb = open_existing(lockbox_path, access)?;
+    let request = FormGetRequest::parse(args)?;
+    let path = form_record_path(&request.path)?;
+    let lb = open_existing(&request.lockbox_path, access)?;
     let value = lb
-        .get_form_field(&path, field_id)?
-        .ok_or_else(|| Error::NotFound(format!("form field {field_id}")))?;
+        .get_form_field(&path, &request.field_id)?
+        .ok_or_else(|| Error::NotFound(format!("form field {}", request.field_id)))?;
     match value.value {
-        FormValue::Normal(value) => println!("{value}"),
-        FormValue::Secret(value) if reveal_secret => {
-            let stdout = std::io::stdout();
-            let mut stdout = stdout.lock();
-            value.with_str(|value| {
-                stdout.write_all(value.as_bytes())?;
-                stdout.write_all(b"\n")
-            })??;
+        FormValue::Normal(value) => request.write_value(value.as_bytes())?,
+        FormValue::Secret(value) if request.reveal_secret => {
+            value.with_str(|value| request.write_value(value.as_bytes()))??;
         }
         FormValue::Secret(_) => {
             return Err(cli_error("field is secret; pass --secret to print it"));
         }
     }
+    Ok(())
+}
+
+struct FormGetRequest {
+    lockbox_path: String,
+    path: String,
+    field_id: String,
+    reveal_secret: bool,
+    output: Option<String>,
+    overwrite: bool,
+}
+
+impl FormGetRequest {
+    fn parse(args: &[String]) -> CliResult<Self> {
+        let lockbox_path = require_arg(args, 0, "lockbox")?.to_string();
+        let path = require_arg(args, 1, "form path")?.to_string();
+        let field_id = require_arg(args, 2, "field id")?.to_string();
+        let mut reveal_secret = false;
+        let mut output = None;
+        let mut overwrite = false;
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--secret" => reveal_secret = true,
+                "--output" => {
+                    index += 1;
+                    output = Some(require_arg(args, index, "--output value")?.to_string());
+                }
+                "--overwrite" => overwrite = true,
+                value => {
+                    return Err(Error::InvalidInput(format!(
+                        "unexpected form get argument: {value}"
+                    ))
+                    .into());
+                }
+            }
+            index += 1;
+        }
+        if overwrite && output.is_none() {
+            return Err(Error::InvalidInput("--overwrite requires --output".to_string()).into());
+        }
+        Ok(Self {
+            lockbox_path,
+            path,
+            field_id,
+            reveal_secret,
+            output,
+            overwrite,
+        })
+    }
+
+    fn write_value(&self, bytes: &[u8]) -> CliResult<()> {
+        if let Some(path) = &self.output {
+            write_output_file(path, bytes, self.overwrite)?;
+        } else {
+            let stdout = std::io::stdout();
+            let mut stdout = stdout.lock();
+            stdout.write_all(bytes)?;
+            stdout.write_all(b"\n")?;
+        }
+        Ok(())
+    }
+}
+
+fn write_output_file(path: &str, bytes: &[u8], overwrite: bool) -> CliResult<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    if overwrite {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    configure_private_output_file(&mut options);
+    let mut file = options.open(path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::AlreadyExists(path.to_string())
+        } else {
+            Error::Io(format!("create {path}: {err}"))
+        }
+    })?;
+    set_private_output_permissions(&file)?;
+    file.write_all(bytes)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn configure_private_output_file(options: &mut fs::OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.mode(0o600);
+}
+
+#[cfg(not(unix))]
+fn configure_private_output_file(_options: &mut fs::OpenOptions) {}
+
+#[cfg(unix)]
+fn set_private_output_permissions(file: &fs::File) -> CliResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_output_permissions(_file: &fs::File) -> CliResult<()> {
     Ok(())
 }
 
