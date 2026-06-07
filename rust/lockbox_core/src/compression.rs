@@ -341,6 +341,20 @@ mod tests {
     }
 
     #[test]
+    fn archive_like_high_entropy_compression_frame_stays_uncompressed() {
+        let payload = archive_like_randomish_payload(MIN_INCOMPRESSIBLE_CHECK_BYTES * 2);
+        let (algorithm, stored) =
+            encode_compression_frame_with_level(&payload, ZSTD_BULK_IMPORT_LEVEL);
+
+        assert_eq!(algorithm, COMPRESSION_NONE);
+        assert_eq!(stored, payload);
+        assert_eq!(
+            decode_compression_frame(algorithm, &stored, payload.len() as u64).unwrap(),
+            payload
+        );
+    }
+
+    #[test]
     fn compression_frame_rejects_declared_bomb_before_allocating() {
         assert!(matches!(
             decode_compression_frame(
@@ -400,5 +414,17 @@ mod tests {
             value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
             *byte = (value ^ (value >> 31)) as u8;
         }
+    }
+
+    fn archive_like_randomish_payload(len: usize) -> Vec<u8> {
+        let mut payload = vec![0u8; len];
+        fill_randomish(&mut payload);
+        payload[0..4].copy_from_slice(b"PK\x03\x04");
+        payload[4..6].copy_from_slice(&20u16.to_le_bytes());
+        payload[6..8].copy_from_slice(&0u16.to_le_bytes());
+        payload[8..10].copy_from_slice(&8u16.to_le_bytes());
+        payload[26..28].copy_from_slice(&8u16.to_le_bytes());
+        payload[30..38].copy_from_slice(b"data.bin");
+        payload
     }
 }
