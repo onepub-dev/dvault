@@ -3,9 +3,9 @@
 ## Purpose
 
 This document defines the client-side sharing, verification, contact storage,
-and key replacement flows for the reVault share server.
+and key replacement flows for the reVault key server.
 
-The share server is only a rendezvous store. It does not verify identity, key
+The key server is only a rendezvous store. It does not verify identity, key
 ownership, key continuity, or trust. Those decisions belong in the CLI and the
 local vault.
 
@@ -31,7 +31,7 @@ lockbox vault identity history
 lockbox access refresh
 lockbox vault lockbox list
 lockbox vault lockbox forget
-share server URL configuration
+key server URL configuration
 binary vault contact records
 signed and unsigned key replacement
 old lockbox access after identity rotation
@@ -74,7 +74,7 @@ existing trust relationship.
 handles both signed and unsigned replacement payloads and direct offline public
 key files.
 
-`vault identity rotate` is local-only. It does not contact the share server.
+`vault identity rotate` is local-only. It does not contact the key server.
 After rotation, the user can call `lockbox vault share` to share either the
 active key or a retired key generation.
 
@@ -251,11 +251,11 @@ problems for `--all`. They are never silently ignored.
 
 ## Server URL Configuration
 
-The CLI must resolve the share server URL in this order:
+The CLI must resolve the key server URL in this order:
 
 ```text
 1 command line: --server URL
-2 environment: LOCKBOX_SHARE_SERVER
+2 environment: LOCKBOX_KEY_SERVER
 3 YAML config: share.server
 4 built-in default: https://keyshare.onepub.dev/v1/share
 ```
@@ -297,7 +297,7 @@ transport trait for tests and future TLS support
 ```
 
 The CLI must depend on `lockbox_share_protocol`; it must not duplicate protocol
-parsing or manually build share server request bytes.
+parsing or manually build key server request bytes.
 
 ## Verification Code
 
@@ -541,7 +541,7 @@ explicit --unsigned-replacement -> unsigned_key_replacement_v1
 retired --key-index N -> contact_share_v1 for that retired key
 ```
 
-The share server does not decide whether a payload is signed. It only validates
+The key server does not decide whether a payload is signed. It only validates
 the submitted payload structure.
 
 ### Add Contact By Share Code
@@ -692,7 +692,7 @@ signs the canonical replacement body with the old generation's signing private
 key. The replacement payload carries the new generation's recipient public key
 and new signing public key.
 
-The share server does not create or verify signatures. It only validates that a
+The key server does not create or verify signatures. It only validates that a
 signed replacement payload has the correct typed structure.
 
 ## Identity Rotation
@@ -942,14 +942,14 @@ Do not use JSON for contact, history, identity, or replacement records.
 13. Track known lockboxes in the vault.
 14. Add `lockbox vault lockbox list` and `lockbox vault lockbox forget`.
 
-Implemented in the current share-server pass:
+Implemented in the current key-server pass:
 
 - `lockbox vault share publish`
 - `lockbox vault share receive`
 - `lockbox vault share delete`
 - `share.server` and `share.topology_url` YAML-style config lookup
 - `--server` and `--topology-url` command overrides
-- TLS-capable HTTP transport for `https://` share servers
+- TLS-capable HTTP transport for `https://` key servers
 
 Remaining CLI/contact work:
 

@@ -109,7 +109,7 @@ impl fmt::Display for ClientError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(err) => write!(f, "{err}"),
-            Self::Url(err) => write!(f, "invalid share server url: {err}"),
+            Self::Url(err) => write!(f, "invalid key server url: {err}"),
             Self::Http(err) => write!(f, "http error: {err}"),
             Self::Protocol(err) => write!(f, "protocol error: {err}"),
             Self::Payload(err) => write!(f, "payload error: {err}"),
@@ -227,7 +227,7 @@ impl<T: Transport> ShareClientPool<T> {
     ) -> Result<Self, ClientError> {
         if clients.is_empty() {
             return Err(ClientError::Url(
-                "at least one share server url is required".to_string(),
+                "at least one key server url is required".to_string(),
             ));
         }
         if clients.len() != server_ids.len() {
@@ -236,9 +236,9 @@ impl<T: Transport> ShareClientPool<T> {
             ));
         }
         for server_id in &server_ids {
-            if *server_id > 9 {
+            if *server_id >= 36 {
                 return Err(ClientError::Topology(format!(
-                    "server id must be a decimal digit from 0 to 9: {server_id}"
+                    "server id must be an index 0..35 (0..9, a..z): {server_id}"
                 )));
             }
         }
@@ -359,7 +359,7 @@ impl<T: Transport> ShareClientPool<T> {
             }
         }
         Err(last_error.unwrap_or_else(|| {
-            ClientError::Url("at least one share server url is required".to_string())
+            ClientError::Url("at least one key server url is required".to_string())
         }))
     }
 
@@ -388,21 +388,21 @@ impl<T: Transport> ShareClientPool<T> {
             }
         }
         Err(last_error.unwrap_or_else(|| {
-            ClientError::Url("at least one share server url is required".to_string())
+            ClientError::Url("at least one key server url is required".to_string())
         }))
     }
 
     fn clients_for_code(&self, share_code: &str) -> Vec<&ShareClient<T>> {
-        let owner_id = topology::share_code_owner_id(share_code);
-        let preferred_ids = owner_id
-            .and_then(|owner_id| self.routes.iter().find(|route| route.owner_id == owner_id))
-            .map(|route| {
-                let mut ids = vec![route.primary_id];
-                ids.extend(route.failover_ids.iter().copied());
+        let preferred_ids = match topology::share_code_locator(share_code) {
+            Some((primary_id, secondary_id)) => {
+                let mut ids = vec![primary_id];
+                if secondary_id != primary_id {
+                    ids.push(secondary_id);
+                }
                 ids
-            })
-            .or_else(|| owner_id.map(|owner_id| vec![owner_id]))
-            .unwrap_or_default();
+            }
+            None => Vec::new(),
+        };
         let mut out = Vec::with_capacity(self.clients.len());
         for preferred_id in preferred_ids {
             if let Some((index, _)) = self

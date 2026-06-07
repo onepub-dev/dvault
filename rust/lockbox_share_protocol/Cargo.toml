@@ -3,7 +3,7 @@ name = "lockbox_share_protocol"
 version = "0.1.0-alpha.1"
 edition = "2021"
 license-file = "LICENSE"
-description = "reVault share server wire protocol and client API"
+description = "reVault key server wire protocol and client API"
 
 [lib]
 name = "lockbox_share_protocol"

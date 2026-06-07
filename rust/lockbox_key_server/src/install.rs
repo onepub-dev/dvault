@@ -7,13 +7,13 @@ use std::process::Command;
 
 use crate::server_log::server_log_destination;
 
-const UNIT_PATH: &str = "/etc/systemd/system/lockbox-share-server.service";
+const UNIT_PATH: &str = "/etc/systemd/system/lockbox_key_server.service";
 const CONFIG_DIR: &str = "/etc/lockbox";
-const CONFIG_PATH: &str = "/etc/lockbox/share-server.toml";
-const STATE_DIR: &str = "/var/lib/lockbox-share-server";
-const CACHE_DIR: &str = "/var/cache/lockbox-share-server";
-const LOG_DIR: &str = "/var/log/lockbox-share-server";
-const LOG_FILE: &str = "/var/log/lockbox-share-server/server.log";
+const CONFIG_PATH: &str = "/etc/lockbox/key-server.toml";
+const STATE_DIR: &str = "/var/lib/lockbox-key-server";
+const CACHE_DIR: &str = "/var/cache/lockbox-key-server";
+const LOG_DIR: &str = "/var/log/lockbox-key-server";
+const LOG_FILE: &str = "/var/log/lockbox-key-server/server.log";
 const USER: &str = "lockbox-share";
 
 pub fn install_systemd(force_config: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -39,16 +39,16 @@ pub fn install_systemd(force_config: bool) -> Result<(), Box<dyn std::error::Err
         unit_file(&std::env::current_exe()?.display().to_string()),
     )?;
     run("systemctl", &["daemon-reload"])?;
-    run("systemctl", &["enable", "lockbox-share-server.service"])?;
-    run("systemctl", &["restart", "lockbox-share-server.service"])?;
-    println!("installed lockbox-share-server systemd service");
+    run("systemctl", &["enable", "lockbox_key_server.service"])?;
+    run("systemctl", &["restart", "lockbox_key_server.service"])?;
+    println!("installed lockbox_key_server systemd service");
     Ok(())
 }
 
 pub fn uninstall_systemd(purge_data: bool) -> Result<(), Box<dyn std::error::Error>> {
     require_root()?;
-    let _ = run("systemctl", &["stop", "lockbox-share-server.service"]);
-    let _ = run("systemctl", &["disable", "lockbox-share-server.service"]);
+    let _ = run("systemctl", &["stop", "lockbox_key_server.service"]);
+    let _ = run("systemctl", &["disable", "lockbox_key_server.service"]);
     if Path::new(UNIT_PATH).exists() {
         fs::remove_file(UNIT_PATH)?;
     }
@@ -59,7 +59,7 @@ pub fn uninstall_systemd(purge_data: bool) -> Result<(), Box<dyn std::error::Err
         let _ = fs::remove_dir_all(LOG_DIR);
         let _ = fs::remove_file(CONFIG_PATH);
     }
-    println!("uninstalled lockbox-share-server systemd service");
+    println!("uninstalled lockbox_key_server systemd service");
     Ok(())
 }
 
@@ -68,12 +68,12 @@ pub fn print_status() -> Result<(), Box<dyn std::error::Error>> {
     println!("unit_installed={}", Path::new(UNIT_PATH).exists());
     println!(
         "unit_enabled={}",
-        systemctl_value(&["is-enabled", "lockbox-share-server.service"])
+        systemctl_value(&["is-enabled", "lockbox_key_server.service"])
             .unwrap_or_else(|| "unknown".to_string())
     );
     println!(
         "unit_active={}",
-        systemctl_value(&["is-active", "lockbox-share-server.service"])
+        systemctl_value(&["is-active", "lockbox_key_server.service"])
             .unwrap_or_else(|| "unknown".to_string())
     );
     println!("config_path={CONFIG_PATH}");
@@ -86,7 +86,7 @@ pub fn print_status() -> Result<(), Box<dyn std::error::Error>> {
         "unit_exec_start={}",
         systemctl_value(&[
             "show",
-            "lockbox-share-server.service",
+            "lockbox_key_server.service",
             "--property=ExecStart",
             "--value"
         ])
@@ -182,7 +182,7 @@ fn set_file_permissions(_path: &str, _mode: u32) -> Result<(), Box<dyn std::erro
 
 fn default_config() -> &'static str {
     "bind_addr = \"0.0.0.0:8089\"\n\
-state_dir = \"/var/lib/lockbox-share-server\"\n\
+state_dir = \"/var/lib/lockbox-key-server\"\n\
 server_id = 0\n\
 cluster_id = \"default\"\n\
 public_url = \"https://keyshare.onepub.dev/v1/share\"\n\
@@ -190,7 +190,6 @@ topology_version = 1\n\
 topology_server = \"0=https://keyshare.onepub.dev/v1/share,active\"\n\
 route = \"0=0\"\n\
 origin_epoch = 1\n\
-share_code_digits = 12\n\
 default_ttl_seconds = 900\n\
 max_ttl_seconds = 900\n\
 max_payload_bytes = 8192\n\
@@ -205,7 +204,7 @@ verification_email_ip_rate_limit_per_hour = 30\n"
 fn unit_file(binary: &str) -> String {
     format!(
         "[Unit]
-Description=reVault Share Rendezvous Server
+Description=reVault Key Rendezvous Server
 After=network-online.target
 Wants=network-online.target
 
@@ -216,7 +215,7 @@ Group={USER}
 ExecStart={binary} run --config {CONFIG_PATH}
 Restart=always
 RestartSec=2
-Environment=LOCKBOX_SHARE_SERVER_LOG={LOG_FILE}
+Environment=LOCKBOX_KEY_SERVER_LOG={LOG_FILE}
 StandardOutput=append:{LOG_FILE}
 StandardError=append:{LOG_FILE}
 NoNewPrivileges=true
@@ -242,11 +241,11 @@ mod tests {
 
     #[test]
     fn unit_runs_from_config_and_restarts_on_boot_failures() {
-        let unit = unit_file("/usr/local/bin/lockbox-share-server");
-        assert!(unit.contains("ExecStart=/usr/local/bin/lockbox-share-server run --config "));
+        let unit = unit_file("/usr/local/bin/lockbox_key_server");
+        assert!(unit.contains("ExecStart=/usr/local/bin/lockbox_key_server run --config "));
         assert!(unit.contains(CONFIG_PATH));
         assert!(unit.contains("Restart=always"));
-        assert!(unit.contains(&format!("Environment=LOCKBOX_SHARE_SERVER_LOG={LOG_FILE}")));
+        assert!(unit.contains(&format!("Environment=LOCKBOX_KEY_SERVER_LOG={LOG_FILE}")));
         assert!(unit.contains(&format!("StandardOutput=append:{LOG_FILE}")));
         assert!(unit.contains(&format!("StandardError=append:{LOG_FILE}")));
         assert!(unit.contains("WantedBy=multi-user.target"));

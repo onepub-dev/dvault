@@ -325,6 +325,7 @@ fn share_publish(args: &[String]) -> CliResult<()> {
         },
     )?;
     println!("published=yes");
+    println!("share_code={}", result.share_code);
     println!("email={email}");
     println!("contact_fingerprint={}", format_hex_pairs(&fingerprint));
     println!(
@@ -336,7 +337,8 @@ fn share_publish(args: &[String]) -> CliResult<()> {
     println!("verification_advice=check the inbox for {email} and click the verification link");
     println!("delete_token={}", encode_hex(&result.delete_token));
     println!(
-        "delete_token_purpose=use this token with `lockbox vault share remove {email} <delete-token>` to remove the pending share before it expires"
+        "delete_token_purpose=use this token with `lockbox vault share remove {} <delete-token>` to remove the pending share before it expires",
+        result.share_code
     );
     println!(
         "expires_at_utc={}",
@@ -348,19 +350,16 @@ fn share_publish(args: &[String]) -> CliResult<()> {
 
 fn share_receive(args: &[String]) -> CliResult<()> {
     let options = ShareCliOptions::parse(args)?;
-    let expected_email = options
+    let share_code = options
         .positionals
         .first()
         .cloned()
-        .or(options.email.clone())
-        .ok_or_else(|| Error::InvalidInput("missing publisher email address".to_string()))?;
-    let expected_email = normalize_contact_email(&expected_email)
-        .map_err(|_| Error::InvalidInput("invalid publisher email address".to_string()))?;
+        .ok_or_else(|| Error::InvalidInput("missing share code".to_string()))?;
     let contact_name = options
         .positionals
         .get(1)
         .cloned()
-        .unwrap_or_else(|| contact_name_from_email(&expected_email));
+        .unwrap_or_else(|| "contact".to_string());
     let expected_fingerprint = options
         .fingerprint
         .clone()
@@ -368,26 +367,27 @@ fn share_receive(args: &[String]) -> CliResult<()> {
         .unwrap_or_else(|| prompt_line("Fingerprint from trusted second channel: "))?;
     let expected_fingerprint = decode_fingerprint_hex(&expected_fingerprint)?;
     let pool = share_client_pool(&options)?;
-    let fetched = pool.fetch(&expected_email)?;
+    let fetched = pool.fetch(&share_code)?;
     let verification = fetched.email_verification.as_ref().ok_or_else(|| {
-        Error::InvalidInput("publisher email has not been verified by the share server".to_string())
+        Error::InvalidInput("publisher email has not been verified by the key server".to_string())
     })?;
-    if verification.email != expected_email || !verification.verified {
+    if !verification.verified {
         return Err(Error::InvalidInput(
-            "publisher email has not been verified by the share server".to_string(),
+            "publisher email has not been verified by the key server".to_string(),
         )
         .into());
     }
     let contact = lockbox_share_protocol::decode_contact_share(&fetched.payload)?;
     let computed_fingerprint = contact_fingerprint(
-        &expected_email,
+        &verification.email,
         &contact.public_key,
         &contact.signing_public_key,
     )
     .map_err(|_| Error::InvalidInput("invalid contact fingerprint fields".to_string()))?;
     if expected_fingerprint != computed_fingerprint {
         return Err(Error::InvalidInput(format!(
-            "contact fingerprint mismatch for {expected_email}; expected {}, computed {}",
+            "contact fingerprint mismatch for {}; expected {}, computed {}",
+            verification.email,
             format_hex_pairs(&expected_fingerprint),
             format_hex_pairs(&computed_fingerprint)
         ))
@@ -403,7 +403,8 @@ fn share_receive(args: &[String]) -> CliResult<()> {
     vault.store_trusted_recipient_signing_key(&contact_name, &signing_public)?;
     println!("contact={contact_name}");
     println!("identity={}", contact.identity);
-    println!("email={expected_email}");
+    println!("share_code={share_code}");
+    println!("email={}", verification.email);
     println!(
         "contact_fingerprint={}",
         format_hex_pairs(&computed_fingerprint)
@@ -425,15 +426,15 @@ fn share_receive(args: &[String]) -> CliResult<()> {
 
 fn share_delete(args: &[String]) -> CliResult<()> {
     let options = ShareCliOptions::parse(args)?;
-    let lookup = options.positionals.first().ok_or_else(|| {
-        Error::InvalidInput("missing publisher email address or share code".to_string())
+    let share_code = options.positionals.first().ok_or_else(|| {
+        Error::InvalidInput("missing share code".to_string())
     })?;
     let delete_token = options
         .positionals
         .get(1)
         .ok_or_else(|| Error::InvalidInput("missing delete token".to_string()))?;
     let delete_token = decode_hex(delete_token)?;
-    let deleted = share_client_pool(&options)?.delete(lookup, &delete_token)?;
+    let deleted = share_client_pool(&options)?.delete(share_code, &delete_token)?;
     println!("deleted={}", if deleted { "yes" } else { "no" });
     Ok(())
 }

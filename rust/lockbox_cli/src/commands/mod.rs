@@ -370,12 +370,12 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_share_transport_options(&mut args, sub);
             push_option(&mut args, sub, "fingerprint", "--fingerprint");
             push_flag(&mut args, sub, "overwrite", "--overwrite");
-            args.push(value(sub, "email"));
+            args.push(value(sub, "share-code"));
             push_optional(&mut args, sub, "contact-name");
         }
         "remove" | "delete" => {
             push_share_transport_options(&mut args, sub);
-            args.push(value(sub, "lookup"));
+            args.push(value(sub, "share-code"));
             args.push(value(sub, "delete-token"));
         }
         "sessions" => {
@@ -481,12 +481,12 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                         push_share_transport_options(&mut args, share_sub);
                         push_option(&mut args, share_sub, "fingerprint", "--fingerprint");
                         push_flag(&mut args, share_sub, "overwrite", "--overwrite");
-                        args.push(value(share_sub, "email"));
+                        args.push(value(share_sub, "share-code"));
                         push_optional(&mut args, share_sub, "contact-name");
                     }
                     "remove" | "rm" | "delete" => {
                         push_share_transport_options(&mut args, share_sub);
-                        args.push(value(share_sub, "lookup"));
+                        args.push(value(share_sub, "share-code"));
                         args.push(value(share_sub, "delete-token"));
                     }
                     _ => {

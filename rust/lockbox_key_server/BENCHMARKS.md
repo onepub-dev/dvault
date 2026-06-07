@@ -1,4 +1,4 @@
-# reVault Share Server Benchmarks
+# reVault Key Server Benchmarks
 
 Benchmarks were run on the local development host with the release binary.
 HTTP benchmarks use one binary `POST /v1/share` per TCP connection because the
@@ -10,7 +10,7 @@ keep-alive session.
 Command:
 
 ```bash
-/usr/bin/time -v target/release/lockbox-share-server \
+/usr/bin/time -v target/release/lockbox_key_server \
   bench-store \
   --state-dir /tmp/lockbox-share-store-bench-200k-compact-001 \
   --requests 200000 \
@@ -35,7 +35,7 @@ index stores hashes, offsets, lengths, expiry, and fetch state.
 Command:
 
 ```bash
-/usr/bin/time -v target/release/lockbox-share-server \
+/usr/bin/time -v target/release/lockbox_key_server \
   bench-http \
   --state-dir /tmp/lockbox-share-http-bench-compact-001 \
   --requests 50000 \
@@ -61,7 +61,7 @@ while staying well under the 100 MB target.
 Command:
 
 ```bash
-/usr/bin/time -v target/release/lockbox-share-server \
+/usr/bin/time -v target/release/lockbox_key_server \
   bench-http-fetch \
   --state-dir /tmp/lockbox-share-http-fetch-bench-001 \
   --requests 50000 \
@@ -88,7 +88,7 @@ consume and tombstone the pending shares.
 Command:
 
 ```bash
-/usr/bin/time -v target/release/lockbox-share-server \
+/usr/bin/time -v target/release/lockbox_key_server \
   bench-http-flow \
   --state-dir /tmp/lockbox-share-http-flow-bench-001 \
   --requests 50000 \
@@ -117,10 +117,9 @@ usage pattern. `live=0` confirms single-use shares are consumed after receipt.
 Command:
 
 ```bash
-/usr/bin/time -v target/release/lockbox-share-server \
+/usr/bin/time -v target/release/lockbox_key_server \
   bench-http-flow \
   --state-dir target/lockbox-share-http-flow-preload-1m-bucket-002 \
-  --share-code-digits 12 \
   --preload-shares 1000000 \
   --requests 50000 \
   --payload-bytes 512 \
@@ -196,7 +195,7 @@ Command:
 ```bash
 perf stat \
   -e cycles,instructions,context-switches,cpu-migrations,page-faults \
-  target/release/lockbox-share-server \
+  target/release/lockbox_key_server \
   bench-http \
   --state-dir /tmp/lockbox-share-http-perf-002 \
   --requests 50000 \
@@ -223,7 +222,7 @@ Fetch-path counter command:
 ```bash
 perf stat \
   -e cycles,instructions,context-switches,cpu-migrations,page-faults \
-  target/release/lockbox-share-server \
+  target/release/lockbox_key_server \
   bench-http-fetch \
   --state-dir /tmp/lockbox-share-http-fetch-perf-001 \
   --requests 50000 \
@@ -250,7 +249,7 @@ End-to-end flow counter command:
 ```bash
 perf stat \
   -e cycles,instructions,context-switches,cpu-migrations,page-faults \
-  target/release/lockbox-share-server \
+  target/release/lockbox_key_server \
   bench-http-flow \
   --state-dir /tmp/lockbox-share-http-flow-perf-001 \
   --requests 50000 \
@@ -295,7 +294,7 @@ compaction preserves live records
 Run:
 
 ```bash
-cargo test -p lockbox_share_server
+cargo test -p lockbox_key_server
 ```
 
 Current result:

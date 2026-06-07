@@ -13,6 +13,8 @@ const STATUS_ACTIVE: u8 = 1;
 const STATUS_STANDBY: u8 = 2;
 const STATUS_PROMOTED: u8 = 3;
 const STATUS_DISABLED: u8 = 4;
+const SHARE_CODE_SERVER_ID_ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+const SHARE_CODE_LEN: usize = 14;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClusterTopology {
@@ -238,10 +240,32 @@ pub fn decode_topology(bytes: &[u8]) -> Result<ClusterTopology, ClientError> {
 }
 
 pub fn share_code_owner_id(share_code: &str) -> Option<u8> {
-    share_code
-        .as_bytes()
-        .first()
-        .and_then(|byte| byte.is_ascii_digit().then_some(*byte - b'0'))
+    if share_code.len() != SHARE_CODE_LEN {
+        return None;
+    }
+    parse_share_code_server_id(*share_code.as_bytes().first()?)
+}
+
+pub fn share_code_locator(share_code: &str) -> Option<(u8, u8)> {
+    let bytes = share_code.as_bytes();
+    if bytes.len() != SHARE_CODE_LEN {
+        return None;
+    }
+    let owner_id = parse_share_code_server_id(*bytes.first()?)?;
+    let secondary_id = parse_share_code_server_id(*bytes.get(1)?)?;
+    Some((owner_id, secondary_id))
+}
+
+pub fn share_code_server_id_char(id: u8) -> Option<u8> {
+    SHARE_CODE_SERVER_ID_ALPHABET.get(id as usize).copied()
+}
+
+fn parse_share_code_server_id(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'z' => Some(byte - b'a' + 10),
+        _ => None,
+    }
 }
 
 pub fn write_topology_cache(
@@ -291,11 +315,11 @@ pub fn read_topology_cache(
 }
 
 fn validate_server_id(id: u8) -> Result<(), ClientError> {
-    if id <= 9 {
+    if id < SHARE_CODE_SERVER_ID_ALPHABET.len() as u8 {
         Ok(())
     } else {
         Err(ClientError::Topology(format!(
-            "server id must be a decimal digit from 0 to 9: {id}"
+            "server id must be an index 0..35 (0..9, a..z): {id}"
         )))
     }
 }

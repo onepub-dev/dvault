@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const LOG_ENV: &str = "LOCKBOX_SHARE_SERVER_LOG";
+const LOG_ENV: &str = "LOCKBOX_KEY_SERVER_LOG";
 
 pub fn server_log_path() -> PathBuf {
     if let Ok(path) = env::var(LOG_ENV) {
@@ -55,17 +55,17 @@ fn fallback_log_path() -> PathBuf {
 
 #[cfg(windows)]
 fn platform_log_destination() -> &'static str {
-    "Windows Event Log source reVault Share Server"
+    "Windows Event Log source reVault Key Server"
 }
 
 #[cfg(target_os = "macos")]
 fn platform_log_destination() -> &'static str {
-    "macOS system log source lockbox-share-server"
+    "macOS system log source lockbox_key_server"
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn platform_log_destination() -> &'static str {
-    "system log source lockbox-share-server"
+    "system log source lockbox_key_server"
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -79,7 +79,7 @@ fn write_platform_log(message: &str) -> std::io::Result<()> {
     use std::sync::Once;
 
     static INIT: Once = Once::new();
-    static IDENT: &[u8] = b"lockbox-share-server\0";
+    static IDENT: &[u8] = b"lockbox_key_server\0";
     static FORMAT: &[u8] = b"%s\0";
 
     let message = CString::new(message.replace('\0', "\\0")).map_err(std::io::Error::other)?;
@@ -110,7 +110,7 @@ fn write_platform_log(message: &str) -> std::io::Result<()> {
         DeregisterEventSource, RegisterEventSourceW, ReportEventW, EVENTLOG_INFORMATION_TYPE,
     };
 
-    let source = to_wide("reVault Share Server");
+    let source = to_wide("reVault Key Server");
     // SAFETY: `source` is a null-terminated UTF-16 string and the local
     // computer argument is intentionally null.
     let handle = unsafe { RegisterEventSourceW(null(), source.as_ptr()) };
@@ -158,9 +158,9 @@ fn platform_log_dir() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|_| env::var("APPDATA").map(PathBuf::from))
         .unwrap_or_else(|_| env::temp_dir())
-        .join("reVault")
+    .join("reVault")
         .join("Logs")
-        .join("ShareServer")
+        .join("KeyServer")
 }
 
 #[cfg(target_os = "macos")]
@@ -170,7 +170,7 @@ fn platform_log_dir() -> PathBuf {
         .join("Library")
         .join("Logs")
         .join("reVault")
-        .join("ShareServer")
+        .join("KeyServer")
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -183,12 +183,12 @@ fn platform_log_dir() -> PathBuf {
                 .unwrap_or_else(env::temp_dir)
         })
         .join("lockbox")
-        .join("share-server")
+        .join("key-server")
 }
 
 #[cfg(not(any(unix, windows)))]
 fn platform_log_dir() -> PathBuf {
-    env::temp_dir().join("lockbox").join("share-server")
+    env::temp_dir().join("lockbox").join("key-server")
 }
 
 #[cfg(unix)]
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn env_override_writes_file_log() {
         let path = env::temp_dir().join(format!(
-            "lockbox-share-server-log-test-{}.log",
+            "lockbox_key_server-log-test-{}.log",
             unix_time_millis()
         ));
         env::set_var(LOG_ENV, &path);

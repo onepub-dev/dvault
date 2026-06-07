@@ -5,11 +5,12 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use lockbox_key_server::{install, server, server_log, store};
 use lockbox_share_protocol::{ServerStatus, TopologyRoute, TopologyServer};
-use lockbox_share_server::install::{install_systemd, print_status, uninstall_systemd};
-use lockbox_share_server::server::run_server;
-use lockbox_share_server::server_log::log_server_event;
-use lockbox_share_server::store::{ServerConfig, ShareStore};
+use install::{install_systemd, print_status, uninstall_systemd};
+use server::{bench_http, bench_http_fetch, bench_http_flow, run_server};
+use server_log::log_server_event;
+use store::{ServerConfig, ShareStore};
 
 fn main() -> ExitCode {
     match run() {
@@ -43,19 +44,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some("bench-store") => {
             let config = config_from_args(args.collect())?;
-            lockbox_share_server::store::bench_store(config)?;
+            store::bench_store(config)?;
         }
         Some("bench-http") => {
             let config = config_from_args(args.collect())?;
-            lockbox_share_server::server::bench_http(config)?;
+            bench_http(config)?;
         }
         Some("bench-http-fetch") => {
             let config = config_from_args(args.collect())?;
-            lockbox_share_server::server::bench_http_fetch(config)?;
+            bench_http_fetch(config)?;
         }
         Some("bench-http-flow") => {
             let config = config_from_args(args.collect())?;
-            lockbox_share_server::server::bench_http_flow(config)?;
+            bench_http_flow(config)?;
         }
         Some("--help") | Some("-h") | Some("help") => print_help(),
         Some(other) => {
@@ -67,19 +68,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     println!("Usage:");
-    println!("  lockbox-share-server run [--config PATH] [--bind ADDR] [--state-dir PATH]");
-    println!("  lockbox-share-server install [--force-config]");
-    println!("  lockbox-share-server uninstall [--purge-data]");
-    println!("  lockbox-share-server status");
-    println!("  lockbox-share-server resync-peer [--config PATH] --peer-url URL");
-    println!("  lockbox-share-server bench-store [--state-dir PATH]");
-    println!("  lockbox-share-server bench-http [--state-dir PATH]");
-    println!("  lockbox-share-server bench-http-fetch [--state-dir PATH]");
-    println!("  lockbox-share-server bench-http-flow [--state-dir PATH]");
+    println!("  lockbox_key_server run [--config PATH] [--bind ADDR] [--state-dir PATH]");
+    println!("  lockbox_key_server install [--force-config]");
+    println!("  lockbox_key_server uninstall [--purge-data]");
+    println!("  lockbox_key_server status");
+    println!("  lockbox_key_server resync-peer [--config PATH] --peer-url URL");
+    println!("  lockbox_key_server bench-store [--state-dir PATH]");
+    println!("  lockbox_key_server bench-http [--state-dir PATH]");
+    println!("  lockbox_key_server bench-http-fetch [--state-dir PATH]");
+    println!("  lockbox_key_server bench-http-flow [--state-dir PATH]");
     println!();
     println!("Options:");
     println!("  --config PATH         Read server config file");
-    println!("  --server-id N          Server routing digit, 0..9, default 0");
+    println!("  --server-id N          Server routing id, 0..35 (0..9, a..z), default 0");
     println!("  --cluster-id ID        Public topology cluster id");
     println!("  --public-url URL       Public /v1/share URL for this server");
     println!("  --topology-version N   Public topology version");
@@ -90,7 +91,6 @@ fn print_help() {
     println!("  --peer-url URL        Peer /v1/replicate URL for resync-peer");
     println!("  --origin-epoch N      Local replication epoch");
     println!("  --promoted-owner N    Serve replicated shares for owner id N");
-    println!("  --share-code-digits N  Random code body length, clamped to 6..12");
     println!("  --requests N           Benchmark request count");
     println!("  --payload-bytes N      Benchmark payload size");
     println!("  --concurrency N        Benchmark concurrency");
@@ -148,10 +148,9 @@ fn config_from_args(args: Vec<String>) -> Result<ServerConfig, Box<dyn std::erro
             "--developer" => config.developer_mode = true,
             "--server-id" => {
                 index += 1;
-                config.server_id = args
-                    .get(index)
-                    .ok_or("missing value for --server-id")?
-                    .parse()?;
+                config.server_id = parse_server_id(
+                    args.get(index).ok_or("missing value for --server-id")?,
+                )?;
             }
             "--cluster-id" => {
                 index += 1;
@@ -242,13 +241,6 @@ fn config_from_args(args: Vec<String>) -> Result<ServerConfig, Box<dyn std::erro
                 config.benchmark_preload_shares = args
                     .get(index)
                     .ok_or("missing value for --preload-shares")?
-                    .parse()?;
-            }
-            "--share-code-digits" => {
-                index += 1;
-                config.share_code_digits = args
-                    .get(index)
-                    .ok_or("missing value for --share-code-digits")?
                     .parse()?;
             }
             "--compact-min-bytes" => {
@@ -343,10 +335,10 @@ fn apply_config_value(
     key: &str,
     value: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match key {
+        match key {
         "bind_addr" => config.bind_addr = value,
         "state_dir" => config.state_dir = PathBuf::from(value),
-        "server_id" => config.server_id = value.parse()?,
+        "server_id" => config.server_id = parse_server_id(&value)?,
         "cluster_id" => config.cluster_id = value,
         "public_url" => {
             config.public_url = if value.is_empty() { None } else { Some(value) };
@@ -359,8 +351,7 @@ fn apply_config_value(
         }
         "replication_peer_url" => config.replication_peer_urls.push(value),
         "origin_epoch" => config.origin_epoch = value.parse()?,
-        "promoted_owner" => config.promoted_owner_ids.push(value.parse()?),
-        "share_code_digits" => config.share_code_digits = value.parse()?,
+        "promoted_owner" => config.promoted_owner_ids.push(parse_server_id(&value)?),
         "compact_min_bytes" => config.compact_min_bytes = value.parse()?,
         "rate_limit_per_minute" => config.rate_limit_per_minute = value.parse()?,
         "rate_limit_burst" => config.rate_limit_burst = value.parse()?,
@@ -393,6 +384,7 @@ fn parse_topology_server(value: &str) -> Result<TopologyServer, Box<dyn std::err
     let (id, rest) = value
         .split_once('=')
         .ok_or("topology server must be ID=URL[,STATUS]")?;
+    let id = parse_server_id(id)?;
     let mut parts = rest.splitn(2, ',');
     let url = parts.next().unwrap_or_default().to_string();
     let status = match parts.next().unwrap_or("active") {
@@ -403,7 +395,7 @@ fn parse_topology_server(value: &str) -> Result<TopologyServer, Box<dyn std::err
         other => return Err(format!("unknown server status `{other}`").into()),
     };
     Ok(TopologyServer {
-        id: id.parse()?,
+        id,
         url,
         status,
     })
@@ -413,16 +405,42 @@ fn parse_topology_route(value: &str) -> Result<TopologyRoute, Box<dyn std::error
     let (owner_id, rest) = value
         .split_once('=')
         .ok_or("route must be OWNER=PRIMARY[,FAILOVER...]")?;
-    let ids = rest
-        .split(',')
-        .map(str::parse::<u8>)
-        .collect::<Result<Vec<_>, _>>()?;
-    let Some((primary_id, failover_ids)) = ids.split_first() else {
+    let mut ids = Vec::new();
+    for part in rest.split(',') {
+        ids.push(parse_server_id(part)?);
+    }
+    if ids.is_empty() {
         return Err("route must include a primary server id".into());
-    };
+    }
+    let (primary_id, failover_ids) = ids.split_first().unwrap();
     Ok(TopologyRoute {
-        owner_id: owner_id.parse()?,
+        owner_id: parse_server_id(owner_id)?,
         primary_id: *primary_id,
         failover_ids: failover_ids.to_vec(),
     })
+}
+
+fn parse_server_id(value: &str) -> Result<u8, Box<dyn std::error::Error>> {
+    if value.len() == 1 {
+        let id = match value.as_bytes().first().copied() {
+            Some(byte @ b'0'..=b'9') => byte - b'0',
+            Some(byte @ b'a'..=b'z') => byte - b'a' + 10,
+            _ => {
+                let id = value.parse::<u8>()?;
+                if id >= 36 {
+                    return Err(format!("server id must be 0..35: {id}").into());
+                }
+                return Ok(id);
+            }
+        };
+        if id >= 36 {
+            return Err(format!("server id must be 0..35: {id}").into());
+        }
+        return Ok(id);
+    }
+    let id = value.parse()?;
+    if id >= 36 {
+        return Err(format!("server id must be 0..35: {id}").into());
+    }
+    Ok(id)
 }

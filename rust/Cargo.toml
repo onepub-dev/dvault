@@ -5,6 +5,6 @@ members = [
     "lockbox_vault",
     "lockbox_cli",
     "lockbox_share_protocol",
-    "lockbox_share_server",
+    "lockbox_key_server",
 ]
 resolver = "2"

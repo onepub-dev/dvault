@@ -17,7 +17,8 @@ use lockbox_share_protocol::client::{HttpTransport, Transport};
 use lockbox_share_protocol::payload;
 use lockbox_share_protocol::protocol::{self, Operation, Reader, Status};
 use lockbox_share_protocol::{
-    encode_replication_request, share_code_owner_id, sign_replication_event, ClusterTopology,
+    encode_replication_request, share_code_locator, share_code_server_id_char, sign_replication_event,
+    ClusterTopology,
     ReplicationEvent, ReplicationEventKind, ReplicationRequest, ServerStatus, TopologyRoute,
     TopologyServer,
 };
@@ -40,6 +41,7 @@ const OUTBOX_EVENT: u16 = 1;
 const OUTBOX_ACK: u16 = 2;
 const REPLICATION_STATE_MAGIC: &[u8; 8] = b"LBSR2\0\0\0";
 const REPLICATION_STATE_PERSIST_INTERVAL: usize = 1024;
+const SHARE_CODE_BODY_DIGITS: usize = 12;
 
 type RecordHash = [u8; HASH_LEN];
 
@@ -80,7 +82,6 @@ pub struct ServerConfig {
     pub benchmark_concurrency: usize,
     pub benchmark_preload_shares: usize,
     pub max_fetches_per_share: u16,
-    pub share_code_digits: u8,
     pub compact_min_bytes: u64,
     pub index_cache_entries: usize,
     pub rate_limit_per_minute: u32,
@@ -94,7 +95,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             bind_addr: "127.0.0.1:8089".to_string(),
-            state_dir: PathBuf::from("/var/lib/lockbox-share-server"),
+            state_dir: PathBuf::from("/var/lib/lockbox-key-server"),
             server_id: 0,
             cluster_id: "default".to_string(),
             public_url: None,
@@ -115,7 +116,6 @@ impl Default for ServerConfig {
             benchmark_concurrency: 0,
             benchmark_preload_shares: 0,
             max_fetches_per_share: 8,
-            share_code_digits: 12,
             compact_min_bytes: 64 * 1024 * 1024,
             index_cache_entries: 65_536,
             rate_limit_per_minute: 120,
@@ -255,13 +255,38 @@ pub struct VerificationPage {
 
 impl ShareStore {
     pub fn open(mut config: ServerConfig) -> Result<Self, StoreError> {
+        const MAX_SERVER_ID: u8 = 35;
         if config.developer_mode {
-            config.state_dir = std::env::temp_dir().join("lockbox-share-server-dev");
+            config.state_dir = std::env::temp_dir().join("lockbox-key-server-dev");
         }
-        if config.server_id > 9 {
+        if config.server_id > MAX_SERVER_ID {
             return Err(StoreError::Config(
-                "server id must be a decimal digit from 0 to 9".to_string(),
+                "server id must be an index 0..35 (0..9, a..z)".to_string(),
             ));
+        }
+        for promoted_owner_id in &config.promoted_owner_ids {
+            if *promoted_owner_id > MAX_SERVER_ID {
+                return Err(StoreError::Config(
+                    "promoted owner id must be an index 0..35 (0..9, a..z)".to_string(),
+                ));
+            }
+        }
+        for topology_server in &config.topology_servers {
+            if topology_server.id > MAX_SERVER_ID {
+                return Err(StoreError::Config(
+                    "topology server id must be an index 0..35 (0..9, a..z)".to_string(),
+                ));
+            }
+        }
+        for topology_route in &config.topology_routes {
+            if topology_route.owner_id > MAX_SERVER_ID
+                || topology_route.primary_id > MAX_SERVER_ID
+                || topology_route.failover_ids.iter().any(|id| *id > MAX_SERVER_ID)
+            {
+                return Err(StoreError::Config(
+                    "topology route id must be an index 0..35 (0..9, a..z)".to_string(),
+                ));
+            }
         }
         fs::create_dir_all(&config.state_dir)?;
         let bucket_dir = config.state_dir.join("index");
@@ -418,8 +443,8 @@ impl ShareStore {
         let result = (|| {
             let mut reader = Reader::new(payload);
             reader.message_version()?;
-            let lookup = reader.string()?;
-            self.fetch_by_lookup(&lookup)
+            let share_code = reader.string()?;
+            self.fetch(&share_code)
         })();
         match result {
             Ok(fetched) => {
@@ -444,9 +469,9 @@ impl ShareStore {
         let result = (|| {
             let mut reader = Reader::new(payload);
             reader.message_version()?;
-            let lookup = reader.string()?;
+            let share_code = reader.string()?;
             let token = reader.bytes()?;
-            self.delete_by_lookup(&lookup, &token)
+            self.delete(&share_code, &token)
         })();
         match result {
             Ok(deleted) => {
@@ -621,16 +646,13 @@ impl ShareStore {
     }
 
     fn resolve_share_lookup(&self, lookup: &str) -> Result<String, StoreError> {
-        if !lookup.contains('@') {
-            return Ok(lookup.to_string());
+        if lookup.is_empty() {
+            return Err(StoreError::NotFound);
         }
-        let email = normalize_verification_email(lookup)?;
-        self.email_index
-            .lock()
-            .unwrap()
-            .get(&email)
-            .cloned()
-            .ok_or(StoreError::NotFound)
+        if share_code_locator(lookup).is_none() {
+            return Err(StoreError::NotFound);
+        }
+        Ok(lookup.to_string())
     }
 
     fn index_contact_email(&self, email: Option<&str>, share_code: &str) {
@@ -877,11 +899,7 @@ impl ShareStore {
     }
 
     pub fn fetch_by_lookup(&self, lookup: &str) -> Result<FetchedShare, StoreError> {
-        let share_code = self.resolve_share_lookup(lookup)?;
-        if lookup.contains('@') && !self.is_email_verified_for_share(&share_code, lookup)? {
-            return Err(StoreError::EmailUnverified);
-        }
-        self.fetch(&share_code)
+        self.fetch(lookup)
     }
 
     pub fn verify_email(&self, share_code: &str, token: &str) -> VerificationPage {
@@ -937,8 +955,7 @@ impl ShareStore {
     }
 
     pub fn delete_by_lookup(&self, lookup: &str, delete_token: &[u8]) -> Result<bool, StoreError> {
-        let share_code = self.resolve_share_lookup(lookup)?;
-        self.delete(&share_code, delete_token)
+        self.delete(lookup, delete_token)
     }
 
     pub fn apply_replication_payload(&self, payload: &[u8]) -> Result<bool, StoreError> {
@@ -1130,10 +1147,12 @@ impl ShareStore {
     }
 
     fn can_serve_share_code(&self, share_code: &str) -> bool {
-        let Some(owner_id) = share_code_owner_id(share_code) else {
+        let Some((owner_id, secondary_id)) = share_code_locator(share_code) else {
             return false;
         };
-        owner_id == self.config.server_id || self.config.promoted_owner_ids.contains(&owner_id)
+        owner_id == self.config.server_id
+            || secondary_id == self.config.server_id
+            || self.config.promoted_owner_ids.contains(&owner_id)
     }
 
     fn enqueue_replication(&self, kind: ReplicationEventKind) {
@@ -1202,9 +1221,9 @@ impl ShareStore {
         }
     }
 
-    pub fn status_document(&self) -> lockbox_share_protocol::ShareServerStatus {
+    pub fn status_document(&self) -> lockbox_share_protocol::KeyServerStatus {
         let stats = self.stats();
-        lockbox_share_protocol::ShareServerStatus {
+        lockbox_share_protocol::KeyServerStatus {
             created: stats.created,
             fetched: stats.fetched,
             deleted: stats.deleted,
@@ -1314,15 +1333,44 @@ impl ShareStore {
         Ok(report)
     }
 
+    fn share_code_locator(&self) -> (u8, u8) {
+        let primary_id = self.config.server_id;
+        let secondary_id = self
+            .config
+            .topology_routes
+            .iter()
+            .find(|route| route.owner_id == primary_id)
+            .and_then(|route| route.failover_ids.first().copied())
+            .or_else(|| {
+                self.config
+                    .topology_servers
+                    .iter()
+                    .find(|server| server.id != primary_id)
+                    .map(|server| server.id)
+            })
+            .unwrap_or(primary_id);
+        (primary_id, secondary_id)
+    }
+
     fn generate_unique_code(&self) -> Result<String, StoreError> {
-        let digits = self.config.share_code_digits.clamp(6, 12) as usize;
-        let space = 10_u64.pow(digits as u32);
+        let space = 10_u64.pow(SHARE_CODE_BODY_DIGITS as u32);
+        let (primary_id, secondary_id) = self.share_code_locator();
+        let primary = share_code_server_id_char(primary_id)
+            .ok_or_else(|| StoreError::Config("invalid primary server id".to_string()))?;
+        let secondary = share_code_server_id_char(secondary_id)
+            .ok_or_else(|| StoreError::Config("invalid secondary server id".to_string()))?;
         for _ in 0..100 {
             let mut random = [0_u8; 8];
             getrandom(&mut random)
                 .map_err(|err| StoreError::Io(std::io::Error::other(err.to_string())))?;
             let value = u64::from_be_bytes(random) % space;
-            let code = format!("{}{value:0digits$}", self.config.server_id);
+            let code = format!(
+                "{}{}{:0width$}",
+                primary as char,
+                secondary as char,
+                value,
+                width = SHARE_CODE_BODY_DIGITS
+            );
             let hash = self.code_hash(&code);
             let shard = &self.shards[self.shard_for(&hash)];
             if !shard.index.lock().unwrap().contains_key(&hash) {
@@ -1905,7 +1953,7 @@ fn keyed_hash(secret: &[u8; 32], domain: &[u8], value: &[u8]) -> RecordHash {
 
 fn stable_hash(domain: &[u8], value: &[u8]) -> RecordHash {
     let mut hasher = Sha256::new();
-    hasher.update(b"lockbox-share-server-stable-hash-v1");
+    hasher.update(b"lockbox-key-server-stable-hash-v1");
     hasher.update(domain);
     hasher.update(value);
     let full_hash: [u8; 32] = hasher.finalize().into();
@@ -2301,16 +2349,16 @@ mod tests {
         })
         .unwrap();
 
-        let second = replication_put_event(2, "0123456789002", "second");
-        let first = replication_put_event(1, "0123456789001", "first");
+        let second = replication_put_event(2, "00123456789002", "second");
+        let first = replication_put_event(1, "00123456789001", "first");
 
         assert!(store.apply_replication_event(second.clone()).unwrap());
         assert!(store.apply_replication_event(first.clone()).unwrap());
         assert!(!store.apply_replication_event(second).unwrap());
 
         assert_eq!(store.stats().live, 2);
-        assert!(store.fetch("0123456789001").is_ok());
-        assert!(store.fetch("0123456789002").is_ok());
+        assert!(store.fetch("00123456789001").is_ok());
+        assert!(store.fetch("00123456789002").is_ok());
 
         let _ = fs::remove_dir_all(state_dir);
     }
@@ -2342,8 +2390,8 @@ mod tests {
             store_b.delete_token_hash(b"replicated-delete-token")
         );
         assert_ne!(
-            store_a.code_hash("0123456789012"),
-            store_b.code_hash("0123456789012")
+            store_a.code_hash("00123456789012"),
+            store_b.code_hash("00123456789012")
         );
 
         let _ = fs::remove_dir_all(state_a);

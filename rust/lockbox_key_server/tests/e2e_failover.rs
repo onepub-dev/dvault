@@ -11,8 +11,8 @@ use lockbox_share_protocol::{
     HttpTransport, ReplicationEvent, ReplicationEventKind, ReplicationRequest, ServerStatus,
     ShareClient, ShareClientPool, TopologyRoute, TopologyServer, Transport,
 };
-use lockbox_share_server::server::run_listener;
-use lockbox_share_server::store::{ServerConfig, ShareStore};
+use lockbox_key_server::server::run_listener;
+use lockbox_key_server::store::{ServerConfig, ShareStore};
 
 const REPLICATION_TOKEN: &str = "e2e-replication-token";
 
@@ -421,7 +421,6 @@ fn config(
         benchmark_concurrency: 0,
         benchmark_preload_shares: 0,
         max_fetches_per_share: 64,
-        share_code_digits: 12,
         compact_min_bytes: 1024 * 1024,
         index_cache_entries: 100_000,
         rate_limit_per_minute: 0,

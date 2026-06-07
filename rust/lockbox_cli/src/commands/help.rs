@@ -1008,19 +1008,19 @@ fn vault_command(verbose: bool) -> Command {
         )
         .subcommand(
             Command::new("share")
-                .about("Share vault identity contact details through a share server.")
+                .about("Share vault identity contact details through a key server.")
                 .disable_help_subcommand(true)
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault publish\n  lockbox vault receive publisher@example.com\n  lockbox vault share remove publisher@example.com <delete-token>",
-                    "Context:\n  Vault share publishes or receives typed contact-share payloads through the configured binary share server protocol. The publisher verifies their identity email with the share server, and the receiver verifies the printed fingerprint over a second channel they initiate.",
+                    "Examples:\n  lockbox vault publish\n  lockbox vault share receive <share-code>\n  lockbox vault share remove <share-code> <delete-token>",
+                    "Context:\n  Vault share publishes or receives typed contact-share payloads through the configured binary key server protocol. The publisher verifies their identity email with the key server, and the receiver verifies the printed fingerprint over a second channel they initiate.",
                 ))
                 .subcommand_required(true)
                 .arg_required_else_help(true)
                 .subcommand(
                     Command::new("publish")
                         .about("Publish one vault identity public key as a share.")
-                        .arg(share_server_arg())
+                        .arg(key_server_arg())
                         .arg(share_topology_arg())
                         .arg(optional("identity", "Vault identity name. Defaults to default."))
                         .arg(
@@ -1043,15 +1043,15 @@ fn vault_command(verbose: bool) -> Command {
                         .visible_alias("recieve")
                         .after_help(verbose_help(
                             verbose,
-                            "Examples:\n  lockbox vault receive publisher@example.com\n  lockbox vault share receive publisher@example.com alice",
+                            "Examples:\n  lockbox vault receive <share-code>\n  lockbox vault share receive <share-code> alice",
                             concat!(
                                 "Context:\n  Receive saves the shared public key and signing key as a local contact. ",
-                                "The share server must have verified the publisher email first. Enter the ",
+                                "The key server must have verified the publisher email first. Enter the ",
                                 "contact fingerprint received through a second trusted channel, such as a phone ",
                                 "call you initiated.",
                             ),
                         ))
-                        .arg(share_server_arg())
+                        .arg(key_server_arg())
                         .arg(share_topology_arg())
                         .arg(
                             Arg::new("fingerprint")
@@ -1065,7 +1065,7 @@ fn vault_command(verbose: bool) -> Command {
                                 .action(ArgAction::SetTrue)
                                 .help("Replace an existing contact."),
                         )
-                        .arg(required("email", "Publisher email address."))
+                        .arg(required("share-code", "Published share code."))
                         .arg(optional("contact-name", "Contact name to save.")),
                 )
                 .subcommand(
@@ -1073,16 +1073,16 @@ fn vault_command(verbose: bool) -> Command {
                         .about("Remove a pending share with its delete token.")
                         .alias("delete")
                         .visible_alias("rm")
-                        .arg(share_server_arg())
+                        .arg(key_server_arg())
                         .arg(share_topology_arg())
-                        .arg(required("lookup", "Publisher email address or share code."))
+                        .arg(required("share-code", "Published share code."))
                         .arg(required("delete-token", "Delete token printed by publish.")),
                 ),
         )
         .subcommand(
             Command::new("publish")
                 .about("Publish one vault identity public key by verified email.")
-                .arg(share_server_arg())
+                .arg(key_server_arg())
                 .arg(share_topology_arg())
                 .arg(optional("identity", "Vault identity name. Defaults to default."))
                 .arg(
@@ -1100,10 +1100,10 @@ fn vault_command(verbose: bool) -> Command {
         )
         .subcommand(
             Command::new("receive")
-                .about("Receive a verified public key by publisher email.")
+                .about("Receive a verified public key by share code.")
                 .visible_alias("recieve")
                 .visible_alias("fetch")
-                .arg(share_server_arg())
+                .arg(key_server_arg())
                 .arg(share_topology_arg())
                 .arg(
                     Arg::new("fingerprint")
@@ -1117,16 +1117,16 @@ fn vault_command(verbose: bool) -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Replace an existing contact."),
                 )
-                .arg(required("email", "Publisher email address."))
+                .arg(required("share-code", "Published share code."))
                 .arg(optional("contact-name", "Contact name to save.")),
         )
         .subcommand(
             Command::new("remove")
                 .about("Remove a pending published key with its delete token.")
                 .alias("delete")
-                .arg(share_server_arg())
+                .arg(key_server_arg())
                 .arg(share_topology_arg())
-                .arg(required("lookup", "Publisher email address or share code."))
+                .arg(required("share-code", "Published share code."))
                 .arg(required("delete-token", "Delete token printed by publish.")),
         )
         .subcommand(
@@ -1164,18 +1164,18 @@ fn vault_command(verbose: bool) -> Command {
         )
 }
 
-fn share_server_arg() -> Arg {
+fn key_server_arg() -> Arg {
     Arg::new("server")
         .long("server")
         .value_name("URL")
-        .help("Share server /v1/share URL or host.")
+        .help("Key server /v1/share URL or host.")
 }
 
 fn share_topology_arg() -> Arg {
     Arg::new("topology-url")
         .long("topology-url")
         .value_name("URL")
-        .help("Share server /v1/topology URL.")
+        .help("Key server /v1/topology URL.")
 }
 
 fn vault_identity_command(verbose: bool) -> Command {
@@ -1234,7 +1234,7 @@ fn vault_identity_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox vault identity email alice@example.com\n  lockbox vault identity email laptop alice@example.com",
-                    "Context:\n  Publish requires an identity email address. The share server sends a verification link to this address before receivers can fetch the public key by email.",
+                    "Context:\n  Publish requires an identity email address. The key server sends a verification link to this address before receivers can fetch the public key by email.",
                 ))
                 .arg(
                     Arg::new("args")

@@ -1,4 +1,4 @@
-# Redundant Share Server Design
+# Redundant Key Server Design
 
 ## Goals
 
@@ -92,10 +92,10 @@ TopologyRoute {
 }
 ```
 
-The server operator configures this topology on the share servers:
+The operator configures this topology on the key servers:
 
 ```yaml
-share_servers:
+key_servers:
   - id: 0
     url: https://keyshare0.onepub.dev/v1/share
   - id: 1

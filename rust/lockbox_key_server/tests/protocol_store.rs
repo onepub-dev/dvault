@@ -15,7 +15,7 @@ use lockbox_share_protocol::{
     encode_replication_request, sign_replication_event, ReplicationEvent, ReplicationEventKind,
     ReplicationRequest, ServerStatus, TopologyRoute, TopologyServer,
 };
-use lockbox_share_server::store::{ServerConfig, ShareStore, StoreError};
+use lockbox_key_server::store::{ServerConfig, ShareStore, StoreError};
 
 fn contact_payload(label: &str) -> Vec<u8> {
     lockbox_share_protocol::payload::encode_contact_share(
@@ -160,7 +160,7 @@ fn store_fetches_verified_share_by_publisher_email_without_share_code() {
     assert_status(&response, Status::Success);
     assert!(matches!(
         store.fetch(&create.share_code),
-        Err(lockbox_share_server::store::StoreError::NotFound)
+        Err(lockbox_key_server::store::StoreError::NotFound)
     ));
 }
 
@@ -268,10 +268,9 @@ fn verification_query_parts(url: &str) -> (String, String) {
 }
 
 #[test]
-fn share_codes_use_configured_digit_count() {
+fn share_codes_use_fixed_digit_count() {
     let (_guard, mut config) = temp_config("code-digits");
     config.server_id = 7;
-    config.share_code_digits = 10;
     let store = ShareStore::open(config).unwrap();
     let payload = contact_payload("code-digits");
     let create = store
@@ -282,18 +281,19 @@ fn share_codes_use_configured_digit_count() {
         )
         .unwrap();
 
-    assert_eq!(create.share_code.len(), 11);
-    assert!(create.share_code.starts_with('7'));
+    assert_eq!(create.share_code.len(), 14);
+    assert!(create.share_code.starts_with("77"));
     assert!(create
         .share_code
         .chars()
+        .skip(2)
         .all(|character| character.is_ascii_digit()));
 }
 
 #[test]
 fn store_rejects_invalid_server_id() {
     let (_guard, mut config) = temp_config("bad-server-id");
-    config.server_id = 10;
+    config.server_id = 32;
     match ShareStore::open(config) {
         Ok(_) => panic!("invalid server id should be rejected"),
         Err(err) => assert!(err.to_string().contains("server id")),
@@ -344,7 +344,7 @@ fn replicated_share_is_served_only_after_owner_promotion() {
         origin_epoch: 1,
         origin_sequence: 1,
         kind: ReplicationEventKind::PutShare {
-            share_code: "0123456789012".to_string(),
+            share_code: "00123456789012".to_string(),
             delete_token_hash: vec![9_u8; 16],
             payload: payload.clone(),
             contact_email: Some("replica-promote@example.com".to_string()),
@@ -361,7 +361,7 @@ fn replicated_share_is_served_only_after_owner_promotion() {
     assert_eq!(request.operation, Operation::Replicate);
     assert!(store.apply_replication_payload(&request.payload).unwrap());
 
-    assert!(store.fetch("0123456789012").is_err());
+    assert!(store.fetch("00123456789012").is_err());
 
     let (_guard, mut config) = temp_config("replica-promoted");
     config.server_id = 1;
@@ -373,7 +373,7 @@ fn replicated_share_is_served_only_after_owner_promotion() {
         origin_epoch: 1,
         origin_sequence: 1,
         kind: ReplicationEventKind::PutShare {
-            share_code: "0123456789012".to_string(),
+            share_code: "00123456789012".to_string(),
             delete_token_hash: vec![9_u8; 16],
             payload: payload.clone(),
             contact_email: Some("replica-promote@example.com".to_string()),
@@ -388,7 +388,7 @@ fn replicated_share_is_served_only_after_owner_promotion() {
     });
     let request = decode_request(&request, 4096).unwrap();
     assert!(store.apply_replication_payload(&request.payload).unwrap());
-    assert_eq!(store.fetch("0123456789012").unwrap().payload, payload);
+    assert_eq!(store.fetch("00123456789012").unwrap().payload, payload);
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn replication_sequence_is_idempotent_after_restart() {
         origin_epoch: 2,
         origin_sequence: 7,
         kind: ReplicationEventKind::PutShare {
-            share_code: "0123456789012".to_string(),
+            share_code: "00123456789012".to_string(),
             delete_token_hash: vec![9_u8; 16],
             payload: payload.clone(),
             contact_email: Some("replica-idempotent@example.com".to_string()),
@@ -423,7 +423,7 @@ fn replication_sequence_is_idempotent_after_restart() {
     }
     let store = ShareStore::open(config).unwrap();
     assert!(!store.apply_replication_payload(&request.payload).unwrap());
-    assert_eq!(store.fetch("0123456789012").unwrap().payload, payload);
+    assert_eq!(store.fetch("00123456789012").unwrap().payload, payload);
 }
 
 #[test]
@@ -684,7 +684,7 @@ fn client_api_can_share_fetch_and_delete() {
     let addr = listener.local_addr().unwrap();
     let server_store = Arc::clone(&store);
     thread::spawn(move || {
-        let _ = lockbox_share_server::server::run_listener(listener, server_store);
+        let _ = lockbox_key_server::server::run_listener(listener, server_store);
     });
     thread::sleep(Duration::from_millis(50));
 
@@ -734,7 +734,7 @@ fn assert_status(response: &[u8], status: Status) {
 fn temp_config(name: &str) -> (TempGuard, ServerConfig) {
     let mut path = std::env::temp_dir();
     path.push(format!(
-        "lockbox-share-server-{name}-{}",
+        "lockbox-key-server-{name}-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -764,7 +764,6 @@ fn temp_config(name: &str) -> (TempGuard, ServerConfig) {
         benchmark_concurrency: 0,
         benchmark_preload_shares: 0,
         max_fetches_per_share: 8,
-        share_code_digits: 12,
         compact_min_bytes: 1,
         index_cache_entries: 65_536,
         rate_limit_per_minute: 120,

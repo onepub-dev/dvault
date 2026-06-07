@@ -1,16 +1,16 @@
 [package]
-name = "lockbox_share_server"
+name = "lockbox_key_server"
 version = "0.1.0"
 edition = "2021"
 license-file = "../../LICENSE"
-description = "High-throughput reVault contact share rendezvous server"
+description = "High-throughput reVault key rendezvous server"
 
 [lib]
-name = "lockbox_share_server"
+name = "lockbox_key_server"
 path = "src/lib.rs"
 
 [[bin]]
-name = "lockbox-share-server"
+name = "lockbox_key_server"
 path = "src/main.rs"
 
 [dependencies]

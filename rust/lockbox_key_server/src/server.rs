@@ -23,7 +23,7 @@ pub fn run_server(bind: &str, store: Arc<ShareStore>) -> std::io::Result<()> {
 
 pub fn run_listener(listener: TcpListener, store: Arc<ShareStore>) -> std::io::Result<()> {
     let local_addr = listener.local_addr()?;
-    log_server_event(format!("lockbox-share-server listening on {local_addr}"));
+    log_server_event(format!("lockbox_key_server listening on {local_addr}"));
     let purge_store = Arc::clone(&store);
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(1));

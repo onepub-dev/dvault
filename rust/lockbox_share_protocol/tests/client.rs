@@ -263,13 +263,67 @@ fn client_pool_prefers_server_id_from_share_code_prefix() {
     let client =
         ShareClientPool::from_transports(vec![server_0.clone(), server_1.clone()]).unwrap();
 
-    let fetched = client.fetch("1123456789012").unwrap();
+    let fetched = client.fetch("11123456789012").unwrap();
     assert_eq!(
         fetched.payload_type,
         lockbox_share_protocol::PayloadType::ContactShare
     );
     assert_eq!(server_0.calls(), 0);
     assert_eq!(server_1.calls(), 1);
+}
+
+#[test]
+fn client_pool_prefers_locator_primary_then_secondary() {
+    let payload = lockbox_share_protocol::encode_contact_share(
+        "cluster@example.com",
+        b"public-key-material",
+        b"signing-public-key-material",
+        &[1_u8; 32],
+        &[2_u8; 24],
+        1,
+        2,
+    );
+    let mut error = Vec::new();
+    protocol::put_u16(&mut error, protocol::MESSAGE_VERSION);
+    protocol::put_u16(&mut error, Status::ShareNotFound as u16);
+    protocol::put_string(&mut error, "share not found");
+    let mut fetch_response = Vec::new();
+    protocol::put_u16(&mut fetch_response, protocol::MESSAGE_VERSION);
+    protocol::put_bytes(&mut fetch_response, &payload);
+    protocol::put_u64(&mut fetch_response, 2);
+    protocol::put_u16(&mut fetch_response, 0);
+    let server_0 = MockTransport::new(vec![protocol::encode_response(
+        Operation::Fetch,
+        Status::ShareNotFound,
+        &error,
+    )]);
+    let server_1 = MockTransport::new(vec![protocol::encode_response(
+        Operation::Fetch,
+        Status::ShareNotFound,
+        &error,
+    )]);
+    let server_2 = MockTransport::new(vec![protocol::encode_response(
+        Operation::Fetch,
+        Status::Success,
+        &fetch_response,
+    )]);
+
+    let client = ShareClientPool::from_clients_with_ids(
+        vec![
+            ShareClient::from_transport(server_0.clone()),
+            ShareClient::from_transport(server_1.clone()),
+            ShareClient::from_transport(server_2.clone()),
+        ],
+        vec![0, 1, 2],
+        Vec::new(),
+    )
+    .unwrap();
+
+    let fetched = client.fetch("12000000000000").unwrap();
+    assert_eq!(fetched.remaining_fetches, 0);
+    assert_eq!(server_0.calls(), 0);
+    assert_eq!(server_1.calls(), 1);
+    assert_eq!(server_2.calls(), 1);
 }
 
 #[test]
@@ -323,7 +377,7 @@ fn client_pool_uses_topology_failover_order() {
     )
     .unwrap();
 
-    assert_eq!(client.fetch("1123456789012").unwrap().payload, payload);
+    assert_eq!(client.fetch("11123456789012").unwrap().payload, payload);
     assert_eq!(server_0.calls(), 0);
     assert_eq!(server_1.calls(), 1);
     assert_eq!(server_2.calls(), 1);
@@ -357,7 +411,7 @@ fn topology_binary_round_trips_and_validates_routes() {
     let decoded = lockbox_share_protocol::decode_topology(&bytes).unwrap();
     assert_eq!(decoded, topology);
     assert_eq!(
-        decoded.urls_for_share_code("0123456789012"),
+        decoded.urls_for_share_code("00123456789012"),
         vec![
             "http://share0.example/v1/share".to_string(),
             "http://share1.example/v1/share".to_string()
@@ -397,7 +451,7 @@ fn replication_request_round_trips_binary_events() {
         origin_epoch: 3,
         origin_sequence: 4,
         kind: ReplicationEventKind::PutShare {
-            share_code: "2123456789012".to_string(),
+            share_code: "21123456789012".to_string(),
             delete_token_hash: vec![9_u8; 16],
             payload: lockbox_share_protocol::encode_contact_share(
                 "replica@example.com",

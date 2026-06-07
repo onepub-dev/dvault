@@ -1,8 +1,8 @@
-# reVault Share Server Design
+# reVault Key Server Design
 
 ## Purpose
 
-The share server is a high-throughput rendezvous service for short-lived
+The key server is a high-throughput rendezvous service for short-lived
 reVault contact sharing requests. It helps one client publish a candidate
 public key payload and another client fetch that payload by share code.
 
@@ -26,7 +26,7 @@ key change -> pending changed key requiring verification
 The server lives in its own workspace crate:
 
 ```text
-lockbox_share_server/
+lockbox_key_server/
 ```
 
 This keeps HTTP, async runtime, rate limiting, deployment, and purge logic out
@@ -89,7 +89,7 @@ the validated `PayloadType` so higher layers can dispatch to contact-add,
 signed-replacement, or unsigned-replacement logic.
 
 The first client implementation uses blocking `std::net::TcpStream` for
-`http://` endpoints because the share server currently implements plain HTTP
+`http://` endpoints because the key server currently implements plain HTTP
 itself. Production TLS can be provided by an edge proxy, or by adding a TLS
 transport implementation without changing the binary protocol or payload
 validators.
@@ -257,7 +257,7 @@ does not validate identity claims, public key ownership, replacement
 continuity, or contact trust state.
 
 Validating structure does not make a trust assertion. It only prevents the
-share server from being a generic blob relay. The server can reject payloads
+key server from being a generic blob relay. The server can reject payloads
 that are not exactly one of the supported Lockbox share message formats while
 still treating accepted payloads as untrusted candidate material.
 
@@ -658,10 +658,10 @@ daemon on Linux hosts.
 Recommended commands:
 
 ```text
-lockbox-share-server install
-lockbox-share-server uninstall
-lockbox-share-server status
-lockbox-share-server run
+lockbox_key_server install
+lockbox_key_server uninstall
+lockbox_key_server status
+lockbox_key_server run
 ```
 
 `install` should:
@@ -688,10 +688,10 @@ group: lockbox-share
 Default paths:
 
 ```text
-/etc/lockbox/share-server.toml
-/var/lib/lockbox-share-server/
-/var/cache/lockbox-share-server/
-/var/log/lockbox-share-server/
+/etc/lockbox/key-server.toml
+/var/lib/lockbox-key-server/
+/var/cache/lockbox-key-server/
+/var/log/lockbox-key-server/
 ```
 
 The binary should not require a separate package manager script to be usable.
@@ -702,7 +702,7 @@ Example systemd unit:
 
 ```text
 [Unit]
-Description=reVault Share Rendezvous Server
+Description=reVault Key Rendezvous Server
 After=network-online.target
 Wants=network-online.target
 
@@ -710,8 +710,8 @@ Wants=network-online.target
 Type=simple
 User=lockbox-share
 Group=lockbox-share
-ExecStart=/usr/local/bin/lockbox-share-server run \
-  --config /etc/lockbox/share-server.toml
+ExecStart=/usr/local/bin/lockbox_key_server run \
+  --config /etc/lockbox/key-server.toml
 Restart=always
 RestartSec=2
 NoNewPrivileges=true
@@ -722,9 +722,9 @@ PrivateDevices=true
 RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
-ReadWritePaths=/var/lib/lockbox-share-server \
-  /var/cache/lockbox-share-server \
-  /var/log/lockbox-share-server
+ReadWritePaths=/var/lib/lockbox-key-server \
+  /var/cache/lockbox-key-server \
+  /var/log/lockbox-key-server
 LimitNOFILE=1048576
 
 [Install]
@@ -733,7 +733,7 @@ WantedBy=multi-user.target
 
 The install command should preserve existing configuration and secrets. It may
 replace the unit file when the generated unit changes, but it must not overwrite
-`/etc/lockbox/share-server.toml` unless an explicit `--force-config` option is
+`/etc/lockbox/key-server.toml` unless an explicit `--force-config` option is
 provided.
 
 `uninstall` should stop and disable the service, remove the systemd unit, and
