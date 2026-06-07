@@ -280,7 +280,7 @@ fn form_definitions_and_records_flow() {
     let lockbox = dir.join("forms.lbox");
     let lockbox = lockbox.to_string_lossy().to_string();
 
-    run(
+    let define = run_output(
         bin,
         &[
             "form",
@@ -297,6 +297,13 @@ fn form_definitions_and_records_flow() {
             "site:url",
         ],
     );
+    assert_success(&define);
+    let define = String::from_utf8_lossy(&define.stdout);
+    assert!(define.contains("Form definition saved."));
+    assert!(define.contains("alias: login"));
+    assert!(define.contains("definition_id:"));
+    assert!(define.contains("revision: 1"));
+    assert!(define.contains("fields: 3"));
     run(
         bin,
         &[

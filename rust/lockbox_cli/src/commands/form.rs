@@ -69,10 +69,12 @@ fn define(args: &[String], access: &Access) -> CliResult<()> {
         lb.define_form(alias, &name, fields)?
     };
     lb.commit()?;
-    println!(
-        "{}\t{}\t{}\t{}",
-        definition.alias, definition.type_id, definition.revision, definition.name
-    );
+    println!("Form definition saved.");
+    println!("  alias: {}", definition.alias);
+    println!("  definition_id: {}", definition.type_id);
+    println!("  revision: {}", definition.revision);
+    println!("  name: {}", definition.name);
+    println!("  fields: {}", definition.fields.len());
     Ok(())
 }
 
