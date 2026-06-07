@@ -342,71 +342,48 @@ metadata should be rejected or ignored unless explicitly supported later.
 Inspect a damaged lockbox:
 
 ```bash
-lockbox recover damaged.lbox
+lockbox recover --report damaged.lbox
 ```
 
-`recover` is a read-only inspection command. It should report the state of what
-it found without implying that files have already been copied out.
-
-Default output should be concise. It should count intact files and focus detail
-on damaged items:
+`recover --report` is read-only. It scans the lockbox and reports what can be
+read without writing a new file. Use `--format table` or `--format json` when
+you need machine-readable output.
 
 ```text
-Recovery report for damaged.lbox
-
-Summary:
-  Intact files: 128442
-  Partial files: 3
-  Metadata-only files: 1
-  Corrupt pages: 7
-  Latest TOC: damaged
-
-Partial:
-  /photos/c.jpg
-    missing or corrupt chunks
-
-Metadata only:
-  /archive/old.bin
-    file name and size found, payload missing
-
-Corrupt:
-  page at offset 184320
-  latest TOC
+field                value
+intact_files         128442
+partial_files        3
+corrupt_records      7
+toc_recovered        false
+env_recovered        true
+env_count            12
+forms_recovered      true
+form_definitions     4
+form_records         38
 ```
 
-Use verbose output when the user really wants to list intact files:
+Write a clean lockbox containing recovered entries:
 
 ```bash
-lockbox recover damaged.lbox --verbose
+lockbox recover damaged.lbox --output recovered.lbox
 ```
 
-Verbose output may still be bounded:
+Use `--overwrite` only when replacing an existing recovery output:
 
 ```bash
-lockbox recover damaged.lbox --verbose --limit 1000
+lockbox recover damaged.lbox --output recovered.lbox --overwrite
 ```
 
-Example verbose section:
+The recovered lockbox is a new valid lockbox with the same content key. It
+contains only path-bearing entries whose payloads can be fully read: complete
+files, symlinks whose targets can be decoded, plus env values and form metadata
+when the latest commit root is recoverable. Partial files are reported by count
+and are skipped rather than written as shortened files.
 
-```text
-Intact:
-  /docs/a.txt
-  /docs/b.txt
-  /src/main.rs
-  ... 127439 more intact files omitted
-```
-
-Salvage intact files into a clean lockbox:
-
-```bash
-lockbox salvage damaged.lbox clean.lbox
-```
-
-`salvage` runs recovery and writes intact files into a new valid lockbox. It
-should skip partial or corrupt files by default and include them in the report.
-
-Recovery scans fixed-size encrypted pages and encrypted metadata. It
-should identify intact files even if the latest TOC is damaged.
+Recovery can scan fixed-size encrypted pages and encrypted metadata even when
+the fixed header or latest TOC is damaged. File content without recoverable path
+metadata is not written to the output lockbox, because the current format does
+not create unnamed placeholder files during recovery.
 
 ## Recipient Keys
 

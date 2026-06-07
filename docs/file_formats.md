@@ -647,5 +647,12 @@ Recovery can:
 - salvage file objects whose metadata can still be associated with paths
 - report intact, corrupt, and lost counts
 
+The recovery output lockbox contains only complete, path-bearing entries. If
+metadata for a file survives but one or more referenced file-data records are
+missing or corrupt, the file is counted as partial and is not written as a
+shortened file. If file-data records survive but no valid TOC/index metadata can
+associate them with a lockbox path and ordering, recovery reports corruption or
+omits the orphaned content; it does not invent unnamed placeholder files.
+
 Recovery is not an undelete guarantee. Once freed pages or free regions have
 been overwritten, the old objects are no longer recoverable.
