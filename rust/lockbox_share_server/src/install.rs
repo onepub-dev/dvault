@@ -202,7 +202,7 @@ rate_limit_burst = 40\n"
 fn unit_file(binary: &str) -> String {
     format!(
         "[Unit]
-Description=Lockbox Share Rendezvous Server
+Description=reVault Share Rendezvous Server
 After=network-online.target
 Wants=network-online.target
 

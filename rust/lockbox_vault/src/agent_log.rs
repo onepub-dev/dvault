@@ -53,7 +53,7 @@ fn fallback_log_path() -> PathBuf {
 
 #[cfg(windows)]
 fn platform_log_destination() -> &'static str {
-    "Windows Event Log source Lockbox Agent"
+    "Windows Event Log source reVault Agent"
 }
 
 #[cfg(target_os = "macos")]
@@ -108,7 +108,7 @@ fn write_platform_log(message: &str) -> std::io::Result<()> {
         DeregisterEventSource, RegisterEventSourceW, ReportEventW, EVENTLOG_INFORMATION_TYPE,
     };
 
-    let source = to_wide("Lockbox Agent");
+    let source = to_wide("reVault Agent");
     // SAFETY: `source` is a null-terminated UTF-16 string and the local
     // computer argument is intentionally null.
     let handle = unsafe { RegisterEventSourceW(null(), source.as_ptr()) };
@@ -156,7 +156,7 @@ fn platform_log_dir() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|_| env::var("APPDATA").map(PathBuf::from))
         .unwrap_or_else(|_| env::temp_dir())
-        .join("Lockbox")
+        .join("reVault")
         .join("Logs")
 }
 
@@ -166,7 +166,7 @@ fn platform_log_dir() -> PathBuf {
         .unwrap_or_else(env::temp_dir)
         .join("Library")
         .join("Logs")
-        .join("Lockbox")
+        .join("reVault")
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

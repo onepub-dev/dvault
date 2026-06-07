@@ -8,7 +8,7 @@ use std::fs::OpenOptions;
 
 pub(crate) fn run() -> CliResult<()> {
     let vault_path = default_vault_path()?;
-    println!("Lockbox");
+    println!("reVault");
     println!("  version: {}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("Local vault");

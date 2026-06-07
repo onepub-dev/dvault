@@ -122,7 +122,7 @@ generate_high_entropy() {
 }
 
 generate_source_tree() {
-  local dir="$OUT/fixtures/dvault-source"
+  local dir="$OUT/fixtures/revault-source"
   [[ -d "$dir" ]] && return
   mkdir -p "$dir"
   tar -C "$ROOT" -cf - \
@@ -206,7 +206,7 @@ generate_source_tree
 
 summary="$OUT/results/summary.tsv"
 printf 'fixture\ttool\tlogical_bytes\toutput_bytes\tseconds\tmax_rss_kib\n' > "$summary"
-for fixture in repeated-small text-tree mixed-tree high-entropy dvault-source; do
+for fixture in repeated-small text-tree mixed-tree high-entropy revault-source; do
   for tool in lockbox gpg-default gpg-zlib9 zstd1-gpg-none zstd19-gpg-none; do
     run_tool "$fixture" "$tool" | tee -a "$summary"
   done

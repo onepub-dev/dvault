@@ -139,7 +139,7 @@ tar \
   --exclude=.codex \
   --exclude=.mcp_logs \
   -czf target/vm/mac/share/lockbox-src.tgz \
-  -C /home/bsutton/git/dvault rust
+  -C /home/bsutton/git/reVault rust
 
 tar \
   --exclude=target \
@@ -215,7 +215,7 @@ Start the VM:
 ```sh
 cd target/vm/mac/workspace/OneClick-macOS-Simple-KVM
 env HEADLESS=1 \
-  LOCKBOX_TEST_ISO=/home/bsutton/git/dvault/rust/target/vm/mac/lockbox-test.iso \
+  LOCKBOX_TEST_ISO=/home/bsutton/git/reVault/rust/target/vm/mac/lockbox-test.iso \
   ./basic.sh
 ```
 
@@ -316,7 +316,7 @@ The critical pieces of the domain XML are:
   <os>
     <type arch='x86_64' machine='q35'>hvm</type>
     <loader readonly='yes' type='pflash'>/usr/share/OVMF/OVMF_CODE_4M.fd</loader>
-    <nvram template='/usr/share/OVMF/OVMF_VARS_4M.fd'>/home/bsutton/git/dvault/rust/target/vm/windows/lockbox-win-s3-vars.fd</nvram>
+    <nvram template='/usr/share/OVMF/OVMF_VARS_4M.fd'>/home/bsutton/git/reVault/rust/target/vm/windows/lockbox-win-s3-vars.fd</nvram>
     <boot dev='hd'/>
   </os>
   <features>
@@ -334,12 +334,12 @@ The critical pieces of the domain XML are:
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2'/>
-      <source file='/home/bsutton/git/dvault/rust/target/vm/windows/windows-server-2025-libvirt.qcow2'/>
+      <source file='/home/bsutton/git/reVault/rust/target/vm/windows/windows-server-2025-libvirt.qcow2'/>
       <target dev='sda' bus='sata'/>
     </disk>
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
-      <source file='/home/bsutton/git/dvault/rust/target/vm/windows/lockbox-transfer.iso'/>
+      <source file='/home/bsutton/git/reVault/rust/target/vm/windows/lockbox-transfer.iso'/>
       <target dev='sdb' bus='sata'/>
       <readonly/>
     </disk>

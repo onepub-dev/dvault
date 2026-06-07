@@ -1,4 +1,4 @@
-# Lockbox Share Server Benchmarks
+# reVault Share Server Benchmarks
 
 Benchmarks were run on the local development host with the release binary.
 HTTP benchmarks use one binary `POST /v1/share` per TCP connection because the
@@ -184,7 +184,7 @@ rate_limit_per_ip=120 requests/minute
 rate_limit_burst=40
 ```
 
-The server validates typed, versioned Lockbox share payloads before storing
+The server validates typed, versioned reVault share payloads before storing
 them, so arbitrary blobs are rejected. The remaining controls reduce usefulness
 as a store-and-forward relay by limiting payload size, lifetime, fan-out, and
 request rate for syntactically valid but still untrusted share messages.

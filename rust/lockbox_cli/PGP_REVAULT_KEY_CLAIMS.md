@@ -1,11 +1,11 @@
-# PGP-Signed Lockbox Key Claims
+# PGP-Signed reVault Key Claims
 
 ## Purpose
 
-A PGP-signed Lockbox key claim lets a user bind an existing OpenPGP identity to
-a Lockbox public key.
+A PGP-signed reVault key claim lets a user bind an existing OpenPGP identity to
+a reVault public key.
 
-This can remove the need for person-to-person verification of the Lockbox key
+This can remove the need for person-to-person verification of the reVault key
 when the recipient already trusts the signer's PGP identity.
 
 ## Trust Model
@@ -15,13 +15,13 @@ PGP signing shifts the trust decision. It does not remove it.
 Without PGP:
 
 ```text
-Verify Alice's Lockbox public key directly.
+Verify Alice's reVault public key directly.
 ```
 
 With PGP:
 
 ```text
-Verify Alice's PGP key, then trust the Lockbox key it signs.
+Verify Alice's PGP key, then trust the reVault key it signs.
 ```
 
 This is useful when one of these is true:
@@ -32,7 +32,7 @@ This is useful when one of these is true:
 - Enterprise policy says keys from a specific domain directory are authoritative.
 
 If Bob does not already trust Alice's PGP key, the signature only proves that the
-Lockbox key was signed by the fetched PGP key. It does not prove that the PGP key
+reVault key was signed by the fetched PGP key. It does not prove that the PGP key
 belongs to Alice.
 
 ## Proposed CLI
@@ -60,13 +60,13 @@ Bob imports the claim:
 lockbox contact add alice@example.com --method pgp-signed
 ```
 
-Lockbox should:
+reVault should:
 
 1. Fetch Alice's PGP public key from WKD, a configured keyserver, or a supplied
    local key file.
-2. Verify the signed Lockbox-key claim.
+2. Verify the signed reVault-key claim.
 3. Check whether the PGP key is trusted by local policy or prior verification.
-4. Store Alice's Lockbox public key with an appropriate trust state.
+4. Store Alice's reVault public key with an appropriate trust state.
 
 ## Trust States
 
@@ -83,10 +83,10 @@ trust: unverified
 reason: lockbox key is signed, but the signing PGP identity is not trusted
 ```
 
-In the untrusted case, Lockbox should still require an explicit verification
+In the untrusted case, reVault should still require an explicit verification
 step before using the key without warnings.
 
 ## Key Point
 
-A PGP-signed claim can avoid manual verification of the Lockbox key only when
+A PGP-signed claim can avoid manual verification of the reVault key only when
 the PGP identity is already trusted through another mechanism.

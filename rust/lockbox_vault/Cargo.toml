@@ -3,7 +3,7 @@ name = "lockbox_vault"
 version = "0.1.0-alpha.1"
 edition = "2021"
 license-file = "LICENSE"
-description = "Reusable Lockbox local vault and agent transport"
+description = "Reusable reVault local vault and agent transport"
 
 [lib]
 name = "lockbox_vault"

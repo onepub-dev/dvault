@@ -166,7 +166,7 @@ fn compress_zstd_cli_group(
     level: i32,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let path = env::temp_dir().join(format!(
-        "dvault-zstd-gap-{}-{}-{}.bin",
+        "revault-zstd-gap-{}-{}-{}.bin",
         std::process::id(),
         level,
         payload.len()

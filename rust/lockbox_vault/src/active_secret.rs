@@ -34,7 +34,7 @@ impl ActiveSecretRegistry {
 
     pub(crate) fn register(&mut self, pid: u32, kind: SecretActivityKind) -> io::Result<u64> {
         if self.processes.is_empty() && self.config.prevent_sleep {
-            match SleepInhibitor::acquire_active("Lockbox secret operation in progress") {
+            match SleepInhibitor::acquire_active("reVault secret operation in progress") {
                 Ok(inhibitor) => {
                     self.sleep_inhibitor = Some(inhibitor);
                     log_agent_event("active secret suspend inhibitor acquired");

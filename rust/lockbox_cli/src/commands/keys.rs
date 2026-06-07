@@ -637,13 +637,13 @@ fn session_config_path() -> Option<PathBuf> {
     {
         return env::var_os("HOME")
             .map(PathBuf::from)
-            .map(|home| home.join("Library/Application Support/Lockbox/config.yaml"));
+            .map(|home| home.join("Library/Application Support/reVault/config.yaml"));
     }
     #[cfg(target_os = "windows")]
     {
         return env::var_os("APPDATA")
             .map(PathBuf::from)
-            .map(|path| path.join("Lockbox").join("config.yaml"));
+            .map(|path| path.join("reVault").join("config.yaml"));
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {

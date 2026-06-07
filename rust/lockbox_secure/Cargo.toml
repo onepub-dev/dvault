@@ -3,7 +3,7 @@ name = "lockbox_secure"
 version = "0.1.0"
 edition = "2021"
 license-file = "../../LICENSE"
-description = "Page-pooled secure byte and string storage for Lockbox"
+description = "Page-pooled secure byte and string storage for reVault"
 
 [lib]
 name = "lockbox_secure"

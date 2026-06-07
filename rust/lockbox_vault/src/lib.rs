@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
-//! Native vault and unlock-cache support for Lockbox.
+//! Native vault and unlock-cache support for reVault.
 //!
 //! This crate layers local workstation/server conveniences on top of
 //! `lockbox_core`: an agent-backed content-key cache, a password-protected

@@ -12,6 +12,17 @@ use lockbox_vault::import_private_key_file;
 static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
+fn lbx_binary_is_alias_for_lockbox_cli() {
+    let bin = env!("CARGO_BIN_EXE_lbx");
+
+    let help = run_output(bin, &["--help"]);
+    assert_success(&help);
+    let help = String::from_utf8_lossy(&help.stderr);
+    assert!(help.contains("Usage: lockbox <command> [arguments]"));
+    assert!(help.contains("Available commands:"));
+}
+
+#[test]
 fn help_is_grouped_and_commands_have_specific_help() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
 
@@ -1601,7 +1612,7 @@ fn password_create_requires_explicit_vault_init() {
     let init = run_output_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
     assert_success(&init);
     let init = String::from_utf8_lossy(&init.stdout);
-    assert!(init.contains("This will create the local Lockbox vault."));
+    assert!(init.contains("This will create the local reVault vault."));
     assert!(init.contains("Vault created successfully."));
     assert!(init.contains("Created default identity: default"));
     assert!(vault_root.join("local-vault.lbox").exists());

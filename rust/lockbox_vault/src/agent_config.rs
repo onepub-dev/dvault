@@ -100,7 +100,7 @@ fn default_config_path() -> Option<PathBuf> {
     home_dir().map(|home| {
         home.join("Library")
             .join("Application Support")
-            .join("Lockbox")
+            .join("reVault")
             .join("config.toml")
     })
 }
@@ -110,7 +110,7 @@ fn default_config_path() -> Option<PathBuf> {
     env::var("APPDATA")
         .or_else(|_| env::var("LOCALAPPDATA"))
         .ok()
-        .map(|dir| PathBuf::from(dir).join("Lockbox").join("config.toml"))
+        .map(|dir| PathBuf::from(dir).join("reVault").join("config.toml"))
 }
 
 #[cfg(all(not(target_os = "macos"), not(windows)))]

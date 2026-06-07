@@ -6,7 +6,7 @@ usage() {
 Usage:
   agent_sleep_unix_vm_test.sh --bin <lockbox> [--work-dir <dir>] [--sleep-command <cmd>] [--no-sleep]
 
-Runs a real Lockbox session-agent sleep test inside a Linux or macOS VM.
+Runs a real reVault session-agent sleep test inside a Linux or macOS VM.
 
 The script:
   1. Creates an isolated vault, lockbox, agent socket directory, and agent log.
