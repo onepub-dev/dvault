@@ -20,8 +20,9 @@ pub use replication::{
     decode_replication_request, encode_replication_request, sign_replication_event,
     ReplicationEvent, ReplicationEventKind, ReplicationRequest,
 };
-pub use status::{decode_status, encode_status, ShareServerStatus};
+pub use status::{decode_status, encode_status, KeyServerStatus};
 pub use topology::{
     decode_topology, encode_topology, read_topology_cache, share_code_owner_id,
-    write_topology_cache, ClusterTopology, ServerStatus, TopologyRoute, TopologyServer,
+    share_code_locator, share_code_server_id_char, write_topology_cache,
+    ClusterTopology, ServerStatus, TopologyRoute, TopologyServer,
 };

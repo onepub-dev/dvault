@@ -5,7 +5,7 @@ const STATUS_MAGIC: &[u8; 4] = b"LBSS";
 const STATUS_VERSION: u16 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ShareServerStatus {
+pub struct KeyServerStatus {
     pub created: u64,
     pub fetched: u64,
     pub deleted: u64,
@@ -17,7 +17,7 @@ pub struct ShareServerStatus {
     pub replication_last_sequence: u64,
 }
 
-pub fn encode_status(status: &ShareServerStatus) -> Vec<u8> {
+pub fn encode_status(status: &KeyServerStatus) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + 2 + 9 * 8);
     out.extend_from_slice(STATUS_MAGIC);
     protocol::put_u16(&mut out, STATUS_VERSION);
@@ -33,7 +33,7 @@ pub fn encode_status(status: &ShareServerStatus) -> Vec<u8> {
     out
 }
 
-pub fn decode_status(bytes: &[u8]) -> Result<ShareServerStatus, ClientError> {
+pub fn decode_status(bytes: &[u8]) -> Result<KeyServerStatus, ClientError> {
     let mut reader = Reader::new(bytes);
     let magic = reader
         .fixed_bytes(STATUS_MAGIC.len())
@@ -45,7 +45,7 @@ pub fn decode_status(bytes: &[u8]) -> Result<ShareServerStatus, ClientError> {
     if version != STATUS_VERSION {
         return Err(ClientError::Protocol(ProtocolError::UnsupportedVersion));
     }
-    Ok(ShareServerStatus {
+    Ok(KeyServerStatus {
         created: reader.u64().map_err(status_protocol_error)?,
         fetched: reader.u64().map_err(status_protocol_error)?,
         deleted: reader.u64().map_err(status_protocol_error)?,

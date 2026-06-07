@@ -5,7 +5,7 @@ use lockbox_share_protocol::client::{ContactShare, ShareClient, ShareClientPool,
 use lockbox_share_protocol::protocol::{self, Operation, Status};
 use lockbox_share_protocol::{
     decode_replication_request, encode_replication_request, sign_replication_event,
-    ReplicationEvent, ReplicationEventKind, ReplicationRequest, ShareServerStatus,
+    KeyServerStatus, ReplicationEvent, ReplicationEventKind, ReplicationRequest,
 };
 use lockbox_share_protocol::{ClusterTopology, ServerStatus, TopologyRoute, TopologyServer};
 
@@ -429,7 +429,7 @@ fn replication_request_round_trips_binary_events() {
 
 #[test]
 fn server_status_round_trips_binary_documents() {
-    let status = ShareServerStatus {
+    let status = KeyServerStatus {
         created: 1,
         fetched: 2,
         deleted: 3,
