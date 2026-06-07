@@ -526,6 +526,9 @@ fn form_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("define")
                 .about("Create or revise a form definition.")
+                .override_usage(
+                    "lockbox form define <lockbox> <alias> --field <FIELD[:KIND[:required[:LABEL]]]>...\n\nExample:\n  lockbox form define secrets.lbox login --field username:text --field password:secret",
+                )
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form define secrets.lbox login --name Login --field username:text:required:User --field password:secret:required:Password\n\nField form:\n  FIELD[:KIND[:required[:LABEL]]]\n\nKinds:\n  text, secret, password, url, email, date, month, notes, number, otp",

@@ -96,6 +96,12 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(form_help.contains("show"));
     assert!(form_help.contains("rm"));
 
+    let form_define_error = run_output(bin, &["form", "define", "test.lbox"]);
+    assert!(!form_define_error.status.success());
+    let form_define_error = String::from_utf8_lossy(&form_define_error.stderr);
+    assert!(form_define_error.contains("Example:"));
+    assert!(form_define_error.contains("lockbox form define secrets.lbox login"));
+
     let env_set_verbose_help = run_output(bin, &["env", "set", "--help", "--verbose"]);
     assert_success(&env_set_verbose_help);
     let env_set_verbose_help = String::from_utf8_lossy(&env_set_verbose_help.stdout);
@@ -322,6 +328,10 @@ fn form_definitions_and_records_flow() {
         "correct horse\n",
     );
     assert_success(&secret_set);
+    assert_eq!(
+        String::from_utf8_lossy(&secret_set.stdout),
+        "/work/github\tpassword\tupdated\n"
+    );
 
     let username = run_output(bin, &["form", "get", &lockbox, "/work/github", "username"]);
     assert_success(&username);
@@ -329,7 +339,9 @@ fn form_definitions_and_records_flow() {
 
     let refused = run_output(bin, &["form", "get", &lockbox, "/work/github", "password"]);
     assert!(!refused.status.success());
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("pass --secret"));
+    let refused = String::from_utf8_lossy(&refused.stderr);
+    assert!(refused.contains("pass --secret"));
+    assert!(!refused.contains("Check the supplied value"));
 
     let password = run_output(
         bin,
@@ -975,10 +987,10 @@ fn doctor_and_vault_sessions_report_agent_state() {
             "supported:",
             "enabled:",
             "backend:",
-            "vault:",
             "Session agent",
         ],
     );
+    assert!(!doctor.contains("  vault:"));
     assert!(!doctor.contains("running: unknown"));
 
     let unlocked = run_output_in(bin, &["vault", "sessions"], &vault_root, &agent_root);

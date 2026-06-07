@@ -4,7 +4,7 @@ use lockbox_core::{
     Error, FormFieldDefinition, FormFieldKind, FormValue, LockboxPath, SecretString,
 };
 
-use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
+use super::context::{cli_error, open_existing, open_or_create, require_arg, Access, CliResult};
 use super::output::{output_format_from_args, print_records};
 use crate::secret_prompt::prompt_secret;
 
@@ -253,6 +253,7 @@ fn set(args: &[String], access: &Access) -> CliResult<()> {
         lb.set_form_field_normal(&path, field_id, &value)?;
     }
     lb.commit()?;
+    println!("{}\t{}\tupdated", path, field_id);
     Ok(())
 }
 
@@ -285,10 +286,7 @@ fn get(args: &[String], access: &Access) -> CliResult<()> {
             })??;
         }
         FormValue::Secret(_) => {
-            return Err(Error::InvalidInput(
-                "field is secret; pass --secret to print it".to_string(),
-            )
-            .into());
+            return Err(cli_error("field is secret; pass --secret to print it"));
         }
     }
     Ok(())

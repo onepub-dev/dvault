@@ -36,7 +36,6 @@ pub(crate) fn run() -> CliResult<()> {
     println!("  supported: {}", yes_no(auto_unlock.supported));
     println!("  enabled: {}", yes_no(!auto_unlock.disabled));
     println!("  backend: {}", auto_unlock.backend);
-    println!("  vault: {}", auto_unlock.item);
     println!();
     println!("Session agent");
     println!(
