@@ -320,10 +320,14 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             args.push(value(sub, "path"));
             args.push(value(sub, "field"));
             push_flag(&mut args, sub, "secret", "--secret");
+            push_flag(&mut args, sub, "interactive", "--interactive");
+            push_flag(&mut args, sub, "stdin", "--stdin");
+            push_option(&mut args, sub, "explicit-value", "--value");
+            push_option(&mut args, sub, "file", "--file");
+            push_option(&mut args, sub, "from-env", "--from-env");
             if let Some(value) = sub.get_one::<String>("value") {
                 args.push(value.clone());
             }
-            push_flag(&mut args, sub, "stdin", "--stdin");
         }
         "get" => {
             args.push(value(sub, "path"));

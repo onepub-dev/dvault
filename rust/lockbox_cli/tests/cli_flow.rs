@@ -110,6 +110,14 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(form_define_error.contains("lockbox form define secrets.lbox login"));
     assert!(form_define_error.contains("[alias]"));
 
+    let form_set_help = run_output(bin, &["form", "set", "--help"]);
+    assert_success(&form_set_help);
+    let form_set_help = String::from_utf8_lossy(&form_set_help.stdout);
+    assert!(form_set_help.contains("-v, --value <VALUE>"));
+    assert!(form_set_help.contains("-f, --file <FILE>"));
+    assert!(form_set_help.contains("-e, --from-env <NAME>"));
+    assert!(form_set_help.contains("-i, --interactive"));
+
     let env_set_verbose_help = run_output(bin, &["env", "set", "--help", "--verbose"]);
     assert_success(&env_set_verbose_help);
     let env_set_verbose_help = String::from_utf8_lossy(&env_set_verbose_help.stdout);
@@ -385,6 +393,72 @@ fn form_definitions_and_records_flow() {
     assert_success(&username);
     assert_eq!(String::from_utf8_lossy(&username.stdout), "bsutton\n");
 
+    run(
+        bin,
+        &[
+            "form",
+            "set",
+            "--value",
+            "alice",
+            &lockbox,
+            "/work/github",
+            "username",
+        ],
+    );
+    let username = run_output(bin, &["form", "get", &lockbox, "/work/github", "username"]);
+    assert_success(&username);
+    assert_eq!(String::from_utf8_lossy(&username.stdout), "alice\n");
+
+    let site_file = dir.join("site.txt");
+    fs::write(&site_file, "https://example.com\n").unwrap();
+    run(
+        bin,
+        &[
+            "form",
+            "set",
+            "--file",
+            site_file.to_str().unwrap(),
+            &lockbox,
+            "/work/github",
+            "site",
+        ],
+    );
+    let site = run_output(bin, &["form", "get", &lockbox, "/work/github", "site"]);
+    assert_success(&site);
+    assert_eq!(
+        String::from_utf8_lossy(&site.stdout),
+        "https://example.com\n"
+    );
+
+    let password_file = dir.join("form-password.txt");
+    fs::write(&password_file, "file horse\n").unwrap();
+    run(
+        bin,
+        &[
+            "form",
+            "set",
+            "--secret",
+            "--file",
+            password_file.to_str().unwrap(),
+            &lockbox,
+            "/work/github",
+            "password",
+        ],
+    );
+    let password = run_output(
+        bin,
+        &[
+            "form",
+            "get",
+            "--secret",
+            &lockbox,
+            "/work/github",
+            "password",
+        ],
+    );
+    assert_success(&password);
+    assert_eq!(String::from_utf8_lossy(&password.stdout), "file horse\n");
+
     let refused = run_output(bin, &["form", "get", &lockbox, "/work/github", "password"]);
     assert!(!refused.status.success());
     let refused = String::from_utf8_lossy(&refused.stderr);
@@ -403,7 +477,7 @@ fn form_definitions_and_records_flow() {
         ],
     );
     assert_success(&password);
-    assert_eq!(String::from_utf8_lossy(&password.stdout), "correct horse\n");
+    assert_eq!(String::from_utf8_lossy(&password.stdout), "file horse\n");
 
     let password_output = dir.join("password.txt");
     let password_file = run_output(
@@ -421,7 +495,7 @@ fn form_definitions_and_records_flow() {
     );
     assert_success(&password_file);
     assert!(password_file.stdout.is_empty());
-    assert_eq!(fs::read(&password_output).unwrap(), b"correct horse");
+    assert_eq!(fs::read(&password_output).unwrap(), b"file horse");
 
     let rejected_password_file = run_output(
         bin,
@@ -437,7 +511,7 @@ fn form_definitions_and_records_flow() {
         ],
     );
     assert!(!rejected_password_file.status.success());
-    assert_eq!(fs::read(&password_output).unwrap(), b"correct horse");
+    assert_eq!(fs::read(&password_output).unwrap(), b"file horse");
 
     run(
         bin,
@@ -452,16 +526,16 @@ fn form_definitions_and_records_flow() {
             "username",
         ],
     );
-    assert_eq!(fs::read(&password_output).unwrap(), b"bsutton");
+    assert_eq!(fs::read(&password_output).unwrap(), b"alice");
 
     let inspect = run_output(bin, &["form", "show", &lockbox, "/work/github"]);
     assert_success(&inspect);
     let inspect = String::from_utf8_lossy(&inspect.stdout);
     assert!(inspect.contains("definition_id\t"));
     assert!(!inspect.contains("type_id\t"));
-    assert!(inspect.contains("field\tusername\tUsername\tbsutton"));
+    assert!(inspect.contains("field\tusername\tUsername\talice"));
     assert!(inspect.contains("field\tpassword\tPassword\t<secret>"));
-    assert!(!inspect.contains("correct horse"));
+    assert!(!inspect.contains("file horse"));
 
     let list = run_output(bin, &["form", "list", &lockbox, "/work"]);
     assert_success(&list);

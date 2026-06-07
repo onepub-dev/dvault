@@ -651,15 +651,48 @@ fn form_command(verbose: bool) -> Command {
                     Arg::new("value")
                         .value_name("VALUE")
                         .allow_hyphen_values(true)
-                        .conflicts_with("stdin")
-                        .help("Literal field value."),
+                        .conflicts_with_all(["stdin", "file", "from-env", "interactive"])
+                        .help("Literal non-secret field value."),
+                )
+                .arg(
+                    Arg::new("explicit-value")
+                        .long("value")
+                        .short('v')
+                        .value_name("VALUE")
+                        .conflicts_with_all(["value", "stdin", "file", "from-env", "interactive"])
+                        .help("Set a literal non-secret field value."),
                 )
                 .arg(
                     Arg::new("stdin")
                         .long("stdin")
+                        .short('t')
                         .action(ArgAction::SetTrue)
-                        .conflicts_with("value")
+                        .conflicts_with_all(["value", "explicit-value", "file", "from-env", "interactive"])
                         .help("Read the field value from stdin."),
+                )
+                .arg(
+                    Arg::new("file")
+                        .long("file")
+                        .short('f')
+                        .value_name("FILE")
+                        .conflicts_with_all(["value", "explicit-value", "stdin", "from-env", "interactive"])
+                        .help("Read the field value from a file."),
+                )
+                .arg(
+                    Arg::new("from-env")
+                        .long("from-env")
+                        .short('e')
+                        .value_name("NAME")
+                        .conflicts_with_all(["value", "explicit-value", "stdin", "file", "interactive"])
+                        .help("Read the field value from an environment variable."),
+                )
+                .arg(
+                    Arg::new("interactive")
+                        .long("interactive")
+                        .short('i')
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["value", "explicit-value", "stdin", "file", "from-env"])
+                        .help("Prompt for the field value."),
                 ),
         )
         .subcommand(

@@ -243,7 +243,31 @@ fn set(args: &[String], access: &Access) -> CliResult<()> {
     let mut index = 3;
     while index < args.len() {
         match args[index].as_str() {
-            "--stdin" => set_source(&mut source, FieldValueSource::Stdin)?,
+            "-i" | "--interactive" => set_source(&mut source, FieldValueSource::Interactive)?,
+            "-t" | "--stdin" => set_source(&mut source, FieldValueSource::Stdin)?,
+            "-v" | "--value" => {
+                index += 1;
+                set_source(
+                    &mut source,
+                    FieldValueSource::Value(require_arg(args, index, "--value value")?.to_string()),
+                )?;
+            }
+            "-f" | "--file" => {
+                index += 1;
+                set_source(
+                    &mut source,
+                    FieldValueSource::File(require_arg(args, index, "--file value")?.to_string()),
+                )?;
+            }
+            "-e" | "--from-env" => {
+                index += 1;
+                set_source(
+                    &mut source,
+                    FieldValueSource::FromEnv(
+                        require_arg(args, index, "--from-env value")?.to_string(),
+                    ),
+                )?;
+            }
             "--secret" => secret = true,
             value if source.is_none() => {
                 set_source(&mut source, FieldValueSource::Literal(value.to_string()))?
@@ -474,8 +498,12 @@ fn list(args: &[String], access: &Access) -> CliResult<()> {
 }
 
 enum FieldValueSource {
+    Interactive,
     Literal(String),
+    Value(String),
+    File(String),
     Stdin,
+    FromEnv(String),
 }
 
 fn parse_field_spec(spec: &str) -> CliResult<FormFieldDefinition> {
@@ -626,16 +654,35 @@ fn set_source(target: &mut Option<FieldValueSource>, source: FieldValueSource) -
 
 fn read_normal_value(source: FieldValueSource) -> CliResult<String> {
     Ok(match source {
+        FieldValueSource::Interactive => prompt_normal_field("Value")?,
         FieldValueSource::Literal(value) => value,
+        FieldValueSource::Value(value) => value,
+        FieldValueSource::File(path) => trim_trailing_newline(String::from_utf8(fs::read(path)?)?),
         FieldValueSource::Stdin => {
             let mut value = String::new();
             std::io::stdin().lock().read_to_string(&mut value)?;
             trim_trailing_newline(value)
         }
+        FieldValueSource::FromEnv(name) => std::env::var(name)?,
     })
 }
 
 fn read_secret_value(source: FieldValueSource) -> CliResult<SecretString> {
+    match &source {
+        FieldValueSource::Literal(_) | FieldValueSource::Value(_) => {
+            return Err(Error::InvalidInput(
+                "secret form fields require --stdin, --file, --interactive, or --from-env"
+                    .to_string(),
+            )
+            .into());
+        }
+        FieldValueSource::Interactive => return Ok(prompt_secret("Secret value: ")?),
+        FieldValueSource::FromEnv(name) => {
+            return SecretString::try_from_env(name)?
+                .ok_or_else(|| Error::InvalidInput(format!("{name} is not set")).into());
+        }
+        FieldValueSource::File(_) | FieldValueSource::Stdin => {}
+    }
     let value = read_normal_value(source)?;
     Ok(SecretString::try_from_bytes(value.into_bytes())?)
 }
