@@ -534,7 +534,7 @@ fn form_command(verbose: bool) -> Command {
             Command::new("define")
                 .about("Create or revise a form definition.")
                 .override_usage(
-                    "lockbox form define <lockbox> <alias> --field <FIELD[:KIND[:required[:LABEL]]]>...\n\nExample:\n  lockbox form define secrets.lbox login --field username:text --field password:secret",
+                    "lockbox form define <lockbox> [alias] --field <FIELD[:KIND[:required[:LABEL]]]>...\n\nExample:\n  lockbox form define secrets.lbox login --field username:text --field password:secret",
                 )
                 .after_help(verbose_help(
                     verbose,
@@ -542,7 +542,7 @@ fn form_command(verbose: bool) -> Command {
                     "Context:\n  Define creates a new form definition for a new alias. If the alias already resolves to exactly one definition, define appends a new revision. If an imported shared lockbox has conflicting aliases, pass --definition-id to revise the intended definition explicitly.",
                 ))
                 .arg(required("lockbox", "Lockbox path."))
-                .arg(required("alias", "Form alias."))
+                .arg(optional("alias", "Form alias. Defaults to --name when omitted."))
                 .arg(
                     Arg::new("name")
                         .long("name")

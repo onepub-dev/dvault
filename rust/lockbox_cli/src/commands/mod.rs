@@ -281,7 +281,7 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let mut args = vec![command.to_string(), value(sub, "lockbox")];
     match command {
         "define" => {
-            args.push(value(sub, "alias"));
+            push_optional(&mut args, sub, "alias");
             push_option(&mut args, sub, "name", "--name");
             push_option(&mut args, sub, "definition-id", "--definition-id");
             if let Some(fields) = sub.get_many::<String>("field") {

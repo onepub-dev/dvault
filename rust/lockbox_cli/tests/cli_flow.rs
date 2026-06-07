@@ -108,6 +108,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let form_define_error = String::from_utf8_lossy(&form_define_error.stderr);
     assert!(form_define_error.contains("Example:"));
     assert!(form_define_error.contains("lockbox form define secrets.lbox login"));
+    assert!(form_define_error.contains("[alias]"));
 
     let env_set_verbose_help = run_output(bin, &["env", "set", "--help", "--verbose"]);
     assert_success(&env_set_verbose_help);
@@ -325,6 +326,25 @@ fn form_definitions_and_records_flow() {
     assert!(define.contains("definition_id:"));
     assert!(define.contains("revision: 1"));
     assert!(define.contains("fields: 3"));
+
+    let aliasless_lockbox = dir.join("aliasless.lbox");
+    let aliasless_lockbox = aliasless_lockbox.to_string_lossy().to_string();
+    let aliasless_define = run_output(
+        bin,
+        &[
+            "form",
+            "define",
+            &aliasless_lockbox,
+            "--name",
+            "Token",
+            "--field",
+            "value:secret",
+        ],
+    );
+    assert_success(&aliasless_define);
+    let aliasless_define = String::from_utf8_lossy(&aliasless_define.stdout);
+    assert!(aliasless_define.contains("alias: Token"));
+    assert!(aliasless_define.contains("name: Token"));
     run(
         bin,
         &[

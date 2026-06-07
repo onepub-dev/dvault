@@ -29,16 +29,21 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
 
 fn define(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let alias = require_arg(args, 1, "form alias")?;
-    let mut name = alias.to_string();
+    let mut alias = None;
+    let mut name = None;
     let mut type_id = None;
     let mut fields = Vec::new();
-    let mut index = 2;
+    let mut index = 1;
+    if let Some(value) = args.get(index).filter(|value| !value.starts_with("--")) {
+        alias = Some(value.clone());
+        name = Some(value.clone());
+        index += 1;
+    }
     while index < args.len() {
         match args[index].as_str() {
             "--name" => {
                 index += 1;
-                name = require_arg(args, index, "--name value")?.to_string();
+                name = Some(require_arg(args, index, "--name value")?.to_string());
             }
             "--definition-id" | "--type-id" => {
                 index += 1;
@@ -65,11 +70,15 @@ fn define(args: &[String], access: &Access) -> CliResult<()> {
         }
         index += 1;
     }
+    let name = name.ok_or_else(|| {
+        Error::InvalidInput("form define requires an alias or --name".to_string())
+    })?;
+    let alias = alias.unwrap_or_else(|| name.clone());
     let mut lb = open_or_create(lockbox_path, access)?;
     let definition = if let Some(type_id) = type_id {
-        lb.define_form_with_type_id(type_id, alias, &name, fields)?
+        lb.define_form_with_type_id(type_id, &alias, &name, fields)?
     } else {
-        lb.define_form(alias, &name, fields)?
+        lb.define_form(&alias, &name, fields)?
     };
     lb.commit()?;
     println!("Form definition saved.");
