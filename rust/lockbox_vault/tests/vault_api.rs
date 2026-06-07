@@ -540,6 +540,31 @@ fn vault_directory_tracks_identity_generations_and_rotation() {
 }
 
 #[test]
+fn vault_directory_stores_identity_email_metadata() {
+    let root = unique_dir("identity-email");
+    let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
+    let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
+
+    vault
+        .store_private_key("default", &RecipientKeyPair::generate().unwrap())
+        .unwrap();
+    assert_eq!(vault.identity_email("default").unwrap(), None);
+
+    vault
+        .store_identity_email("default", "alice@example.test")
+        .unwrap();
+    assert_eq!(
+        vault.identity_email("default").unwrap(),
+        Some("alice@example.test".to_string())
+    );
+
+    vault.delete_private_key("default").unwrap();
+    assert_eq!(vault.identity_email("default").unwrap(), None);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn private_key_file_import_uses_secure_import_path() {
     let root = unique_dir("private-key-file-import");
     fs::create_dir_all(&root).unwrap();

@@ -70,6 +70,7 @@ pub struct ShareResult {
     pub delete_token: Vec<u8>,
     pub expires_at_unix_ms: u64,
     pub max_fetches: u16,
+    pub verification_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +79,7 @@ pub struct FetchedShare {
     pub payload_type: PayloadType,
     pub expires_at_unix_ms: u64,
     pub remaining_fetches: u16,
+    pub email_verification: Option<protocol::EmailVerification>,
 }
 
 pub trait Transport: Clone {
@@ -268,10 +270,27 @@ impl<T: Transport> ShareClientPool<T> {
         max_fetches: u16,
         payload: &[u8],
     ) -> Result<ShareResult, ClientError> {
+        self.share_payload_with_email(ttl_seconds, max_fetches, payload, None)
+    }
+
+    pub fn share_payload_with_email(
+        &self,
+        ttl_seconds: u32,
+        max_fetches: u16,
+        payload: &[u8],
+        verification_email: Option<&str>,
+    ) -> Result<ShareResult, ClientError> {
         payload::validate_payload(payload)?;
         self.try_clients_from(
             self.selection_offset(),
-            |client| client.share_payload(ttl_seconds, max_fetches, payload),
+            |client| {
+                client.share_payload_with_email(
+                    ttl_seconds,
+                    max_fetches,
+                    payload,
+                    verification_email,
+                )
+            },
             retry_share_error,
         )
     }
@@ -291,7 +310,12 @@ impl<T: Transport> ShareClientPool<T> {
             contact.created_at_unix_ms,
             contact.expires_at_unix_ms,
         );
-        self.share_payload(ttl_seconds, max_fetches, &payload)
+        self.share_payload_with_email(
+            ttl_seconds,
+            max_fetches,
+            &payload,
+            contact.verification_email,
+        )
     }
 
     pub fn fetch(&self, share_code: &str) -> Result<FetchedShare, ClientError> {
@@ -433,17 +457,32 @@ impl<T: Transport> ShareClient<T> {
         max_fetches: u16,
         payload: &[u8],
     ) -> Result<ShareResult, ClientError> {
+        self.share_payload_with_email(ttl_seconds, max_fetches, payload, None)
+    }
+
+    pub fn share_payload_with_email(
+        &self,
+        ttl_seconds: u32,
+        max_fetches: u16,
+        payload: &[u8],
+        verification_email: Option<&str>,
+    ) -> Result<ShareResult, ClientError> {
         payload::validate_payload(payload)?;
-        let body = protocol::encode_share_request(ttl_seconds, max_fetches, payload);
+        let body = protocol::encode_share_request_with_email(
+            ttl_seconds,
+            max_fetches,
+            payload,
+            verification_email,
+        );
         let response =
             self.request_with_retry(Operation::Share, &body, retry_single_client_error)?;
-        let (share_code, delete_token, expires_at_unix_ms, max_fetches) =
-            protocol::decode_share_response(&response.payload)?;
+        let decoded = protocol::decode_share_response_document(&response.payload)?;
         Ok(ShareResult {
-            share_code,
-            delete_token,
-            expires_at_unix_ms,
-            max_fetches,
+            share_code: decoded.share_code,
+            delete_token: decoded.delete_token,
+            expires_at_unix_ms: decoded.expires_at_unix_ms,
+            max_fetches: decoded.max_fetches,
+            verification_url: decoded.verification_url,
         })
     }
 
@@ -462,21 +501,26 @@ impl<T: Transport> ShareClient<T> {
             contact.created_at_unix_ms,
             contact.expires_at_unix_ms,
         );
-        self.share_payload(ttl_seconds, max_fetches, &payload)
+        self.share_payload_with_email(
+            ttl_seconds,
+            max_fetches,
+            &payload,
+            contact.verification_email,
+        )
     }
 
     pub fn fetch(&self, share_code: &str) -> Result<FetchedShare, ClientError> {
         let body = protocol::encode_fetch_request(share_code);
         let response =
             self.request_with_retry(Operation::Fetch, &body, retry_single_client_error)?;
-        let (payload, expires_at_unix_ms, remaining_fetches) =
-            protocol::decode_fetch_response(&response.payload)?;
-        let payload_type = payload::validate_payload(&payload)?;
+        let decoded = protocol::decode_fetch_response_document(&response.payload)?;
+        let payload_type = payload::validate_payload(&decoded.share_payload)?;
         Ok(FetchedShare {
-            payload,
+            payload: decoded.share_payload,
             payload_type,
-            expires_at_unix_ms,
-            remaining_fetches,
+            expires_at_unix_ms: decoded.expires_at_unix_ms,
+            remaining_fetches: decoded.remaining_fetches,
+            email_verification: decoded.email_verification,
         })
     }
 
@@ -599,6 +643,7 @@ pub struct ContactShare<'a> {
     pub share_nonce: &'a [u8],
     pub created_at_unix_ms: u64,
     pub expires_at_unix_ms: u64,
+    pub verification_email: Option<&'a str>,
 }
 
 impl Endpoint {

@@ -1,7 +1,10 @@
 use std::fmt;
 
+use sha2::{Digest, Sha256};
+
 const MAGIC: &[u8; 4] = b"LBSP";
 const HEADER_LEN: usize = 12;
+pub const CONTACT_FINGERPRINT_LEN: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
@@ -89,6 +92,41 @@ pub fn encode_contact_share(
     put_u64(&mut body, created_at_unix_ms);
     put_u64(&mut body, expires_at_unix_ms);
     encode_payload(PayloadType::ContactShare, &body)
+}
+
+pub fn normalize_contact_email(email: &str) -> Result<String, PayloadError> {
+    let normalized = email.trim().to_ascii_lowercase();
+    if normalized.is_empty()
+        || normalized.len() > 254
+        || normalized.bytes().any(|byte| byte.is_ascii_control())
+        || !normalized.contains('@')
+        || normalized.starts_with('@')
+        || normalized.ends_with('@')
+    {
+        return Err(PayloadError::InvalidField);
+    }
+    Ok(normalized)
+}
+
+pub fn contact_fingerprint(
+    email: &str,
+    recipient_public_key: &[u8],
+    signing_public_key: &[u8],
+) -> Result<Vec<u8>, PayloadError> {
+    let email = normalize_contact_email(email)?;
+    let mut hasher = Sha256::new();
+    update_fingerprint_field(&mut hasher, b"revault-contact-fingerprint-v1");
+    update_fingerprint_field(&mut hasher, email.as_bytes());
+    update_fingerprint_field(&mut hasher, b"recipient-public-key-bytes-v1");
+    update_fingerprint_field(&mut hasher, recipient_public_key);
+    update_fingerprint_field(&mut hasher, b"owner-signing-public-key-bytes-v1");
+    update_fingerprint_field(&mut hasher, signing_public_key);
+    Ok(hasher.finalize()[..CONTACT_FINGERPRINT_LEN].to_vec())
+}
+
+fn update_fingerprint_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u32).to_be_bytes());
+    hasher.update(value);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

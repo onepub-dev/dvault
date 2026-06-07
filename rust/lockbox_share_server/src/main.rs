@@ -98,6 +98,9 @@ fn print_help() {
     println!("  --compact-min-bytes N  Segment size before background compaction");
     println!("  --rate-limit-per-minute N  Per-IP request rate, 0 disables");
     println!("  --rate-limit-burst N       Per-IP burst capacity");
+    println!("  --verification-email-command PATH  Command called as PATH <email> <url>");
+    println!("  --verification-email-rate-limit-per-hour N");
+    println!("  --verification-email-ip-rate-limit-per-hour N");
 }
 
 fn split_peer_url_args(
@@ -269,6 +272,28 @@ fn config_from_args(args: Vec<String>) -> Result<ServerConfig, Box<dyn std::erro
                     .ok_or("missing value for --rate-limit-burst")?
                     .parse()?;
             }
+            "--verification-email-command" => {
+                index += 1;
+                config.verification_email_command = Some(
+                    args.get(index)
+                        .ok_or("missing value for --verification-email-command")?
+                        .to_string(),
+                );
+            }
+            "--verification-email-rate-limit-per-hour" => {
+                index += 1;
+                config.verification_email_rate_limit_per_hour = args
+                    .get(index)
+                    .ok_or("missing value for --verification-email-rate-limit-per-hour")?
+                    .parse()?;
+            }
+            "--verification-email-ip-rate-limit-per-hour" => {
+                index += 1;
+                config.verification_email_ip_rate_limit_per_hour = args
+                    .get(index)
+                    .ok_or("missing value for --verification-email-ip-rate-limit-per-hour")?
+                    .parse()?;
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -339,6 +364,15 @@ fn apply_config_value(
         "compact_min_bytes" => config.compact_min_bytes = value.parse()?,
         "rate_limit_per_minute" => config.rate_limit_per_minute = value.parse()?,
         "rate_limit_burst" => config.rate_limit_burst = value.parse()?,
+        "verification_email_command" => {
+            config.verification_email_command = if value.is_empty() { None } else { Some(value) };
+        }
+        "verification_email_rate_limit_per_hour" => {
+            config.verification_email_rate_limit_per_hour = value.parse()?;
+        }
+        "verification_email_ip_rate_limit_per_hour" => {
+            config.verification_email_ip_rate_limit_per_hour = value.parse()?;
+        }
         "max_payload_bytes" => config.max_payload_bytes = value.parse()?,
         "default_ttl_seconds" => {
             config.default_ttl = Duration::from_secs(value.parse()?);

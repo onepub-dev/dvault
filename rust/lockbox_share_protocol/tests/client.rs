@@ -114,6 +114,7 @@ fn client_decodes_share_fetch_and_delete_responses() {
                 share_nonce: &[2_u8; 24],
                 created_at_unix_ms: 1,
                 expires_at_unix_ms: 2,
+                verification_email: None,
             },
         )
         .unwrap();
@@ -163,6 +164,7 @@ fn client_retries_transient_transport_errors() {
                 share_nonce: &[2_u8; 24],
                 created_at_unix_ms: 1,
                 expires_at_unix_ms: 2,
+                verification_email: None,
             },
         )
         .unwrap();
@@ -406,6 +408,7 @@ fn replication_request_round_trips_binary_events() {
                 1,
                 2,
             ),
+            contact_email: Some("replica@example.com".to_string()),
             expires_at_unix_ms: 123,
             max_fetches: 2,
             fetches: 1,

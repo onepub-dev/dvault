@@ -362,6 +362,22 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "overwrite", "--overwrite");
         }
         "path" => {}
+        "publish" => {
+            push_share_publish_options(&mut args, sub);
+            push_optional(&mut args, sub, "identity");
+        }
+        "receive" | "recieve" | "fetch" => {
+            push_share_transport_options(&mut args, sub);
+            push_option(&mut args, sub, "fingerprint", "--fingerprint");
+            push_flag(&mut args, sub, "overwrite", "--overwrite");
+            args.push(value(sub, "email"));
+            push_optional(&mut args, sub, "contact-name");
+        }
+        "remove" | "delete" => {
+            push_share_transport_options(&mut args, sub);
+            args.push(value(sub, "lookup"));
+            args.push(value(sub, "delete-token"));
+        }
         "sessions" => {
             if let Some((session_command, session_sub)) = sub.subcommand() {
                 args.push(session_command.to_string());
@@ -402,6 +418,9 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     push_optional(&mut args, identity_sub, "name");
                 }
                 "list" | "ls" => push_option(&mut args, identity_sub, "format", "--format"),
+                "email" => {
+                    push_many(&mut args, identity_sub, "args");
+                }
                 "import" => {
                     args.push(value(identity_sub, "name"));
                     args.push(value(identity_sub, "private-key"));
@@ -455,18 +474,19 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 args.push(share_command.to_string());
                 match share_command {
                     "publish" => {
-                        push_share_options(&mut args, share_sub);
+                        push_share_publish_options(&mut args, share_sub);
                         push_optional(&mut args, share_sub, "identity");
                     }
-                    "receive" | "fetch" => {
-                        push_share_options(&mut args, share_sub);
+                    "receive" | "recieve" | "fetch" => {
+                        push_share_transport_options(&mut args, share_sub);
+                        push_option(&mut args, share_sub, "fingerprint", "--fingerprint");
                         push_flag(&mut args, share_sub, "overwrite", "--overwrite");
-                        args.push(value(share_sub, "share-code"));
-                        args.push(value(share_sub, "contact-name"));
+                        args.push(value(share_sub, "email"));
+                        push_optional(&mut args, share_sub, "contact-name");
                     }
                     "remove" | "rm" | "delete" => {
-                        push_share_options(&mut args, share_sub);
-                        args.push(value(share_sub, "share-code"));
+                        push_share_transport_options(&mut args, share_sub);
+                        args.push(value(share_sub, "lookup"));
                         args.push(value(share_sub, "delete-token"));
                     }
                     _ => {
@@ -505,15 +525,18 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 .into());
             }
         }
-        "remove" | "rm" => args.push(value(sub, "name")),
         _ => return Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
     }
     Ok(args)
 }
 
-fn push_share_options(args: &mut Vec<String>, matches: &ArgMatches) {
+fn push_share_transport_options(args: &mut Vec<String>, matches: &ArgMatches) {
     push_option(args, matches, "server", "--server");
     push_option(args, matches, "topology-url", "--topology-url");
+}
+
+fn push_share_publish_options(args: &mut Vec<String>, matches: &ArgMatches) {
+    push_share_transport_options(args, matches);
     push_option(args, matches, "ttl", "--ttl");
     push_option(args, matches, "max-fetches", "--max-fetches");
 }

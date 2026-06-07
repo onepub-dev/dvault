@@ -186,6 +186,15 @@ pub fn handle_stream(
         let close = wants_close(&headers);
         let mut lines = headers.lines();
         let request_line = lines.next().unwrap_or_default();
+        if request_line.starts_with("GET /v1/verify") {
+            let page = handle_verify_request(request_line, &store);
+            write_html(
+                &mut stream,
+                if page.success { 200 } else { 400 },
+                &render_verify_page(&page),
+            )?;
+            return Ok(());
+        }
         if request_line.starts_with("GET /v1/topology ") {
             match topology::encode_topology(&store.topology()) {
                 Ok(body) => write_binary(&mut stream, 200, &body)?,
@@ -250,7 +259,7 @@ pub fn handle_stream(
                             "share endpoint does not accept replication operations",
                         )
                     } else {
-                        store.handle(request.operation, &request.payload)
+                        store.handle_with_peer(request.operation, &request.payload, peer_ip)
                     }
                 }
                 Err(err) => protocol::encode_error(
@@ -597,6 +606,20 @@ fn write_plain(stream: &mut TcpStream, status: u16, body: &[u8]) -> std::io::Res
     Ok(())
 }
 
+fn write_html(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
+    let reason = if status == 200 { "OK" } else { "Error" };
+    let header = format!(
+        "HTTP/1.1 {status} {reason}\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(header.as_bytes())?;
+    stream.write_all(body.as_bytes())?;
+    Ok(())
+}
+
 fn write_binary(stream: &mut TcpStream, status: u16, body: &[u8]) -> std::io::Result<()> {
     let reason = if status == 200 { "OK" } else { "Error" };
     let header = format!(
@@ -624,6 +647,124 @@ fn content_length(headers: &str) -> Option<usize> {
         }
     }
     None
+}
+
+fn handle_verify_request(request_line: &str, store: &ShareStore) -> crate::store::VerificationPage {
+    let Some(target) = request_line.split_whitespace().nth(1) else {
+        return verify_error(
+            "Verification failed",
+            "The verification request is malformed.",
+        );
+    };
+    let Some((_, query)) = target.split_once('?') else {
+        return verify_error(
+            "Verification failed",
+            "The verification link is missing its token.",
+        );
+    };
+    let code = query_param(query, "code");
+    let token = query_param(query, "token");
+    match (code, token) {
+        (Some(code), Some(token)) => store.verify_email(&code, &token),
+        _ => verify_error(
+            "Verification failed",
+            "The verification link is missing its token.",
+        ),
+    }
+}
+
+fn verify_error(title: &str, message: &str) -> crate::store::VerificationPage {
+    crate::store::VerificationPage {
+        success: false,
+        title: title.to_string(),
+        message: message.to_string(),
+        email: None,
+    }
+}
+
+fn query_param(query: &str, name: &str) -> Option<String> {
+    for part in query.split('&') {
+        let (key, value) = part.split_once('=').unwrap_or((part, ""));
+        if key == name {
+            return Some(percent_decode(value));
+        }
+    }
+    None
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) =
+                (hex_digit(bytes[index + 1]), hex_digit(bytes[index + 2]))
+            {
+                out.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[index] == b'+' {
+            b' '
+        } else {
+            bytes[index]
+        });
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn render_verify_page(page: &crate::store::VerificationPage) -> String {
+    let color = if page.success { "#146C2E" } else { "#B3261E" };
+    let icon = if page.success {
+        "check_circle"
+    } else {
+        "error"
+    };
+    let email = page
+        .email
+        .as_ref()
+        .map(|email| {
+            format!(
+                "<p style=\"margin:16px 0 0;color:#49454F;font:500 14px Arial,sans-serif;\">{}</p>",
+                escape_html(email)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+<title>{}</title></head>\
+<body style=\"margin:0;background:#FFFBFE;color:#1D1B20;font-family:Arial,sans-serif;\">\
+<main style=\"min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;\">\
+<section style=\"max-width:520px;width:100%;border:1px solid #CAC4D0;border-radius:8px;padding:32px;background:#FFFBFE;box-sizing:border-box;\">\
+<div style=\"width:48px;height:48px;border-radius:24px;background:{color};color:white;display:flex;align-items:center;justify-content:center;font:700 24px Arial,sans-serif;margin-bottom:20px;\">{icon}</div>\
+<h1 style=\"margin:0 0 12px;font:500 28px Arial,sans-serif;color:#1D1B20;\">{}</h1>\
+<p style=\"margin:0;color:#49454F;font:400 16px/1.5 Arial,sans-serif;\">{}</p>{email}\
+</section></main></body></html>",
+        escape_html(&page.title),
+        escape_html(&page.title),
+        escape_html(&page.message)
+    )
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn wants_close(headers: &str) -> bool {

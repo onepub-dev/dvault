@@ -1,4 +1,5 @@
 use std::fs;
+use std::net::IpAddr;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use lockbox_share_protocol::{
     encode_replication_request, sign_replication_event, ReplicationEvent, ReplicationEventKind,
     ReplicationRequest, ServerStatus, TopologyRoute, TopologyServer,
 };
-use lockbox_share_server::store::{ServerConfig, ShareStore};
+use lockbox_share_server::store::{ServerConfig, ShareStore, StoreError};
 
 fn contact_payload(label: &str) -> Vec<u8> {
     lockbox_share_protocol::payload::encode_contact_share(
@@ -82,6 +83,159 @@ fn store_creates_fetches_and_deletes_share() {
 }
 
 #[test]
+fn store_attaches_email_verification_to_pending_share() {
+    let (_guard, mut config) = temp_config("email-verification");
+    config.public_url = Some("https://share.example.test/v1/share".to_string());
+    let store = ShareStore::open(config).unwrap();
+    let payload = contact_payload("email-verification");
+    let create = store
+        .create_from_payload(
+            &decode_request(
+                &lockbox_share_protocol::protocol::encode_share_request_with_email(
+                    900,
+                    2,
+                    &payload,
+                    Some("alice@example.test"),
+                ),
+                2048,
+            )
+            .unwrap()
+            .payload,
+        )
+        .unwrap();
+
+    let verification_url = create.verification_url.as_deref().unwrap();
+    assert!(verification_url.starts_with("https://share.example.test/v1/verify?"));
+    let first_fetch = store.fetch(&create.share_code).unwrap();
+    let first_verification = first_fetch.email_verification.unwrap();
+    assert_eq!(first_verification.email, "alice@example.test");
+    assert!(!first_verification.verified);
+    assert!(first_verification.attestation.is_empty());
+
+    let (code, token) = verification_query_parts(verification_url);
+    assert_eq!(code, create.share_code);
+    let page = store.verify_email(&code, &token);
+    assert!(page.success);
+
+    let second_fetch = store.fetch(&create.share_code).unwrap();
+    let second_verification = second_fetch.email_verification.unwrap();
+    assert_eq!(second_verification.email, "alice@example.test");
+    assert!(second_verification.verified);
+    assert!(second_verification.verified_at_unix_ms > 0);
+    assert!(!second_verification.attestation.is_empty());
+}
+
+#[test]
+fn store_fetches_verified_share_by_publisher_email_without_share_code() {
+    let (_guard, mut config) = temp_config("email-fetch");
+    config.public_url = Some("https://share.example.test/v1/share".to_string());
+    let store = ShareStore::open(config).unwrap();
+    let payload = contact_payload("email-fetch");
+    let request = decode_request(
+        &lockbox_share_protocol::protocol::encode_share_request_with_email(
+            900,
+            1,
+            &payload,
+            Some("publisher@example.test"),
+        ),
+        2048,
+    )
+    .unwrap();
+    let create = store.create_from_payload(&request.payload).unwrap();
+
+    let pending_fetch =
+        decode_request(&encode_fetch_request("publisher@example.test"), 2048).unwrap();
+    assert_status(
+        &store.handle(pending_fetch.operation, &pending_fetch.payload),
+        Status::ShareNotFound,
+    );
+
+    let (code, token) = verification_query_parts(create.verification_url.as_deref().unwrap());
+    assert_eq!(code, create.share_code);
+    assert!(store.verify_email(&code, &token).success);
+
+    let verified_fetch =
+        decode_request(&encode_fetch_request("publisher@example.test"), 2048).unwrap();
+    let response = store.handle(verified_fetch.operation, &verified_fetch.payload);
+    assert_status(&response, Status::Success);
+    assert!(matches!(
+        store.fetch(&create.share_code),
+        Err(lockbox_share_server::store::StoreError::NotFound)
+    ));
+}
+
+#[test]
+fn store_rate_limits_verification_email_by_recipient() {
+    let (_guard, mut config) = temp_config("email-rate-recipient");
+    config.verification_email_rate_limit_per_hour = 1;
+    config.verification_email_ip_rate_limit_per_hour = 0;
+    let store = ShareStore::open(config).unwrap();
+
+    let first = decode_request(
+        &lockbox_share_protocol::protocol::encode_share_request_with_email(
+            900,
+            1,
+            &contact_payload("email-rate-recipient-a"),
+            Some("alice@example.test"),
+        ),
+        2048,
+    )
+    .unwrap();
+    store.create_from_payload(&first.payload).unwrap();
+
+    let second = decode_request(
+        &lockbox_share_protocol::protocol::encode_share_request_with_email(
+            900,
+            1,
+            &contact_payload("email-rate-recipient-b"),
+            Some("ALICE@example.test"),
+        ),
+        2048,
+    )
+    .unwrap();
+    assert!(matches!(
+        store.create_from_payload(&second.payload),
+        Err(StoreError::RateLimited)
+    ));
+}
+
+#[test]
+fn store_rate_limits_verification_email_by_ip_address() {
+    let (_guard, mut config) = temp_config("email-rate-ip");
+    config.verification_email_rate_limit_per_hour = 0;
+    config.verification_email_ip_rate_limit_per_hour = 1;
+    let store = ShareStore::open(config).unwrap();
+    let peer_ip = Some(IpAddr::from([127, 0, 0, 1]));
+
+    let first = decode_request(
+        &lockbox_share_protocol::protocol::encode_share_request_with_email(
+            900,
+            1,
+            &contact_payload("email-rate-ip-a"),
+            Some("alice@example.test"),
+        ),
+        2048,
+    )
+    .unwrap();
+    store
+        .create_from_payload_with_peer(&first.payload, peer_ip)
+        .unwrap();
+
+    let second = decode_request(
+        &lockbox_share_protocol::protocol::encode_share_request_with_email(
+            900,
+            1,
+            &contact_payload("email-rate-ip-b"),
+            Some("bob@example.test"),
+        ),
+        2048,
+    )
+    .unwrap();
+    let response = store.handle_with_peer(second.operation, &second.payload, peer_ip);
+    assert_status(&response, Status::RateLimited);
+}
+
+#[test]
 fn store_enforces_fetch_limit() {
     let (_guard, config) = temp_config("fetch-limit");
     let store = ShareStore::open(config).unwrap();
@@ -96,6 +250,21 @@ fn store_enforces_fetch_limit() {
 
     assert!(store.fetch(&create.share_code).is_ok());
     assert!(store.fetch(&create.share_code).is_err());
+}
+
+fn verification_query_parts(url: &str) -> (String, String) {
+    let query = url.split_once('?').unwrap().1;
+    let mut code = None;
+    let mut token = None;
+    for part in query.split('&') {
+        let (key, value) = part.split_once('=').unwrap();
+        match key {
+            "code" => code = Some(value.to_string()),
+            "token" => token = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    (code.unwrap(), token.unwrap())
 }
 
 #[test]
@@ -178,6 +347,7 @@ fn replicated_share_is_served_only_after_owner_promotion() {
             share_code: "0123456789012".to_string(),
             delete_token_hash: vec![9_u8; 16],
             payload: payload.clone(),
+            contact_email: Some("replica-promote@example.com".to_string()),
             expires_at_unix_ms: unix_ms_now() + 900_000,
             max_fetches: 1,
             fetches: 0,
@@ -206,6 +376,7 @@ fn replicated_share_is_served_only_after_owner_promotion() {
             share_code: "0123456789012".to_string(),
             delete_token_hash: vec![9_u8; 16],
             payload: payload.clone(),
+            contact_email: Some("replica-promote@example.com".to_string()),
             expires_at_unix_ms: unix_ms_now() + 900_000,
             max_fetches: 1,
             fetches: 0,
@@ -235,6 +406,7 @@ fn replication_sequence_is_idempotent_after_restart() {
             share_code: "0123456789012".to_string(),
             delete_token_hash: vec![9_u8; 16],
             payload: payload.clone(),
+            contact_email: Some("replica-idempotent@example.com".to_string()),
             expires_at_unix_ms: unix_ms_now() + 900_000,
             max_fetches: 2,
             fetches: 0,
@@ -529,6 +701,7 @@ fn client_api_can_share_fetch_and_delete() {
                 share_nonce: &[2_u8; 24],
                 created_at_unix_ms: 1,
                 expires_at_unix_ms: 2,
+                verification_email: None,
             },
         )
         .unwrap();
@@ -596,6 +769,9 @@ fn temp_config(name: &str) -> (TempGuard, ServerConfig) {
         index_cache_entries: 65_536,
         rate_limit_per_minute: 120,
         rate_limit_burst: 40,
+        verification_email_command: None,
+        verification_email_rate_limit_per_hour: 5,
+        verification_email_ip_rate_limit_per_hour: 30,
     };
     (TempGuard(path), config)
 }

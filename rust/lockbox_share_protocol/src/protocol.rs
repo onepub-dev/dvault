@@ -79,6 +79,31 @@ pub struct ResponseEnvelope {
     pub payload: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShareResponse {
+    pub share_code: String,
+    pub delete_token: Vec<u8>,
+    pub expires_at_unix_ms: u64,
+    pub max_fetches: u16,
+    pub verification_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FetchResponse {
+    pub share_payload: Vec<u8>,
+    pub expires_at_unix_ms: u64,
+    pub remaining_fetches: u16,
+    pub email_verification: Option<EmailVerification>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmailVerification {
+    pub email: String,
+    pub verified: bool,
+    pub verified_at_unix_ms: u64,
+    pub attestation: Vec<u8>,
+}
+
 #[derive(Debug)]
 pub enum ProtocolError {
     TooShort,
@@ -168,22 +193,67 @@ pub fn decode_error_payload(payload: &[u8]) -> Result<(Status, String), Protocol
 }
 
 pub fn decode_share_response(payload: &[u8]) -> Result<(String, Vec<u8>, u64, u16), ProtocolError> {
+    let decoded = decode_share_response_document(payload)?;
+    Ok((
+        decoded.share_code,
+        decoded.delete_token,
+        decoded.expires_at_unix_ms,
+        decoded.max_fetches,
+    ))
+}
+
+pub fn decode_share_response_document(payload: &[u8]) -> Result<ShareResponse, ProtocolError> {
     let mut reader = Reader::new(payload);
     reader.message_version()?;
     let share_code = reader.string()?;
     let delete_token = reader.bytes()?;
     let expires_at_unix_ms = reader.u64()?;
     let max_fetches = reader.u16()?;
-    Ok((share_code, delete_token, expires_at_unix_ms, max_fetches))
+    let verification_url = if reader.is_done() {
+        None
+    } else {
+        Some(reader.string()?)
+    };
+    Ok(ShareResponse {
+        share_code,
+        delete_token,
+        expires_at_unix_ms,
+        max_fetches,
+        verification_url,
+    })
 }
 
 pub fn decode_fetch_response(payload: &[u8]) -> Result<(Vec<u8>, u64, u16), ProtocolError> {
+    let decoded = decode_fetch_response_document(payload)?;
+    Ok((
+        decoded.share_payload,
+        decoded.expires_at_unix_ms,
+        decoded.remaining_fetches,
+    ))
+}
+
+pub fn decode_fetch_response_document(payload: &[u8]) -> Result<FetchResponse, ProtocolError> {
     let mut reader = Reader::new(payload);
     reader.message_version()?;
     let share_payload = reader.bytes()?;
     let expires_at_unix_ms = reader.u64()?;
     let remaining_fetches = reader.u16()?;
-    Ok((share_payload, expires_at_unix_ms, remaining_fetches))
+    let email_verification = if reader.is_done() {
+        None
+    } else {
+        Some(EmailVerification {
+            email: reader.string()?,
+            verified: reader.u8()? != 0,
+            verified_at_unix_ms: reader.u64()?,
+            attestation: reader.bytes()?,
+        })
+    };
+    Ok(FetchResponse {
+        share_payload,
+        expires_at_unix_ms,
+        remaining_fetches,
+        email_verification,
+    })
 }
 
 pub fn decode_delete_response(payload: &[u8]) -> Result<bool, ProtocolError> {
@@ -212,11 +282,23 @@ pub fn encode_error(operation: Operation, status: Status, message: &str) -> Vec<
 }
 
 pub fn encode_share_request(ttl_seconds: u32, max_fetches: u16, payload: &[u8]) -> Vec<u8> {
+    encode_share_request_with_email(ttl_seconds, max_fetches, payload, None)
+}
+
+pub fn encode_share_request_with_email(
+    ttl_seconds: u32,
+    max_fetches: u16,
+    payload: &[u8],
+    verification_email: Option<&str>,
+) -> Vec<u8> {
     let mut body = Vec::with_capacity(8 + 4 + payload.len());
     put_u16(&mut body, MESSAGE_VERSION);
     put_u32(&mut body, ttl_seconds);
     put_u16(&mut body, max_fetches);
     put_bytes(&mut body, payload);
+    if let Some(email) = verification_email {
+        put_string(&mut body, email);
+    }
     encode_request(Operation::Share, &body)
 }
 
@@ -326,6 +408,14 @@ impl<'a> Reader<'a> {
         let out = &self.bytes[self.offset..self.offset + len];
         self.offset += len;
         Ok(out)
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+
+    pub fn remaining_len(&self) -> usize {
+        self.bytes.len().saturating_sub(self.offset)
     }
 }
 

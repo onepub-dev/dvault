@@ -28,6 +28,7 @@ pub enum ReplicationEventKind {
         share_code: String,
         delete_token_hash: Vec<u8>,
         payload: Vec<u8>,
+        contact_email: Option<String>,
         expires_at_unix_ms: u64,
         max_fetches: u16,
         fetches: u16,
@@ -69,6 +70,7 @@ fn encode_event_body(out: &mut Vec<u8>, event: &ReplicationEvent) {
             share_code,
             delete_token_hash,
             payload,
+            contact_email,
             expires_at_unix_ms,
             max_fetches,
             fetches,
@@ -80,6 +82,9 @@ fn encode_event_body(out: &mut Vec<u8>, event: &ReplicationEvent) {
             protocol::put_u64(out, *expires_at_unix_ms);
             protocol::put_u16(out, *max_fetches);
             protocol::put_u16(out, *fetches);
+            if let Some(email) = contact_email {
+                protocol::put_string(out, email);
+            }
         }
         ReplicationEventKind::FetchCount {
             share_code,
@@ -125,6 +130,11 @@ pub fn decode_replication_request(bytes: &[u8]) -> Result<ReplicationRequest, Cl
             expires_at_unix_ms: reader.u64().map_err(replication_protocol_error)?,
             max_fetches: reader.u16().map_err(replication_protocol_error)?,
             fetches: reader.u16().map_err(replication_protocol_error)?,
+            contact_email: if reader.is_done() {
+                None
+            } else {
+                Some(reader.string().map_err(replication_protocol_error)?)
+            },
         },
         EVENT_FETCH_COUNT => ReplicationEventKind::FetchCount {
             share_code: reader.string().map_err(replication_protocol_error)?,

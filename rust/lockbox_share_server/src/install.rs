@@ -196,7 +196,10 @@ max_ttl_seconds = 900\n\
 max_payload_bytes = 8192\n\
 max_fetches_per_share = 8\n\
 rate_limit_per_minute = 120\n\
-rate_limit_burst = 40\n"
+rate_limit_burst = 40\n\
+verification_email_command = \"\"\n\
+verification_email_rate_limit_per_hour = 5\n\
+verification_email_ip_rate_limit_per_hour = 30\n"
 }
 
 fn unit_file(binary: &str) -> String {

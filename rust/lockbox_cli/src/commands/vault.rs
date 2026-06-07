@@ -4,7 +4,10 @@ use super::context::{
 };
 use super::output::{output_format_from_args, print_records};
 use lockbox_core::{Error, OwnerSigningPublicKey, RecipientKeyPair, RecipientPublicKey};
-use lockbox_share_protocol::{ContactShare, ShareClientPool};
+use lockbox_share_protocol::{
+    contact_fingerprint, normalize_contact_email, ContactShare, ShareClientPool,
+    CONTACT_FINGERPRINT_LEN,
+};
 use lockbox_vault::{
     default_vault_dir, default_vault_path, disable_platform_secret_store,
     enable_platform_secret_store, encode_hex, export_private_key, export_public_key,
@@ -19,9 +22,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SHARE_RECEIVE_VERIFICATION_ADVICE: &str = concat!(
-    "verify the fingerprint and signing_fingerprint over a trusted channel you initiated; ",
-    "do not accept verification codes sent only through the original share channel or ",
-    "a channel opened by the sharer"
+    "verify the fingerprint by asking the publisher over a trusted channel you initiated; ",
+    "if the publisher sends you the fingerprint before you ask, do not accept it"
 );
 
 pub(crate) fn run(args: &[String]) -> CliResult<()> {
@@ -32,6 +34,9 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "identity" => identity_command(&args[1..]),
         "contact" => contact_command(&args[1..]),
         "share" => share_command(&args[1..]),
+        "publish" => share_publish(&args[1..]),
+        "receive" | "recieve" | "fetch" => share_receive(&args[1..]),
+        "remove" | "delete" => share_delete(&args[1..]),
         "lockbox" => lockbox_command(&args[1..]),
         "sessions" => sessions(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
@@ -41,7 +46,7 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
 fn share_command(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
         Some("publish") => share_publish(&args[1..]),
-        Some("receive") | Some("fetch") => share_receive(&args[1..]),
+        Some("receive") | Some("recieve") | Some("fetch") => share_receive(&args[1..]),
         Some("remove") | Some("rm") | Some("delete") => share_delete(&args[1..]),
         _ => Err(Error::InvalidInput(
             "missing vault share command; use `lockbox vault share publish`, `lockbox vault share receive`, or `lockbox vault share remove`"
@@ -56,6 +61,7 @@ fn identity_command(args: &[String]) -> CliResult<()> {
     match command {
         "list" | "ls" => list_identities(&args[1..]),
         "create" | "gen" | "generate" => keygen(&args[1..]),
+        "email" => identity_email(&args[1..]),
         "history" => identity_history(&args[1..]),
         "import" => import_key(&args[1..]),
         "export" => export_public(&args[1..]),
@@ -288,7 +294,21 @@ fn share_publish(args: &[String]) -> CliResult<()> {
     let ttl_seconds = options.ttl_seconds.unwrap_or(900);
     let expires_at = now.saturating_add(ttl_seconds as u64 * 1000);
     let nonce = share_nonce(identity, &public_key, now);
-    let fingerprint = public_key_fingerprint(&public_key);
+    if options.email.is_some() {
+        return Err(Error::InvalidInput(
+            "set the identity email with `lockbox vault identity email [identity] <email>` before publishing".to_string(),
+        )
+        .into());
+    }
+    let email = vault.identity_email(identity)?.ok_or_else(|| {
+        Error::InvalidInput(format!(
+            "identity {identity} has no email address; run `lockbox vault identity email {identity} <email>`"
+        ))
+    })?;
+    let email = normalize_contact_email(&email)
+        .map_err(|_| Error::InvalidInput("invalid identity email address".to_string()))?;
+    let fingerprint = contact_fingerprint(&email, &public_key, &signing_public_key)
+        .map_err(|_| Error::InvalidInput("invalid contact fingerprint fields".to_string()))?;
     let pool = share_client_pool(&options)?;
     let result = pool.share_contact(
         ttl_seconds,
@@ -301,14 +321,22 @@ fn share_publish(args: &[String]) -> CliResult<()> {
             share_nonce: &nonce,
             created_at_unix_ms: now,
             expires_at_unix_ms: expires_at,
+            verification_email: Some(&email),
         },
     )?;
-    println!("share_code={}", result.share_code);
-    println!("fingerprint={}", encode_hex(&fingerprint));
+    println!("published=yes");
+    println!("email={email}");
+    println!("contact_fingerprint={}", format_hex_pairs(&fingerprint));
+    println!(
+        "fingerprint_purpose=do not send this fingerprint; ask the receiver to call you to obtain it"
+    );
+    if let Some(url) = &result.verification_url {
+        println!("verification_url={url}");
+    }
+    println!("verification_advice=check the inbox for {email} and click the verification link");
     println!("delete_token={}", encode_hex(&result.delete_token));
     println!(
-        "delete_token_purpose=use this token with `lockbox vault share remove {} <delete-token>` to remove the pending share before it expires",
-        result.share_code
+        "delete_token_purpose=use this token with `lockbox vault share remove {email} <delete-token>` to remove the pending share before it expires"
     );
     println!(
         "expires_at_utc={}",
@@ -320,31 +348,76 @@ fn share_publish(args: &[String]) -> CliResult<()> {
 
 fn share_receive(args: &[String]) -> CliResult<()> {
     let options = ShareCliOptions::parse(args)?;
-    let share_code = options
+    let expected_email = options
         .positionals
         .first()
-        .ok_or_else(|| Error::InvalidInput("missing share code".to_string()))?;
+        .cloned()
+        .or(options.email.clone())
+        .ok_or_else(|| Error::InvalidInput("missing publisher email address".to_string()))?;
+    let expected_email = normalize_contact_email(&expected_email)
+        .map_err(|_| Error::InvalidInput("invalid publisher email address".to_string()))?;
     let contact_name = options
         .positionals
         .get(1)
-        .ok_or_else(|| Error::InvalidInput("missing contact name".to_string()))?;
+        .cloned()
+        .unwrap_or_else(|| contact_name_from_email(&expected_email));
+    let expected_fingerprint = options
+        .fingerprint
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| prompt_line("Fingerprint from trusted second channel: "))?;
+    let expected_fingerprint = decode_fingerprint_hex(&expected_fingerprint)?;
     let pool = share_client_pool(&options)?;
-    let fetched = pool.fetch(share_code)?;
+    let fetched = pool.fetch(&expected_email)?;
+    let verification = fetched.email_verification.as_ref().ok_or_else(|| {
+        Error::InvalidInput("publisher email has not been verified by the share server".to_string())
+    })?;
+    if verification.email != expected_email || !verification.verified {
+        return Err(Error::InvalidInput(
+            "publisher email has not been verified by the share server".to_string(),
+        )
+        .into());
+    }
     let contact = lockbox_share_protocol::decode_contact_share(&fetched.payload)?;
+    let computed_fingerprint = contact_fingerprint(
+        &expected_email,
+        &contact.public_key,
+        &contact.signing_public_key,
+    )
+    .map_err(|_| Error::InvalidInput("invalid contact fingerprint fields".to_string()))?;
+    if expected_fingerprint != computed_fingerprint {
+        return Err(Error::InvalidInput(format!(
+            "contact fingerprint mismatch for {expected_email}; expected {}, computed {}",
+            format_hex_pairs(&expected_fingerprint),
+            format_hex_pairs(&computed_fingerprint)
+        ))
+        .into());
+    }
     let recipient = RecipientPublicKey::from_bytes(&contact.public_key)?;
     let signing_public = OwnerSigningPublicKey::from_bytes(&contact.signing_public_key)?;
     let vault = default_vault()?;
-    if vault.trusted_recipient_exists(contact_name)? && !options.overwrite {
+    if vault.trusted_recipient_exists(&contact_name)? && !options.overwrite {
         return Err(Error::AlreadyExists(format!("contact {contact_name}")).into());
     }
-    vault.store_trusted_recipient(contact_name, &recipient)?;
-    vault.store_trusted_recipient_signing_key(contact_name, &signing_public)?;
+    vault.store_trusted_recipient(&contact_name, &recipient)?;
+    vault.store_trusted_recipient_signing_key(&contact_name, &signing_public)?;
     println!("contact={contact_name}");
     println!("identity={}", contact.identity);
-    println!("fingerprint={}", encode_hex(&contact.fingerprint));
+    println!("email={expected_email}");
     println!(
-        "signing_fingerprint={}",
-        encode_hex(&public_key_fingerprint(&contact.signing_public_key))
+        "contact_fingerprint={}",
+        format_hex_pairs(&computed_fingerprint)
+    );
+    println!("fingerprint_verified=yes");
+    println!("email_verification_email={}", verification.email);
+    println!("email_verification_status=verified");
+    println!(
+        "email_verified_at_utc={}",
+        format_unix_ms_utc(verification.verified_at_unix_ms)
+    );
+    println!(
+        "email_verification_attestation={}",
+        encode_hex(&verification.attestation)
     );
     println!("verification_advice={SHARE_RECEIVE_VERIFICATION_ADVICE}");
     Ok(())
@@ -352,16 +425,15 @@ fn share_receive(args: &[String]) -> CliResult<()> {
 
 fn share_delete(args: &[String]) -> CliResult<()> {
     let options = ShareCliOptions::parse(args)?;
-    let share_code = options
-        .positionals
-        .first()
-        .ok_or_else(|| Error::InvalidInput("missing share code".to_string()))?;
+    let lookup = options.positionals.first().ok_or_else(|| {
+        Error::InvalidInput("missing publisher email address or share code".to_string())
+    })?;
     let delete_token = options
         .positionals
         .get(1)
         .ok_or_else(|| Error::InvalidInput("missing delete token".to_string()))?;
     let delete_token = decode_hex(delete_token)?;
-    let deleted = share_client_pool(&options)?.delete(share_code, &delete_token)?;
+    let deleted = share_client_pool(&options)?.delete(lookup, &delete_token)?;
     println!("deleted={}", if deleted { "yes" } else { "no" });
     Ok(())
 }
@@ -372,6 +444,8 @@ struct ShareCliOptions {
     topology_url: Option<String>,
     ttl_seconds: Option<u32>,
     max_fetches: Option<u16>,
+    email: Option<String>,
+    fingerprint: Option<String>,
     overwrite: bool,
     positionals: Vec<String>,
 }
@@ -399,6 +473,15 @@ impl ShareCliOptions {
                     index += 1;
                     options.max_fetches =
                         Some(require_arg(args, index, "--max-fetches value")?.parse()?);
+                }
+                "--email" | "--verification-email" => {
+                    index += 1;
+                    options.email = Some(require_arg(args, index, "--email value")?.to_string());
+                }
+                "--fingerprint" => {
+                    index += 1;
+                    options.fingerprint =
+                        Some(require_arg(args, index, "--fingerprint value")?.to_string());
                 }
                 "--overwrite" => options.overwrite = true,
                 other => options.positionals.push(other.to_string()),
@@ -492,10 +575,6 @@ fn normalize_topology_url(value: &str) -> String {
     }
 }
 
-fn public_key_fingerprint(public_key: &[u8]) -> Vec<u8> {
-    Sha256::digest(public_key).to_vec()
-}
-
 fn share_nonce(identity: &str, public_key: &[u8], now: u64) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(identity.as_bytes());
@@ -520,6 +599,62 @@ fn format_unix_ms_utc(unix_ms: u64) -> String {
     let hour = seconds_of_day / 3_600;
     let minute = (seconds_of_day % 3_600) / 60;
     format!("{year:04}/{month:02}/{day:02} {hour:02}:{minute:02} UTC")
+}
+
+fn prompt_line(prompt: &str) -> CliResult<String> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut value = String::new();
+    io::stdin().read_line(&mut value)?;
+    Ok(value.trim().to_string())
+}
+
+fn format_hex_pairs(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().saturating_mul(3).saturating_sub(1));
+    for (index, byte) in bytes.iter().enumerate() {
+        if index != 0 {
+            out.push(' ');
+        }
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn decode_fingerprint_hex(value: &str) -> CliResult<Vec<u8>> {
+    let compact = value
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace() && *byte != b':' && *byte != b'-')
+        .collect::<Vec<_>>();
+    let compact = String::from_utf8(compact)
+        .map_err(|_| Error::InvalidInput("fingerprint is not valid UTF-8".to_string()))?;
+    let fingerprint = decode_hex(&compact)?;
+    if fingerprint.len() != CONTACT_FINGERPRINT_LEN {
+        return Err(Error::InvalidInput(format!(
+            "fingerprint must contain {CONTACT_FINGERPRINT_LEN} two-digit hex groups"
+        ))
+        .into());
+    }
+    Ok(fingerprint)
+}
+
+fn contact_name_from_email(email: &str) -> String {
+    let mut out = String::with_capacity(email.len());
+    let mut previous_separator = false;
+    for byte in email.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            out.push(byte as char);
+            previous_separator = false;
+        } else if !previous_separator {
+            out.push('_');
+            previous_separator = true;
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() {
+        "contact".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
@@ -628,9 +763,28 @@ fn list_identities(args: &[String]) -> CliResult<()> {
     let vault = default_vault()?;
     let mut rows = Vec::new();
     for name in vault.list_private_keys()? {
-        rows.push(vec![name]);
+        let email = vault
+            .identity_email(&name)?
+            .unwrap_or_else(|| "-".to_string());
+        rows.push(vec![name, email]);
     }
-    print_records(&["name"], rows, format)?;
+    print_records(&["name", "email"], rows, format)?;
+    Ok(())
+}
+
+fn identity_email(args: &[String]) -> CliResult<()> {
+    let (name, email) = match args {
+        [email] => (VaultDirectory::DEFAULT_KEY_NAME, email.as_str()),
+        [name, email, ..] => (name.as_str(), email.as_str()),
+        [] => {
+            return Err(Error::InvalidInput("missing identity email address".to_string()).into());
+        }
+    };
+    let email = normalize_contact_email(email)
+        .map_err(|_| Error::InvalidInput("invalid identity email address".to_string()))?;
+    default_vault()?.store_identity_email(name, &email)?;
+    println!("identity={name}");
+    println!("email={email}");
     Ok(())
 }
 
@@ -891,7 +1045,10 @@ fn set_private_key_permissions(_path: &str) -> CliResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_unix_ms_utc, SHARE_RECEIVE_VERIFICATION_ADVICE};
+    use super::{
+        contact_name_from_email, decode_fingerprint_hex, format_hex_pairs, format_unix_ms_utc,
+        SHARE_RECEIVE_VERIFICATION_ADVICE,
+    };
 
     #[test]
     fn share_expiry_uses_human_readable_utc_time() {
@@ -906,6 +1063,29 @@ mod tests {
     fn share_receive_advice_requires_recipient_initiated_trusted_channel() {
         assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("trusted channel"));
         assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("you initiated"));
-        assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("opened by the sharer"));
+        assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("do not accept it"));
+    }
+
+    #[test]
+    fn contact_fingerprint_hex_uses_lowercase_pairs() {
+        let bytes = [
+            0x00, 0x01, 0x0a, 0x0b, 0x10, 0x11, 0x7f, 0x80, 0xab, 0xbc, 0xcd, 0xde, 0xef, 0xf0,
+            0xfe, 0xff,
+        ];
+        let formatted = format_hex_pairs(&bytes);
+        assert_eq!(formatted, "00 01 0a 0b 10 11 7f 80 ab bc cd de ef f0 fe ff");
+        assert_eq!(decode_fingerprint_hex(&formatted).unwrap(), bytes);
+        assert_eq!(
+            decode_fingerprint_hex("00:01:0A:0B:10:11:7F:80:AB:BC:CD:DE:EF:F0:FE:FF").unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn contact_name_defaults_from_email() {
+        assert_eq!(
+            contact_name_from_email("alice.publisher@example.test"),
+            "alice_publisher_example_test"
+        );
     }
 }

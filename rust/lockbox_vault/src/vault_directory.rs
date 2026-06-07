@@ -18,6 +18,8 @@ const KNOWN_LOCKBOX_MAGIC: &[u8; 4] = b"LBKL";
 const KNOWN_LOCKBOX_VERSION: u16 = 1;
 const IDENTITY_HISTORY_MAGIC: &[u8; 4] = b"LBIH";
 const IDENTITY_HISTORY_VERSION: u16 = 1;
+const IDENTITY_EMAIL_MAGIC: &[u8; 4] = b"LBIE";
+const IDENTITY_EMAIL_VERSION: u16 = 1;
 const GENERATION_ACTIVE: u16 = 1;
 const GENERATION_RETIRED: u16 = 2;
 const GENERATION_COMPROMISED: u16 = 3;
@@ -234,8 +236,32 @@ impl VaultDirectory {
             }
             self.delete_record_if_exists(&identity_history_record_path(name)?)?;
         }
+        self.delete_record_if_exists(&identity_email_record_path(name)?)?;
         self.delete_secret_env_record_if_exists(&owner_signing_key_env_name(name)?)?;
         self.delete_secret_env_record_if_exists(&private_key_env_name(name)?)
+    }
+
+    /// Stores the public email address associated with a vault identity.
+    pub fn store_identity_email(&self, name: &str, email: &str) -> Result<()> {
+        if !self.private_key_exists(name)? {
+            return Err(Error::NotFound(format!("vault private key {name}")));
+        }
+        self.put_record_replace(
+            &identity_email_record_path(name)?,
+            &encode_identity_email(email),
+        )
+    }
+
+    /// Loads the public email address associated with a vault identity.
+    pub fn identity_email(&self, name: &str) -> Result<Option<String>> {
+        let path = identity_email_record_path(name)?;
+        {
+            let lockbox = self.lockbox.borrow();
+            if lockbox.stat(&path).is_none() {
+                return Ok(None);
+            }
+        }
+        decode_identity_email(&self.get_record(&path)?).map(Some)
     }
 
     /// Lists identity generations for a private key, creating generation one
@@ -724,6 +750,13 @@ fn identity_history_record_path(name: &str) -> Result<LockboxPath> {
     ))
 }
 
+fn identity_email_record_path(name: &str) -> Result<LockboxPath> {
+    LockboxPath::new(format!(
+        "/identity_emails/{}.lbie",
+        validate_record_name(name)?
+    ))
+}
+
 fn key_directory_backup_record_path(lockbox_id: LockboxId) -> LockboxPath {
     LockboxPath::new(format!("/key_directories/{lockbox_id}.keydir"))
         .expect("key directory backup path is a valid lockbox path")
@@ -845,6 +878,32 @@ fn decode_known_lockbox(bytes: &[u8]) -> Result<KnownLockbox> {
         path,
         last_seen_unix_ms,
     })
+}
+
+fn encode_identity_email(email: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(IDENTITY_EMAIL_MAGIC);
+    put_u16(&mut out, IDENTITY_EMAIL_VERSION);
+    put_string(&mut out, email);
+    out
+}
+
+fn decode_identity_email(bytes: &[u8]) -> Result<String> {
+    let mut reader = BinaryReader::new(bytes);
+    if reader.bytes(4)? != IDENTITY_EMAIL_MAGIC {
+        return Err(Error::CorruptVaultRecord(
+            "identity email record has invalid magic".to_string(),
+        ));
+    }
+    let version = reader.u16()?;
+    if version != IDENTITY_EMAIL_VERSION {
+        return Err(Error::CorruptVaultRecord(format!(
+            "identity email record version {version} is not supported"
+        )));
+    }
+    let email = reader.string()?;
+    reader.finish()?;
+    Ok(email)
 }
 
 fn encode_identity_history(history: &IdentityHistory) -> Vec<u8> {

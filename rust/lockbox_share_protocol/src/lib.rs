@@ -10,11 +10,12 @@ pub use client::{
     ShareResult, Transport,
 };
 pub use payload::{
-    decode_contact_share, encode_contact_share, encode_key_replacement,
-    encode_signed_key_replacement, encode_unsigned_key_replacement, validate_payload,
-    DecodedContactShare, KeyReplacement, PayloadError, PayloadType, SignedKeyReplacement,
-    UnsignedKeyReplacement,
+    contact_fingerprint, decode_contact_share, encode_contact_share, encode_key_replacement,
+    encode_signed_key_replacement, encode_unsigned_key_replacement, normalize_contact_email,
+    validate_payload, DecodedContactShare, KeyReplacement, PayloadError, PayloadType,
+    SignedKeyReplacement, UnsignedKeyReplacement, CONTACT_FINGERPRINT_LEN,
 };
+pub use protocol::{EmailVerification, FetchResponse, ShareResponse};
 pub use replication::{
     decode_replication_request, encode_replication_request, sign_replication_event,
     ReplicationEvent, ReplicationEventKind, ReplicationRequest,
