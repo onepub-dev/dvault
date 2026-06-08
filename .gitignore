@@ -22,3 +22,4 @@ rust/fuzz/target
 .bench-target
 rust/lockbox_cli/testbox
 rust/lockbox_cli/testbox.lbox
+**/*.lbox
