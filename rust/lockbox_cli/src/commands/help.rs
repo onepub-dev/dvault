@@ -84,7 +84,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Read the lockbox password from stdin."),
                 )
                 .arg(required("lockbox", "Lockbox path.")),
-            archive_command("close", "Forget cached open access.")
+            archive_command("close", "Close the lockbox.")
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox close secrets.lbox\n  lockbox close --all",
@@ -95,7 +95,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .long("all")
                         .action(ArgAction::SetTrue)
                         .conflicts_with("lockbox")
-                        .help("Forget cached open access for all lockboxes."),
+                        .help("Close all lockboxes."),
                 )
                 .arg(
                     optional("lockbox", "Lockbox path.")
@@ -235,7 +235,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .action(ArgAction::SetTrue)
                         .help("List entries below child directories."),
                 )
-                .arg(required("lockbox", "Lockbox path."))
+                .arg(optional("lockbox", "Lockbox path. Defaults to the active lockbox."))
                 .arg(optional("path", "Path or glob pattern inside the lockbox.")),
             file_command("rm", "Remove a stored entry.")
                 .visible_alias("remove")
@@ -265,6 +265,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .arg(required("to", "New path inside the lockbox.")),
             variables_command(verbose),
             form_command(verbose),
+            session_command(verbose),
             access_command(verbose),
             vault_command(verbose),
             developer_command("visualize", "Print internal lockbox structure.")
@@ -299,7 +300,7 @@ Available commands:
 Archives
   create          Create a new encrypted lockbox.
   open            Open a lockbox for later commands.
-  close           Forget cached open access.
+  close           Close the lockbox.
   recover         Recover readable entries from a damaged lockbox.
   doctor          Show local vault and session agent diagnostics.
 
@@ -311,9 +312,12 @@ Files
   rm              Remove a stored entry.
   rename          Rename a stored entry.
 
-Variables
+Data
   variables       Store, retrieve, list, export, or remove variable values.
   form            Manage typed multi-field form records.
+
+Session
+  session         Manage active and open lockbox sessions.
 
 Sharing
   access          Manage who can open a lockbox.
@@ -383,6 +387,7 @@ fn variables_command(verbose: bool) -> Command {
         "variables",
         "Store, retrieve, list, export, or remove variable values.",
     )
+    .visible_alias("var")
     .after_help(verbose_help(
         verbose,
         "Examples:\n  lockbox variables set secrets.lbox APP_MODE production\n  lockbox variables get secrets.lbox APP_MODE\n  lockbox variables export secrets.lbox",
@@ -490,7 +495,7 @@ fn variables_command(verbose: bool) -> Command {
                 "Context:\n  Variables list shows value names and whether each value is normal or secret. It does not print stored values. Pass a path such as /production to list that group, or a glob such as **/API_KEY to match names across groups.",
             ))
             .arg(output_format_arg())
-            .arg(required("lockbox", "Lockbox path."))
+            .arg(optional("lockbox", "Lockbox path. Defaults to the active lockbox."))
             .arg(optional("pattern", "Optional variable path or glob pattern.")),
     )
     .subcommand(
@@ -751,6 +756,80 @@ fn form_command(verbose: bool) -> Command {
         )
 }
 
+fn session_command(verbose: bool) -> Command {
+    base_command("session", "Manage active and open lockbox sessions.")
+        .disable_help_subcommand(true)
+        .arg_required_else_help(false)
+        .after_help(verbose_help(
+            verbose,
+            "Examples:\n  lockbox session\n  lockbox session activate secrets.lbox\n  lockbox session auto-open lockboxes",
+            "Context:\n  Session shows the active lockbox and lockboxes currently open in the session agent. The active lockbox is used by commands that can safely omit a lockbox path.",
+        ))
+        .arg(output_format_arg())
+        .subcommand(
+            Command::new("activate")
+                .about("Set the active lockbox.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox session activate secrets.lbox",
+                    "Context:\n  Activate sets the active lockbox used by commands that can safely omit a lockbox path.",
+                ))
+                .arg(required("lockbox", "Lockbox path.")),
+        )
+        .subcommand(
+            Command::new("deactivate")
+                .about("Clear the active lockbox.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox session deactivate",
+                    "Context:\n  Deactivate only clears the active lockbox pointer. It does not close any open lockbox sessions.",
+                )),
+        )
+        .subcommand(
+            Command::new("close-all")
+                .about("Close all lockboxes.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox session close-all",
+                    "Context:\n  Close-all clears every cached lockbox content key from the session agent and clears the active lockbox.",
+                )),
+        )
+        .subcommand(
+            Command::new("stop")
+                .about("Close all sessions and stop the session agent.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox session stop",
+                    "Context:\n  Stop clears cached open sessions, clears the active lockbox, and shuts down the session agent process. Later commands can start it again when needed.",
+                )),
+        )
+        .subcommand(
+            Command::new("auto-open")
+                .about("Allow reVault to use your OS login to automatically open the vault and lockboxes as required.")
+                .disable_help_subcommand(true)
+                .arg_required_else_help(false)
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox session auto-open status\n  lockbox session auto-open off\n  lockbox session auto-open vault\n  lockbox session auto-open lockboxes",
+                    "Context:\n  Auto-open controls whether reVault may use your OS login to automatically open only the vault, or both the vault and lockboxes as required.",
+                ))
+                .subcommand(
+                    Command::new("status")
+                        .about("Show the current auto-open scope.")
+                        .arg(output_format_arg()),
+                )
+                .subcommand(Command::new("off").about(
+                    "Disable auto-open and close all open lockbox sessions.",
+                ))
+                .subcommand(Command::new("vault").about(
+                    "Allow reVault to automatically open the vault only.",
+                ))
+                .subcommand(Command::new("lockboxes").about(
+                    "Allow reVault to automatically open the vault and lockboxes.",
+                )),
+        )
+}
+
 fn access_command(verbose: bool) -> Command {
     sharing_command("access", "Manage who can open a lockbox.")
         .after_help(verbose_help(
@@ -895,94 +974,6 @@ fn vault_command(verbose: bool) -> Command {
                         .help("Replace the existing local vault."),
                 )
                 .arg(required("backup", "Backup archive input path.")),
-        )
-        .subcommand(
-            Command::new("sessions")
-                .about("Manage open lockbox sessions.")
-                .disable_help_subcommand(true)
-                .arg_required_else_help(false)
-                .after_help(verbose_help(
-                    verbose,
-                    "Examples:\n  lockbox vault sessions\n  lockbox vault sessions close secrets.lbox\n  lockbox vault sessions auto-open status",
-                    "Context:\n  Sessions are temporary open records cached by the session agent. With no subcommand, sessions lists lockboxes currently cached as open.",
-                ))
-                .arg(output_format_arg())
-                .subcommand(
-                    Command::new("close")
-                        .about("Close one open lockbox session.")
-                        .after_help(verbose_help(
-                            verbose,
-                            "Examples:\n  lockbox vault sessions close secrets.lbox",
-                            "Context:\n  Session close removes cached open access for one lockbox. Use it when you are finished working with a lockbox but do not want to stop every session.",
-                        ))
-                        .arg(required("lockbox", "Lockbox path.")),
-                )
-                .subcommand(
-                    Command::new("close-all")
-                        .about("Close every open lockbox session.")
-                        .after_help(verbose_help(
-                            verbose,
-                            "Examples:\n  lockbox vault sessions close-all",
-                            "Context:\n  Close-all clears every cached lockbox open session while leaving the session agent available for future opens.",
-                        )),
-                )
-                .subcommand(
-                    Command::new("stop")
-                        .about("Close every open session and stop the session agent.")
-                        .after_help(verbose_help(
-                            verbose,
-                            "Examples:\n  lockbox vault sessions stop",
-                            "Context:\n  Stop clears cached open sessions and shuts down the session agent process. Later commands can start it again when needed.",
-                        )),
-                )
-                .subcommand(
-                    Command::new("auto-open")
-                        .about("Store the vault pass phrase in the operating system secret store so reVault can open the local vault automatically after your OS login session is unlocked.")
-                        .disable_help_subcommand(true)
-                        .arg_required_else_help(false)
-                        .after_help(verbose_help(
-                            verbose,
-                            "Examples:\n  lockbox vault sessions auto-open status\n  lockbox vault sessions auto-open enable\n  lockbox vault sessions auto-open forget",
-                            "Context:\n  Auto-open stores the vault pass phrase in the operating system secret store. After your OS login session unlocks that store, reVault can open the local vault without prompting for the vault pass phrase.",
-                        ))
-                        .subcommand(
-                            Command::new("status")
-                                .about("Show whether auto-open is supported and enabled.")
-                                .after_help(verbose_help(
-                                    verbose,
-                                    "Examples:\n  lockbox vault sessions auto-open status\n  lockbox vault sessions auto-open status --format json",
-                                    "Context:\n  Status reports whether the current platform supports auto-open, which backend is selected, and whether reVault is configured to use it.",
-                                ))
-                                .arg(output_format_arg()),
-                        )
-                        .subcommand(
-                            Command::new("enable")
-                                .about("Allow reVault to store the vault pass phrase for auto-open.")
-                                .after_help(verbose_help(
-                                    verbose,
-                                    "Examples:\n  lockbox vault sessions auto-open enable",
-                                    "Context:\n  Enable allows reVault to save the vault pass phrase in the operating system secret store so future commands can open the vault automatically after OS login.",
-                                )),
-                        )
-                        .subcommand(
-                            Command::new("disable")
-                                .about("Stop using auto-open.")
-                                .after_help(verbose_help(
-                                    verbose,
-                                    "Examples:\n  lockbox vault sessions auto-open disable",
-                                    "Context:\n  Disable leaves any stored secret untouched but tells reVault not to use auto-open. Use forget when you want to delete the stored vault pass phrase.",
-                                )),
-                        )
-                        .subcommand(
-                            Command::new("forget")
-                                .about("Delete the stored vault pass phrase used for auto-open.")
-                                .after_help(verbose_help(
-                                    verbose,
-                                    "Examples:\n  lockbox vault sessions auto-open forget",
-                                    "Context:\n  Forget removes the vault pass phrase from the operating system secret store. Future vault opens will prompt again unless auto-open is enabled and the pass phrase is stored again.",
-                                )),
-                        ),
-                ),
         )
         .subcommand(
             Command::new("path")

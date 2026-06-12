@@ -47,15 +47,10 @@ fn open_populates_cache_and_close_clears_it() {
         String::from_utf8_lossy(&open.stdout),
         String::from_utf8_lossy(&open.stderr)
     );
-    let output = run_output(
-        bin,
-        &agent_dir,
-        &vault_dir,
-        &["vault", "sessions", "--format", "tsv"],
-    );
+    let output = run_output(bin, &agent_dir, &vault_dir, &["session", "--format", "tsv"]);
     assert!(
         output.status.success(),
-        "command failed: {bin} vault sessions --format tsv\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        "command failed: {bin} session --format tsv\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -64,17 +59,17 @@ fn open_populates_cache_and_close_clears_it() {
     assert!(unlocked_list.contains("open\t"));
     assert!(unlocked_list.contains(vault.to_str().unwrap()));
 
-    let output = run_output(bin, &agent_dir, &vault_dir, &["vault", "sessions"]);
+    let output = run_output(bin, &agent_dir, &vault_dir, &["session"]);
     assert!(
         output.status.success(),
-        "command failed: {bin} vault sessions\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        "command failed: {bin} session\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let vault_unlocked = String::from_utf8_lossy(&output.stdout);
-    assert!(vault_unlocked.contains("state"));
-    assert!(vault_unlocked.contains("open"));
+    assert!(vault_unlocked.contains("Active lockbox:"));
+    assert!(vault_unlocked.contains("Open lockboxes:"));
     assert!(vault_unlocked.contains(vault.to_str().unwrap()));
 
     run(
@@ -123,10 +118,10 @@ fn open_populates_cache_and_close_clears_it() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("lockbox is closed"));
     assert_agent_log_contains(&agent_dir, "forgot lockbox");
 
-    let output = run_output(bin, &agent_dir, &vault_dir, &["vault", "sessions"]);
+    let output = run_output(bin, &agent_dir, &vault_dir, &["session"]);
     assert!(
         output.status.success(),
-        "command failed: {bin} vault sessions\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        "command failed: {bin} session\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

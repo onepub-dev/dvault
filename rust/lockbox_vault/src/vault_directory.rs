@@ -519,6 +519,30 @@ impl VaultDirectory {
         self.delete_record_if_exists(&known_lockbox_record_path(path.as_ref())?)
     }
 
+    /// Stores a lockbox pass phrase in the vault, keyed by lockbox id.
+    pub fn remember_lockbox_password(
+        &self,
+        lockbox_id: LockboxId,
+        password: &SecretString,
+    ) -> Result<()> {
+        self.put_secret_variable_record(&lockbox_password_variable_name(lockbox_id)?, password)
+    }
+
+    /// Loads a remembered lockbox pass phrase, if one exists for this lockbox id.
+    pub fn remembered_lockbox_password(
+        &self,
+        lockbox_id: LockboxId,
+    ) -> Result<Option<SecretString>> {
+        Ok(self
+            .lockbox
+            .borrow()
+            .with_secret_variable(
+                &lockbox_password_variable_name(lockbox_id)?,
+                SecretString::try_clone,
+            )?
+            .transpose()?)
+    }
+
     fn put_record(&self, path: &LockboxPath, bytes: &[u8]) -> Result<()> {
         self.put_record_with_replace(path, bytes, false)
     }
@@ -1066,6 +1090,13 @@ fn identity_email_record_path(name: &str) -> Result<LockboxPath> {
 fn key_directory_backup_record_path(lockbox_id: LockboxId) -> LockboxPath {
     LockboxPath::new(format!("/key_directories/{lockbox_id}.keydir"))
         .expect("key directory backup path is a valid lockbox path")
+}
+
+fn lockbox_password_variable_name(lockbox_id: LockboxId) -> Result<VariableName> {
+    VariableName::new(format!(
+        "LOCKBOX_VAULT_LOCKBOX_PASSWORD_{}",
+        crate::encode_hex(lockbox_id.as_bytes())
+    ))
 }
 
 fn known_lockbox_record_path(path: impl AsRef<Path>) -> Result<LockboxPath> {

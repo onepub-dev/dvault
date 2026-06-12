@@ -71,9 +71,10 @@ pub use key_format::{
 };
 pub use noop_store::NoopStore;
 pub use platform_secret_store::{
-    disable_platform_secret_store, enable_platform_secret_store, forget_platform_vault_password,
-    get_platform_vault_password, platform_secret_store_disabled, platform_secret_store_status,
-    put_platform_vault_password, PlatformSecretStoreStatus,
+    auto_open_scope, disable_platform_secret_store, enable_platform_secret_store,
+    forget_platform_vault_password, get_platform_vault_password, platform_secret_store_disabled,
+    platform_secret_store_status, put_platform_vault_password, set_auto_open_scope, AutoOpenScope,
+    PlatformSecretStoreStatus,
 };
 pub use vault::{local_vault, LocalVault, Vault};
 pub use vault_directory::{

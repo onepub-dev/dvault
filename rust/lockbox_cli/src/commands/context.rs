@@ -5,9 +5,9 @@ use lockbox_core::{
     SecretVec,
 };
 use lockbox_vault::{
-    default_vault_path, forget_platform_vault_password, get_platform_vault_password,
-    import_public_key, local_vault, platform_secret_store_disabled, put_platform_vault_password,
-    NoopStore, SecretString, Vault, VaultDirectory,
+    auto_open_scope, default_vault_path, forget_platform_vault_password,
+    get_platform_vault_password, import_public_key, local_vault, platform_secret_store_disabled,
+    put_platform_vault_password, AutoOpenScope, NoopStore, SecretString, Vault, VaultDirectory,
 };
 use std::fmt;
 use std::fs;
@@ -49,13 +49,78 @@ pub(crate) fn open_existing(path: &str, access: &Access) -> CliResult<Lockbox> {
         Access::CacheOnly => match local_vault().open_lockbox(path) {
             Ok(lockbox) => Ok(lockbox),
             Err(Error::VaultUnavailable(message)) if message.contains("no cached content key") => {
-                Err(cli_error(format!(
-                    "lockbox is closed: {path}. Run `lockbox open {path}` first."
-                )))
+                match auto_open_lockbox(path) {
+                    Ok(lockbox) => Ok(lockbox),
+                    Err(AutoOpenLockboxError::Disabled) => Err(cli_error(format!(
+                        "lockbox is closed: {path}. Run `lockbox open {path}` first."
+                    ))),
+                    Err(AutoOpenLockboxError::Unavailable(reason)) => Err(cli_error(format!(
+                        "lockbox is closed: {path}. Auto-open could not open it: {reason}. Run `lockbox open {path}` first."
+                    ))),
+                }
             }
             Err(err) => Err(err.into()),
         },
     }
+}
+
+enum AutoOpenLockboxError {
+    Disabled,
+    Unavailable(String),
+}
+
+fn auto_open_lockbox(path: &str) -> Result<Lockbox, AutoOpenLockboxError> {
+    let scope =
+        auto_open_scope().map_err(|err| AutoOpenLockboxError::Unavailable(err.to_string()))?;
+    if scope != AutoOpenScope::Lockboxes {
+        return Err(AutoOpenLockboxError::Disabled);
+    }
+    let password = lockbox_core::SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")
+        .map_err(|err| AutoOpenLockboxError::Unavailable(err.to_string()))?
+        .or(match get_platform_vault_password() {
+            Ok(password) => password,
+            Err(_) => None,
+        })
+        .ok_or_else(|| {
+            AutoOpenLockboxError::Unavailable(
+                "vault pass phrase is not stored for auto-open".to_string(),
+            )
+        })?;
+    let vault = VaultDirectory::unlock_or_create_default(&password)
+        .map_err(|err| AutoOpenLockboxError::Unavailable(err.to_string()))?;
+    let lockbox_id = VaultUnlock::read_lockbox_id(Path::new(path))
+        .map_err(|err| AutoOpenLockboxError::Unavailable(err.to_string()))?;
+    if let Some(lockbox_password) = vault
+        .remembered_lockbox_password(lockbox_id)
+        .map_err(|err| AutoOpenLockboxError::Unavailable(err.to_string()))?
+    {
+        if let Ok(lockbox) =
+            Vault::new(NoopStore).unlock_lockbox_with_password(path, &lockbox_password)
+        {
+            let _ = local_vault().unlock_lockbox_with_password(path, &lockbox_password);
+            return Ok(lockbox);
+        }
+    }
+    let identities = vault
+        .list_private_keys()
+        .map_err(|err| AutoOpenLockboxError::Unavailable(err.to_string()))?;
+    for identity in identities {
+        let Ok(keypair) = vault.load_private_key(&identity) else {
+            continue;
+        };
+        if let Ok(lockbox) =
+            Vault::new(NoopStore).unlock_lockbox(path, LockboxUnlock::RecipientKeyPair(keypair))
+        {
+            if let Ok(cache_keypair) = vault.load_private_key(&identity) {
+                let _ = local_vault()
+                    .unlock_lockbox(path, LockboxUnlock::RecipientKeyPair(cache_keypair));
+            }
+            return Ok(lockbox);
+        }
+    }
+    Err(AutoOpenLockboxError::Unavailable(
+        "no remembered pass phrase or vault identity could open it".to_string(),
+    ))
 }
 
 pub(crate) fn open_or_create(path: &str, access: &Access) -> CliResult<Lockbox> {
@@ -82,7 +147,7 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> CliResult<Lockbox> 
     }
 }
 
-fn ensure_lockbox_path_accessible(path: &str) -> CliResult<()> {
+pub(crate) fn ensure_lockbox_path_accessible(path: &str) -> CliResult<()> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => {
             Err(cli_error(format!("lockbox path is a directory: {path}")))

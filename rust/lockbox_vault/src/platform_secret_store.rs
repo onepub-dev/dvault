@@ -7,7 +7,26 @@ use crate::vault_directory::{default_vault_dir, default_vault_path};
 
 const SERVICE: &str = "dev.onepub.lockbox.vault";
 const DISABLED_MARKER: &str = ".platform-secret-store-disabled";
+const AUTO_OPEN_SCOPE_FILE: &str = ".auto-open-scope";
 const MODE_ENV: &str = "LOCKBOX_PLATFORM_SECRET_STORE";
+
+/// Scope controlled by the session auto-open setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoOpenScope {
+    Off,
+    Vault,
+    Lockboxes,
+}
+
+impl AutoOpenScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Vault => "vault",
+            Self::Lockboxes => "lockboxes",
+        }
+    }
+}
 
 /// Current platform secret-store state for the default local vault.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +35,8 @@ pub struct PlatformSecretStoreStatus {
     pub supported: bool,
     /// Whether platform secret-store use is disabled by environment or marker.
     pub disabled: bool,
+    /// Auto-open scope configured for this vault.
+    pub scope: AutoOpenScope,
     /// Human-readable backend label.
     pub backend: &'static str,
     /// Default local vault item key used in the platform store.
@@ -24,9 +45,11 @@ pub struct PlatformSecretStoreStatus {
 
 /// Returns the platform secret-store status for the default local vault.
 pub fn platform_secret_store_status() -> Result<PlatformSecretStoreStatus> {
+    let scope = auto_open_scope()?;
     Ok(PlatformSecretStoreStatus {
         supported: platform_supported(),
-        disabled: platform_secret_store_disabled()?,
+        disabled: scope == AutoOpenScope::Off,
+        scope,
         backend: platform_backend_name(),
         item: vault_item_name()?,
     })
@@ -34,7 +57,7 @@ pub fn platform_secret_store_status() -> Result<PlatformSecretStoreStatus> {
 
 /// Enables platform secret-store lookup for the default local vault.
 pub fn enable_platform_secret_store() -> Result<()> {
-    remove_disabled_marker()
+    set_auto_open_scope(AutoOpenScope::Vault)
 }
 
 /// Disables platform secret-store lookup for the default local vault.
@@ -43,7 +66,7 @@ pub fn enable_platform_secret_store() -> Result<()> {
 /// written.
 pub fn disable_platform_secret_store() -> Result<()> {
     let _ = forget_platform_vault_password();
-    write_disabled_marker()
+    set_auto_open_scope(AutoOpenScope::Off)
 }
 
 /// Returns true when platform secret-store lookup should not be attempted.
@@ -51,7 +74,42 @@ pub fn platform_secret_store_disabled() -> Result<bool> {
     if let Ok(value) = env::var(MODE_ENV) {
         return parse_disabled_mode(&value);
     }
-    Ok(disabled_marker_path()?.exists())
+    Ok(auto_open_scope()? == AutoOpenScope::Off)
+}
+
+pub fn auto_open_scope() -> Result<AutoOpenScope> {
+    if let Ok(value) = env::var(MODE_ENV) {
+        return Ok(if parse_disabled_mode(&value)? {
+            AutoOpenScope::Off
+        } else {
+            AutoOpenScope::Vault
+        });
+    }
+    if disabled_marker_path()?.exists() {
+        return Ok(AutoOpenScope::Off);
+    }
+    let path = auto_open_scope_path()?;
+    let value = match fs::read_to_string(&path) {
+        Ok(value) => value,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(AutoOpenScope::Vault);
+        }
+        Err(err) => return Err(Error::Io(err.to_string())),
+    };
+    parse_auto_open_scope(value.trim())
+}
+
+pub fn set_auto_open_scope(scope: AutoOpenScope) -> Result<()> {
+    match scope {
+        AutoOpenScope::Off => {
+            write_disabled_marker()?;
+            write_auto_open_scope(scope)
+        }
+        AutoOpenScope::Vault | AutoOpenScope::Lockboxes => {
+            remove_disabled_marker()?;
+            write_auto_open_scope(scope)
+        }
+    }
 }
 
 /// Loads the default local vault password from the platform secret store.
@@ -90,6 +148,27 @@ fn parse_disabled_mode(value: &str) -> Result<bool> {
 
 fn disabled_marker_path() -> Result<PathBuf> {
     Ok(default_vault_dir()?.join(DISABLED_MARKER))
+}
+
+fn auto_open_scope_path() -> Result<PathBuf> {
+    Ok(default_vault_dir()?.join(AUTO_OPEN_SCOPE_FILE))
+}
+
+fn write_auto_open_scope(scope: AutoOpenScope) -> Result<()> {
+    let path = auto_open_scope_path()?;
+    create_private_dir(path.parent().expect("scope file has a parent"))?;
+    fs::write(path, format!("{}\n", scope.as_str())).map_err(|err| Error::Io(err.to_string()))
+}
+
+fn parse_auto_open_scope(value: &str) -> Result<AutoOpenScope> {
+    match value {
+        "off" => Ok(AutoOpenScope::Off),
+        "vault" => Ok(AutoOpenScope::Vault),
+        "lockboxes" => Ok(AutoOpenScope::Lockboxes),
+        other => Err(Error::Configuration(format!(
+            "auto-open scope must be off, vault, or lockboxes, got {other}"
+        ))),
+    }
 }
 
 fn write_disabled_marker() -> Result<()> {

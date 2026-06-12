@@ -158,6 +158,11 @@ impl<S: ContentKeyStore> Vault<S> {
             }
             LockboxUnlock::RecipientKeyPair(recipient) => {
                 let unlocked = unlock_path_or_backup_with_recipient(path, &recipient)?;
+                self.store.put_content_key_for_path(
+                    unlocked.lockbox_id,
+                    unlocked.try_clone_key()?,
+                    path,
+                )?;
                 open_unlocked_path(unlocked, path)
             }
         }

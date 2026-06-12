@@ -9,11 +9,9 @@ use lockbox_share_protocol::{
     CONTACT_FINGERPRINT_LEN,
 };
 use lockbox_vault::{
-    backup_default_vault, default_vault_dir, default_vault_path, disable_platform_secret_store,
-    enable_platform_secret_store, encode_hex, export_private_key, export_public_key,
-    forget_platform_vault_password, import_private_key_file, import_public_key,
-    list as list_open_lockboxes, local_vault, platform_secret_store_status, restore_default_vault,
-    stop as stop_agent, IdentityGenerationStatus, KeyFormat, VaultDirectory,
+    backup_default_vault, default_vault_dir, default_vault_path, encode_hex, export_private_key,
+    export_public_key, forget_platform_vault_password, import_private_key_file, import_public_key,
+    restore_default_vault, IdentityGenerationStatus, KeyFormat, VaultDirectory,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -40,7 +38,6 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "receive" | "recieve" | "fetch" => share_receive(&args[1..]),
         "remove" | "delete" => share_delete(&args[1..]),
         "lockbox" => lockbox_command(&args[1..]),
-        "sessions" => sessions(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
     }
 }
@@ -96,56 +93,6 @@ fn lockbox_command(args: &[String]) -> CliResult<()> {
                 .to_string(),
         )
         .into()),
-    }
-}
-
-fn auto_unlock(args: &[String]) -> CliResult<()> {
-    let command = args.first().map(String::as_str).unwrap_or("status");
-    match command {
-        "status" => auto_unlock_status(&args[1..]),
-        "enable" => {
-            enable_platform_secret_store()?;
-            auto_unlock_status(&[])
-        }
-        "disable" => {
-            disable_platform_secret_store()?;
-            auto_unlock_status(&[])
-        }
-        "forget" => {
-            forget_platform_vault_password()?;
-            Ok(())
-        }
-        _ => Err(Error::InvalidInput(format!(
-            "unknown vault sessions auto-open command: {command}"
-        ))
-        .into()),
-    }
-}
-
-fn auto_unlock_status(args: &[String]) -> CliResult<()> {
-    let (_, format) = output_format_from_args(args)?;
-    let status = platform_secret_store_status()?;
-    print_records(
-        &["property", "value"],
-        vec![
-            vec![
-                "supported".to_string(),
-                yes_no(status.supported).to_string(),
-            ],
-            vec!["enabled".to_string(), yes_no(!status.disabled).to_string()],
-            vec!["backend".to_string(), status.backend.to_string()],
-            vec!["vault".to_string(), status.item],
-        ],
-        format,
-    )?;
-    Ok(())
-}
-
-fn yes_no(value: bool) -> &'static str {
-    if value {
-        "yes"
-    } else {
-        "no"
     }
 }
 
@@ -921,43 +868,6 @@ fn identity_generation_status(status: IdentityGenerationStatus) -> &'static str 
         IdentityGenerationStatus::Retired => "retired",
         IdentityGenerationStatus::Compromised => "compromised",
     }
-}
-
-fn sessions(args: &[String]) -> CliResult<()> {
-    match args.first().map(String::as_str) {
-        Some("close") => {
-            let lockbox_path = require_arg(args, 1, "lockbox")?;
-            local_vault().lock_lockbox(lockbox_path)?;
-            println!("Lockbox session closed: {lockbox_path}");
-            return Ok(());
-        }
-        Some("close-all") => {
-            local_vault().lock_all()?;
-            println!("All lockbox sessions closed.");
-            return Ok(());
-        }
-        Some("stop") => {
-            stop_agent()?;
-            println!("Session agent stopped.");
-            return Ok(());
-        }
-        Some("auto-open") => return auto_unlock(&args[1..]),
-        _ => {}
-    }
-    let (_, format) = output_format_from_args(args)?;
-    let ids = list_open_lockboxes()?;
-    let rows = ids
-        .into_iter()
-        .map(|lockbox| {
-            vec![
-                "open".to_string(),
-                lockbox.path.unwrap_or_default(),
-                lockbox.id,
-            ]
-        })
-        .collect::<Vec<_>>();
-    print_records(&["state", "path", "uuid"], rows, format)?;
-    Ok(())
 }
 
 fn ensure_default_private_key(vault: &VaultDirectory) -> CliResult<bool> {

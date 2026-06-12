@@ -6,6 +6,7 @@ mod help;
 mod keys;
 mod output;
 mod recovery;
+mod session;
 mod variables;
 mod vault;
 mod visualize;
@@ -56,6 +57,7 @@ pub(crate) fn run() -> CliResult<()> {
         "close" => keys::close(&close_args(command_matches))?,
         "keygen" => keys::keygen(&two_args(command_matches, "private-key", "public-key"))?,
         "open-key" => keys::open_key(&open_key_args(command_matches))?,
+        "session" => session::run(&session_args(command_matches)?)?,
         "access" => keys::access(&access_args(command_matches)?, &access)?,
         "vault" => vault::run(&vault_args(command_matches)?)?,
         "add" => files::add(
@@ -68,7 +70,7 @@ pub(crate) fn run() -> CliResult<()> {
             &two_args(command_matches, "lockbox", "lockbox-path"),
             &access,
         )?,
-        "list" => files::list(&list_args(command_matches), &access)?,
+        "list" => files::list(&list_args(command_matches)?, &access)?,
         "rm" => files::remove(&remove_args(command_matches), &access)?,
         "rename" => files::rename(
             &three_args(command_matches, "lockbox", "from", "to"),
@@ -93,7 +95,7 @@ fn command_secret_activity(command: &str) -> Option<SecretActivityKind> {
         "variables" => Some(SecretActivityKind::Variables),
         "form" => Some(SecretActivityKind::Form),
         "recover" => Some(SecretActivityKind::Recovery),
-        "access" | "open-key" => Some(SecretActivityKind::Vault),
+        "access" | "open-key" | "session" => Some(SecretActivityKind::Vault),
         _ => None,
     }
 }
@@ -220,14 +222,14 @@ fn extract_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     Ok(args)
 }
 
-fn list_args(matches: &ArgMatches) -> Vec<String> {
-    let mut args = one_arg(matches, "lockbox");
+fn list_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    let mut args = vec![value_or_active(matches, "lockbox")?];
     push_option(&mut args, matches, "format", "--format");
     push_flag(&mut args, matches, "recursive", "--recursive");
     if let Some(path) = matches.get_one::<String>("path") {
         args.push(path.clone());
     }
-    args
+    Ok(args)
 }
 
 fn remove_args(matches: &ArgMatches) -> Vec<String> {
@@ -240,7 +242,7 @@ fn variables_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let (command, sub) = matches
         .subcommand()
         .ok_or_else(|| Error::InvalidInput("missing variables command".to_string()))?;
-    let mut args = vec![command.to_string(), value(sub, "lockbox")];
+    let mut args = vec![command.to_string(), value_or_active(sub, "lockbox")?];
     match command {
         "set" => {
             push_flag(&mut args, sub, "secret", "-s");
@@ -261,6 +263,7 @@ fn variables_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             args.push(value(sub, "name"));
         }
         "list" | "ls" => {
+            args[1] = value_or_active(sub, "lockbox")?;
             push_option(&mut args, sub, "format", "--format");
             push_optional(&mut args, sub, "pattern");
         }
@@ -387,31 +390,6 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_share_transport_options(&mut args, sub);
             args.push(value(sub, "share-code"));
             args.push(value(sub, "delete-token"));
-        }
-        "sessions" => {
-            if let Some((session_command, session_sub)) = sub.subcommand() {
-                args.push(session_command.to_string());
-                match session_command {
-                    "close" => args.push(value(session_sub, "lockbox")),
-                    "close-all" | "stop" => {}
-                    "auto-open" => {
-                        let (auto_command, auto_sub) =
-                            session_sub.subcommand().unwrap_or(("status", session_sub));
-                        args.push(auto_command.to_string());
-                        if auto_command == "status" {
-                            push_option(&mut args, auto_sub, "format", "--format");
-                        }
-                    }
-                    _ => {
-                        return Err(Error::InvalidInput(format!(
-                            "unknown vault sessions command: {session_command}"
-                        ))
-                        .into())
-                    }
-                }
-            } else {
-                push_option(&mut args, sub, "format", "--format");
-            }
         }
         "identity" => {
             let (identity_command, identity_sub) = sub
@@ -540,6 +518,32 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     Ok(args)
 }
 
+fn session_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    let mut args = Vec::new();
+    if let Some((command, sub)) = matches.subcommand() {
+        args.push(command.to_string());
+        match command {
+            "activate" => args.push(value(sub, "lockbox")),
+            "deactivate" | "close-all" | "stop" => {}
+            "auto-open" => {
+                let (auto_command, auto_sub) = sub.subcommand().unwrap_or(("status", sub));
+                args.push(auto_command.to_string());
+                if auto_command == "status" {
+                    push_option(&mut args, auto_sub, "format", "--format");
+                }
+            }
+            _ => {
+                return Err(
+                    Error::InvalidInput(format!("unknown session command: {command}")).into(),
+                )
+            }
+        }
+    } else {
+        push_option(&mut args, matches, "format", "--format");
+    }
+    Ok(args)
+}
+
 fn push_share_transport_options(args: &mut Vec<String>, matches: &ArgMatches) {
     push_option(args, matches, "server", "--server");
     push_option(args, matches, "topology-url", "--topology-url");
@@ -613,6 +617,18 @@ fn value(matches: &ArgMatches, name: &str) -> String {
         .get_one::<String>(name)
         .unwrap_or_else(|| panic!("clap did not provide required argument {name}"))
         .clone()
+}
+
+fn value_or_active(matches: &ArgMatches, name: &str) -> CliResult<String> {
+    if let Some(value) = matches.get_one::<String>(name) {
+        return Ok(value.clone());
+    }
+    session::active_lockbox_or_none()?.ok_or_else(|| {
+        Error::InvalidInput(format!(
+            "missing {name}; pass a lockbox path or run `lockbox session activate <lockbox>`"
+        ))
+        .into()
+    })
 }
 
 fn push_optional(args: &mut Vec<String>, matches: &ArgMatches, name: &str) {

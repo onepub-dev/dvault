@@ -4,14 +4,15 @@ use super::context::{
     read_new_password, read_password, require_arg, Access, CliResult,
 };
 use super::output::{output_format_from_args, print_records};
+use super::session::{clear_active_lockbox, deactivate_if_active};
 use lockbox_core::vault_bridge::VaultUnlock;
 use lockbox_core::{
     Error, Lockbox, LockboxKeySlotProtection, LockboxProtection, LockboxUnlock, RecipientKeyPair,
     RecipientPublicKey,
 };
 use lockbox_vault::{
-    encode_hex, export_private_key, list as list_open_lockboxes, local_vault, KeyFormat, NoopStore,
-    SecretVec, Vault,
+    auto_open_scope, encode_hex, export_private_key, list as list_open_lockboxes, local_vault,
+    AutoOpenScope, KeyFormat, NoopStore, SecretVec, Vault,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -54,6 +55,7 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
             let _vault = default_vault()?;
             let password = read_new_password()?;
             let lb = local_vault().create_lockbox_with_password(&lockbox_path, &password)?;
+            remember_lockbox_password_if_enabled(&lb, &password)?;
             mirror_key_directory(&lb, &lockbox_path)?;
         }
         Access::CacheOnly => {
@@ -76,18 +78,31 @@ pub(crate) fn open(args: &[String]) -> CliResult<()> {
         local_vault().unlock_lockbox_with_password(&options.lockbox_path, &password)?
     };
     mirror_key_directory(&lb, &options.lockbox_path)?;
+    remember_lockbox_password_if_enabled(&lb, &password)?;
     println!("Lockbox opened: {}", options.lockbox_path);
+    Ok(())
+}
+
+fn remember_lockbox_password_if_enabled(
+    lockbox: &Lockbox,
+    password: &lockbox_vault::SecretString,
+) -> CliResult<()> {
+    if auto_open_scope()? == AutoOpenScope::Lockboxes {
+        default_vault()?.remember_lockbox_password(lockbox.lockbox_id(), password)?;
+    }
     Ok(())
 }
 
 pub(crate) fn close(args: &[String]) -> CliResult<()> {
     if args.first().map(String::as_str) == Some("--all") {
         local_vault().lock_all()?;
+        clear_active_lockbox()?;
         println!("All lockboxes closed.");
     } else {
         let lockbox_path = require_arg(args, 0, "lockbox")?;
         let was_open = lockbox_is_open(lockbox_path);
         local_vault().lock_lockbox(lockbox_path)?;
+        deactivate_if_active(lockbox_path)?;
         if was_open {
             println!("Lockbox closed: {lockbox_path}");
         } else {

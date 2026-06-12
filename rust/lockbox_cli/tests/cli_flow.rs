@@ -262,7 +262,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_success(&vault_help);
     let vault_help = String::from_utf8_lossy(&vault_help.stdout);
     assert!(vault_help.contains("Manage identities and contacts."));
-    assert!(vault_help.contains("sessions"));
+    assert!(!vault_help.contains("sessions"));
     assert!(vault_help.contains("identity"));
     assert!(vault_help.contains("contact"));
     assert!(!vault_help.contains("  key"));
@@ -272,24 +272,24 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(!vault_help.contains("  open"));
     assert!(!vault_help.contains("  help"));
 
-    let sessions_help = run_output(bin, &["vault", "sessions", "--help"]);
+    let sessions_help = run_output(bin, &["session", "--help"]);
     assert_success(&sessions_help);
     let sessions_help = String::from_utf8_lossy(&sessions_help.stdout);
-    assert!(sessions_help.contains("Manage open lockbox sessions."));
-    assert!(sessions_help.contains("close"));
+    assert!(sessions_help.contains("Manage active and open lockbox sessions."));
+    assert!(sessions_help.contains("activate"));
+    assert!(sessions_help.contains("deactivate"));
     assert!(sessions_help.contains("close-all"));
     assert!(sessions_help.contains("auto-open"));
     assert!(sessions_help.contains("stop"));
 
-    let auto_unlock_help = run_output(bin, &["vault", "sessions", "auto-open", "--help"]);
-    assert_success(&auto_unlock_help);
-    let auto_unlock_help = String::from_utf8_lossy(&auto_unlock_help.stdout);
-    assert!(auto_unlock_help
-        .contains("Store the vault pass phrase in the operating system secret store"));
-    assert!(auto_unlock_help.contains("status"));
-    assert!(auto_unlock_help.contains("enable"));
-    assert!(auto_unlock_help.contains("disable"));
-    assert!(auto_unlock_help.contains("forget"));
+    let auto_open_help = run_output(bin, &["session", "auto-open", "--help"]);
+    assert_success(&auto_open_help);
+    let auto_open_help = String::from_utf8_lossy(&auto_open_help.stdout);
+    assert!(auto_open_help.contains("Allow reVault to use your OS login"));
+    assert!(auto_open_help.contains("status"));
+    assert!(auto_open_help.contains("off"));
+    assert!(auto_open_help.contains("vault"));
+    assert!(auto_open_help.contains("lockboxes"));
 
     let unlock_help = run_output(bin, &["open", "--help"]);
     assert_success(&unlock_help);
@@ -779,7 +779,7 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
             "Files",
             "  add",
             "  extract",
-            "Variables",
+            "Data",
             "  variables",
             "Sharing",
             "  access",
@@ -1191,7 +1191,7 @@ fn removing_last_lockbox_key_has_cli_guidance() {
 }
 
 #[test]
-fn doctor_and_vault_sessions_report_agent_state() {
+fn doctor_and_session_report_agent_state() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("agent-reporting");
     let vault_root = dir.join("vault");
@@ -1209,7 +1209,7 @@ fn doctor_and_vault_sessions_report_agent_state() {
         &[
             "Auto-open",
             "supported:",
-            "enabled:",
+            "scope:",
             "backend:",
             "Session agent",
         ],
@@ -1217,37 +1217,34 @@ fn doctor_and_vault_sessions_report_agent_state() {
     assert!(!doctor.contains("  vault:"));
     assert!(!doctor.contains("running: unknown"));
 
-    let open = run_output_in(bin, &["vault", "sessions"], &vault_root, &agent_root);
+    let open = run_output_in(bin, &["session"], &vault_root, &agent_root);
     assert_success(&open);
-    assert_eq!(String::from_utf8_lossy(&open.stdout).trim(), "empty");
+    let open = String::from_utf8_lossy(&open.stdout);
+    assert!(open.contains("Active lockbox:"));
+    assert!(open.contains("Open lockboxes:"));
+    assert!(open.contains("none"));
 
-    let stop = run_output_in(
-        bin,
-        &["vault", "sessions", "stop"],
-        &vault_root,
-        &agent_root,
-    );
+    let stop = run_output_in(bin, &["session", "stop"], &vault_root, &agent_root);
     assert_success(&stop);
     assert!(String::from_utf8_lossy(&stop.stdout).contains("Session agent stopped"));
 
-    let auto_unlock = run_output_in(
+    let auto_open = run_output_in(
         bin,
-        &[
-            "vault",
-            "sessions",
-            "auto-open",
-            "status",
-            "--format",
-            "tsv",
-        ],
+        &["session", "auto-open", "status", "--format", "tsv"],
         &vault_root,
         &agent_root,
     );
-    assert_success(&auto_unlock);
-    let auto_unlock = String::from_utf8_lossy(&auto_unlock.stdout);
+    assert_success(&auto_open);
+    let auto_open = String::from_utf8_lossy(&auto_open.stdout);
     assert_contains_in_order(
-        &auto_unlock,
-        &["supported\t", "enabled\t", "backend\t", "vault\t"],
+        &auto_open,
+        &[
+            "supported\t",
+            "scope\t",
+            "vault pass phrase stored\t",
+            "backend\t",
+            "vault\t",
+        ],
     );
 }
 
@@ -1364,7 +1361,7 @@ fn cli_env_rename_and_visualize_flow() {
     run(
         bin,
         &[
-            "variables",
+            "var",
             "set",
             lockbox.to_str().unwrap(),
             "DATABASE_URL",
@@ -1381,12 +1378,7 @@ fn cli_env_rename_and_visualize_flow() {
 
     let env_get = run_output(
         bin,
-        &[
-            "variables",
-            "get",
-            lockbox.to_str().unwrap(),
-            "DATABASE_URL",
-        ],
+        &["var", "get", lockbox.to_str().unwrap(), "DATABASE_URL"],
     );
     assert_success(&env_get);
     assert_eq!(
@@ -2465,7 +2457,7 @@ fn vault_identity_export_reports_missing_output_for_named_identity() {
 }
 
 #[test]
-fn vault_sessions_and_lock_report_empty_cache_and_already_locked_state() {
+fn session_and_close_report_empty_cache_and_already_closed_state() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("open-list-close");
     let _ = fs::remove_dir_all(&dir);
@@ -2481,10 +2473,12 @@ fn vault_sessions_and_lock_report_empty_cache_and_already_locked_state() {
         &vault_root,
         &agent_root,
     );
-    let unlock_list =
-        run_output_without_content_key(bin, &["vault", "sessions"], &vault_root, &agent_root);
+    let unlock_list = run_output_without_content_key(bin, &["session"], &vault_root, &agent_root);
     assert_success(&unlock_list);
-    assert_eq!(String::from_utf8_lossy(&unlock_list.stdout).trim(), "empty");
+    let unlock_list = String::from_utf8_lossy(&unlock_list.stdout);
+    assert!(unlock_list.contains("Active lockbox:"));
+    assert!(unlock_list.contains("Open lockboxes:"));
+    assert!(unlock_list.contains("none"));
 
     let closed = run_output_without_content_key(
         bin,
@@ -2495,21 +2489,8 @@ fn vault_sessions_and_lock_report_empty_cache_and_already_locked_state() {
     assert_success(&closed);
     assert!(String::from_utf8_lossy(&closed.stdout).contains("already closed"));
 
-    let session_lock = run_output_without_content_key(
-        bin,
-        &["vault", "sessions", "close", lockbox.to_str().unwrap()],
-        &vault_root,
-        &agent_root,
-    );
-    assert_success(&session_lock);
-    assert!(String::from_utf8_lossy(&session_lock.stdout).contains("session closed"));
-
-    let lock_all = run_output_without_content_key(
-        bin,
-        &["vault", "sessions", "close-all"],
-        &vault_root,
-        &agent_root,
-    );
+    let lock_all =
+        run_output_without_content_key(bin, &["session", "close-all"], &vault_root, &agent_root);
     assert_success(&lock_all);
     assert!(String::from_utf8_lossy(&lock_all.stdout).contains("sessions closed"));
 
@@ -2523,6 +2504,95 @@ fn vault_sessions_and_lock_report_empty_cache_and_already_locked_state() {
     assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is closed"));
     assert!(!String::from_utf8_lossy(&listing.stderr).contains("Open the lockbox"));
     assert!(!String::from_utf8_lossy(&listing.stderr).contains("use the API intended"));
+}
+
+#[test]
+fn session_activate_sets_default_lockbox_for_list() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = short_target_dir("active");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let lockbox = dir.join("active.lbox");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    let activate = run_output_without_content_key(
+        bin,
+        &["session", "activate", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&activate);
+
+    let session = run_output_without_content_key(bin, &["session"], &vault_root, &agent_root);
+    assert_success(&session);
+    let session = String::from_utf8_lossy(&session.stdout);
+    assert!(session.contains("Active lockbox:"));
+    assert!(session.contains(lockbox.to_str().unwrap()));
+
+    let listing = run_output_without_content_key(bin, &["list"], &vault_root, &agent_root);
+    assert!(!listing.status.success());
+    let stderr = String::from_utf8_lossy(&listing.stderr);
+    assert!(stderr.contains("lockbox is closed"));
+    assert!(stderr.contains(lockbox.to_str().unwrap()));
+}
+
+#[test]
+fn auto_open_lockboxes_uses_remembered_password() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = short_target_dir("autolbx");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let lockbox = dir.join("remembered.lbox");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    let auto = run_output_without_content_key(
+        bin,
+        &["session", "auto-open", "lockboxes"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&auto);
+    assert!(String::from_utf8_lossy(&auto.stdout).contains("lockboxes"));
+
+    run_without_content_key(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    let close = run_output_without_lockbox_password(
+        bin,
+        &["close", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    )
+    .output()
+    .unwrap();
+    if is_session_agent_unavailable(&close) {
+        eprintln!("skipping auto-open lockbox assertions: session agent unavailable");
+        return;
+    }
+    assert_success(&close);
+
+    let listing = run_output_without_lockbox_password(
+        bin,
+        &["list", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    )
+    .output()
+    .unwrap();
+    assert_success(&listing);
 }
 
 #[test]
@@ -2610,7 +2680,7 @@ fn unlock_accepts_password_sources_and_session_duration() {
 
     let sessions = run_output_without_content_key(
         bin,
-        &["vault", "sessions", "--format", "tsv"],
+        &["session", "--format", "tsv"],
         &vault_root,
         &agent_root,
     );

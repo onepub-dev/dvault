@@ -43,11 +43,11 @@ fn run_global() -> CliResult<()> {
         })
     );
     println!();
-    let auto_unlock = platform_secret_store_status()?;
+    let auto_open = platform_secret_store_status()?;
     println!("Auto-open");
-    println!("  supported: {}", yes_no(auto_unlock.supported));
-    println!("  enabled: {}", yes_no(!auto_unlock.disabled));
-    println!("  backend: {}", auto_unlock.backend);
+    println!("  supported: {}", yes_no(auto_open.supported));
+    println!("  scope: {}", auto_open.scope.as_str());
+    println!("  backend: {}", auto_open.backend);
     println!();
     println!("Session agent");
     println!(
