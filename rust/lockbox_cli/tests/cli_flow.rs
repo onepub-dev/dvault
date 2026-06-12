@@ -263,6 +263,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_help = String::from_utf8_lossy(&vault_help.stdout);
     assert!(vault_help.contains("Manage identities and contacts."));
     assert!(!vault_help.contains("sessions"));
+    assert!(!vault_help.contains("doctor"));
     assert!(vault_help.contains("identity"));
     assert!(vault_help.contains("contact"));
     assert!(!vault_help.contains("  key"));
@@ -290,6 +291,12 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(auto_open_help.contains("off"));
     assert!(auto_open_help.contains("vault"));
     assert!(auto_open_help.contains("lockboxes"));
+
+    let doctor_help = run_output(bin, &["doctor", "--help"]);
+    assert_success(&doctor_help);
+    let doctor_help = String::from_utf8_lossy(&doctor_help.stdout);
+    assert!(doctor_help.contains("Show vault, agent, or lockbox diagnostics."));
+    assert!(doctor_help.contains("lockbox doctor secrets.lbox"));
 
     let unlock_help = run_output(bin, &["open", "--help"]);
     assert_success(&unlock_help);
@@ -784,6 +791,7 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
             "Sharing",
             "  access",
             "Vault",
+            "  doctor",
             "  vault",
         ],
     );
@@ -810,7 +818,7 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
         assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
     }
 
-    for removed in ["key", "trust", "list", "ls"] {
+    for removed in ["key", "trust", "list", "ls", "doctor"] {
         let output = run_output(bin, &["vault", removed, "--help"]);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
@@ -1220,6 +1228,11 @@ fn doctor_and_session_report_agent_state() {
     let open = run_output_in(bin, &["session"], &vault_root, &agent_root);
     assert_success(&open);
     let open = String::from_utf8_lossy(&open.stdout);
+    assert!(open.contains("Session agent:"));
+    assert!(open.contains("  enabled:"));
+    assert!(open.contains("  running:"));
+    assert!(open.contains("Auto-open:"));
+    assert!(open.contains("  scope:"));
     assert!(open.contains("Active lockbox:"));
     assert!(open.contains("Open lockboxes:"));
     assert!(open.contains("none"));
@@ -1980,6 +1993,15 @@ fn password_create_requires_explicit_vault_init() {
     );
     assert!(vault_root.join("local-vault.lbox").exists());
 
+    let auto_open = run_output_without_content_key(
+        bin,
+        &["session", "auto-open", "status", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&auto_open);
+    assert!(String::from_utf8_lossy(&auto_open.stdout).contains("scope\tlockboxes"));
+
     let vault_list = run_output_without_content_key(
         bin,
         &["vault", "identity", "list", "--format", "tsv"],
@@ -2494,6 +2516,14 @@ fn session_and_close_report_empty_cache_and_already_closed_state() {
     assert_success(&lock_all);
     assert!(String::from_utf8_lossy(&lock_all.stdout).contains("sessions closed"));
 
+    let auto_open_off = run_output_without_content_key(
+        bin,
+        &["session", "auto-open", "off"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&auto_open_off);
+
     let listing = run_output_without_content_key(
         bin,
         &["list", lockbox.to_str().unwrap()],
@@ -2538,10 +2568,7 @@ fn session_activate_sets_default_lockbox_for_list() {
     assert!(session.contains(lockbox.to_str().unwrap()));
 
     let listing = run_output_without_content_key(bin, &["list"], &vault_root, &agent_root);
-    assert!(!listing.status.success());
-    let stderr = String::from_utf8_lossy(&listing.stderr);
-    assert!(stderr.contains("lockbox is closed"));
-    assert!(stderr.contains(lockbox.to_str().unwrap()));
+    assert_success(&listing);
 }
 
 #[test]

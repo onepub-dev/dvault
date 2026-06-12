@@ -139,16 +139,6 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Alias for --report."),
                 )
                 .arg(output_format_arg()),
-            archive_command("doctor", "Show vault, agent, or lockbox diagnostics.")
-                .after_help(verbose_help(
-                    verbose,
-                    "Examples:\n  lockbox doctor\n  lockbox doctor secrets.lbox",
-                    "Context:\n  With no lockbox path, doctor reports local configuration and runtime state, including vault path, auto-open support, and whether the session agent is reachable. With a lockbox path, doctor inspects public lockbox metadata without opening and adds deeper checks when the lockbox is already open.",
-                ))
-                .arg(optional(
-                    "lockbox",
-                    "Lockbox path to inspect without prompting.",
-                )),
             file_command("add", "Add a file or directory to a lockbox.")
                 .after_help(verbose_help(
                     verbose,
@@ -267,6 +257,16 @@ pub(crate) fn command(verbose: bool) -> Command {
             form_command(verbose),
             session_command(verbose),
             access_command(verbose),
+            archive_command("doctor", "Show vault, agent, or lockbox diagnostics.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox doctor\n  lockbox doctor secrets.lbox",
+                    "Context:\n  With no lockbox path, doctor reports local configuration and runtime state, including vault path, auto-open support, and whether the session agent is reachable. With a lockbox path, doctor inspects public lockbox metadata without opening and adds deeper checks when the lockbox is already open.",
+                ))
+                .arg(optional(
+                    "lockbox",
+                    "Lockbox path to inspect without prompting.",
+                )),
             vault_command(verbose),
             developer_command("visualize", "Print internal lockbox structure.")
                 .visible_alias("visualise")
@@ -302,7 +302,6 @@ Archives
   open            Open a lockbox for later commands.
   close           Close the lockbox.
   recover         Recover readable entries from a damaged lockbox.
-  doctor          Show local vault and session agent diagnostics.
 
 Files
   add             Add a file or directory to a lockbox.
@@ -323,6 +322,7 @@ Sharing
   access          Manage who can open a lockbox.
 
 Vault
+  doctor          Show local vault and session agent diagnostics.
   vault           Manage identities and contacts."
     );
 

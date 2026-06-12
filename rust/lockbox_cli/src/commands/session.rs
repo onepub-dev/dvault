@@ -5,7 +5,7 @@ use lockbox_core::Error;
 use lockbox_vault::{
     forget_platform_vault_password, get_platform_vault_password, list as list_open_lockboxes,
     local_vault, platform_secret_store_status, put_platform_vault_password, set_auto_open_scope,
-    stop as stop_agent, AutoOpenScope, VaultDirectory,
+    stop as stop_agent, verify_agent_transport_security, AutoOpenScope, VaultDirectory,
 };
 
 use super::context::{ensure_lockbox_path_accessible, read_vault_password, require_arg, CliResult};
@@ -46,26 +46,77 @@ fn activate(args: &[String]) -> CliResult<()> {
 
 fn list_sessions(args: &[String]) -> CliResult<()> {
     let (_, format) = output_format_from_args(args)?;
+    let agent_enabled = agent_enabled();
+    let agent_running = lockbox_vault::is_running();
+    let auto_open = platform_secret_store_status()?;
+    let vault_pass_phrase_stored = platform_vault_pass_phrase_stored();
     if !matches!(format, super::output::OutputFormat::Table) {
         let active = active_lockbox()?;
         let mut rows = Vec::new();
+        rows.push(vec![
+            "agent".to_string(),
+            "enabled".to_string(),
+            yes_no(agent_enabled).to_string(),
+            String::new(),
+            String::new(),
+        ]);
+        rows.push(vec![
+            "agent".to_string(),
+            "running".to_string(),
+            yes_no(agent_running).to_string(),
+            String::new(),
+            String::new(),
+        ]);
+        rows.push(vec![
+            "auto-open".to_string(),
+            "scope".to_string(),
+            auto_open.scope.as_str().to_string(),
+            String::new(),
+            String::new(),
+        ]);
+        rows.push(vec![
+            "auto-open".to_string(),
+            "vault pass phrase stored".to_string(),
+            yes_no(vault_pass_phrase_stored).to_string(),
+            String::new(),
+            String::new(),
+        ]);
+        rows.push(vec![
+            "lockbox".to_string(),
+            "active".to_string(),
+            if active.is_some() { "yes" } else { "no" }.to_string(),
+            active.clone().unwrap_or_default(),
+            String::new(),
+        ]);
         for lockbox in list_open_lockboxes()? {
             let path = lockbox.path.unwrap_or_default();
             rows.push(vec![
+                "lockbox".to_string(),
+                "open".to_string(),
                 if active.as_deref() == Some(path.as_str()) {
                     "yes".to_string()
                 } else {
                     "no".to_string()
                 },
-                "open".to_string(),
                 path,
                 lockbox.id,
             ]);
         }
-        print_records(&["active", "state", "path", "uuid"], rows, format)?;
+        print_records(&["kind", "state", "value", "path", "uuid"], rows, format)?;
         return Ok(());
     }
 
+    println!("Session agent:");
+    println!("  enabled: {}", yes_no(agent_enabled));
+    println!("  running: {}", yes_no(agent_running));
+    println!();
+    println!("Auto-open:");
+    println!("  scope: {}", auto_open.scope.as_str());
+    println!(
+        "  vault pass phrase stored: {}",
+        yes_no(vault_pass_phrase_stored)
+    );
+    println!();
     println!("Active lockbox:");
     match active_lockbox()? {
         Some(path) => println!("  {path}"),
@@ -90,7 +141,7 @@ fn auto_open(args: &[String]) -> CliResult<()> {
         "status" => auto_open_status(&args[1..]),
         "off" => {
             set_auto_open_scope(AutoOpenScope::Off)?;
-            forget_platform_vault_password()?;
+            let _ = forget_platform_vault_password();
             local_vault().lock_all()?;
             clear_active_lockbox()?;
             auto_open_status(&[])
@@ -120,9 +171,7 @@ fn auto_open(args: &[String]) -> CliResult<()> {
 fn auto_open_status(args: &[String]) -> CliResult<()> {
     let (_, format) = output_format_from_args(args)?;
     let status = platform_secret_store_status()?;
-    let stored = get_platform_vault_password()
-        .map(|password| password.is_some())
-        .unwrap_or(false);
+    let stored = platform_vault_pass_phrase_stored();
     print_records(
         &["property", "value"],
         vec![
@@ -141,6 +190,16 @@ fn auto_open_status(args: &[String]) -> CliResult<()> {
         format,
     )?;
     Ok(())
+}
+
+fn agent_enabled() -> bool {
+    verify_agent_transport_security().is_ok()
+}
+
+fn platform_vault_pass_phrase_stored() -> bool {
+    get_platform_vault_password()
+        .map(|password| password.is_some())
+        .unwrap_or(false)
 }
 
 fn active_lockbox() -> CliResult<Option<String>> {

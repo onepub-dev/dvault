@@ -11,7 +11,8 @@ use lockbox_share_protocol::{
 use lockbox_vault::{
     backup_default_vault, default_vault_dir, default_vault_path, encode_hex, export_private_key,
     export_public_key, forget_platform_vault_password, import_private_key_file, import_public_key,
-    restore_default_vault, IdentityGenerationStatus, KeyFormat, VaultDirectory,
+    restore_default_vault, set_auto_open_scope, AutoOpenScope, IdentityGenerationStatus, KeyFormat,
+    VaultDirectory,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -118,6 +119,7 @@ fn init(args: &[String]) -> CliResult<()> {
             let password = read_new_vault_password()?;
             let vault = VaultDirectory::replace_default(&password)?;
             let generated = ensure_default_private_key(&vault)?;
+            set_auto_open_scope(AutoOpenScope::Lockboxes)?;
             remember_default_vault_password(&password)?;
             println!("Vault replaced successfully.");
             if generated {
@@ -157,6 +159,7 @@ fn init(args: &[String]) -> CliResult<()> {
     let password = read_new_vault_password()?;
     let vault = VaultDirectory::unlock_or_create_default(&password)?;
     let generated = ensure_default_private_key(&vault)?;
+    set_auto_open_scope(AutoOpenScope::Lockboxes)?;
     remember_default_vault_password(&password)?;
     println!("Vault created successfully.");
     println!();

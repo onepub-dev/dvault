@@ -126,7 +126,12 @@ fn open_populates_cache_and_close_clears_it() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "empty");
+    let session = String::from_utf8_lossy(&output.stdout);
+    assert!(session.contains("Session agent:"));
+    assert!(session.contains("Auto-open:"));
+    assert!(session.contains("Active lockbox:"));
+    assert!(session.contains("Open lockboxes:"));
+    assert!(session.contains("none"));
 }
 
 fn assert_agent_log_contains(agent_dir: &PathBuf, expected: &str) {
@@ -192,6 +197,7 @@ fn command(bin: &str, agent_dir: &PathBuf, vault_dir: &PathBuf, args: &[&str]) -
         .args(args)
         .env("LOCKBOX_PASSWORD", "test-password")
         .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
+        .env("LOCKBOX_PLATFORM_SECRET_STORE", "disabled")
         .env("LOCKBOX_SESSION_AGENT_DIR", agent_dir)
         .env("LOCKBOX_SESSION_AGENT_LOG", agent_dir.join("agent.log"))
         .env("LOCKBOX_VAULT_DIR", vault_dir);
