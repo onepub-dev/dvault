@@ -5,9 +5,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use install::{install_systemd, print_status, uninstall_systemd};
 use lockbox_key_server::{install, server, server_log, store};
 use lockbox_share_protocol::{ServerStatus, TopologyRoute, TopologyServer};
-use install::{install_systemd, print_status, uninstall_systemd};
 use server::{bench_http, bench_http_fetch, bench_http_flow, run_server};
 use server_log::log_server_event;
 use store::{ServerConfig, ShareStore};
@@ -30,6 +30,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let config = config_from_args(args.collect())?;
             let bind = config.bind_addr.clone();
             let store = Arc::new(ShareStore::open(config)?);
+            store.start_topology_background();
             run_server(&bind, store)?;
         }
         Some("install") => install_systemd(args.any(|arg| arg == "--force-config"))?,
@@ -84,6 +85,11 @@ fn print_help() {
     println!("  --cluster-id ID        Public topology cluster id");
     println!("  --public-url URL       Public /v1/share URL for this server");
     println!("  --topology-version N   Public topology version");
+    println!("  --topology-token TOKEN  Shared token for topology heartbeat");
+    println!(
+        "  --topology-stale-after-ms N  Ignore peers that have not checked in within this age"
+    );
+    println!("  --topology-heartbeat-interval-ms N  Interval between topology heartbeat posts");
     println!("  --topology-server ID=URL[,STATUS]  Add server to public topology");
     println!("  --route OWNER=PRIMARY[,FAILOVER...]  Add owner routing rule");
     println!("  --replication-token TOKEN  Shared peer replication token");
@@ -148,9 +154,8 @@ fn config_from_args(args: Vec<String>) -> Result<ServerConfig, Box<dyn std::erro
             "--developer" => config.developer_mode = true,
             "--server-id" => {
                 index += 1;
-                config.server_id = parse_server_id(
-                    args.get(index).ok_or("missing value for --server-id")?,
-                )?;
+                config.server_id =
+                    parse_server_id(args.get(index).ok_or("missing value for --server-id")?)?;
             }
             "--cluster-id" => {
                 index += 1;
@@ -174,11 +179,33 @@ fn config_from_args(args: Vec<String>) -> Result<ServerConfig, Box<dyn std::erro
                     .ok_or("missing value for --topology-version")?
                     .parse()?;
             }
+            "--topology-token" => {
+                index += 1;
+                config.topology_token = Some(
+                    args.get(index)
+                        .ok_or("missing value for --topology-token")?
+                        .to_string(),
+                );
+            }
             "--topology-server" => {
                 index += 1;
                 config.topology_servers.push(parse_topology_server(
                     args.get(index).ok_or("missing value")?,
                 )?);
+            }
+            "--topology-stale-after-ms" => {
+                index += 1;
+                config.topology_stale_after_ms = args
+                    .get(index)
+                    .ok_or("missing value for --topology-stale-after-ms")?
+                    .parse()?;
+            }
+            "--topology-heartbeat-interval-ms" => {
+                index += 1;
+                config.topology_heartbeat_interval_ms = args
+                    .get(index)
+                    .ok_or("missing value for --topology-heartbeat-interval-ms")?
+                    .parse()?;
             }
             "--route" => {
                 index += 1;
@@ -335,7 +362,7 @@ fn apply_config_value(
     key: &str,
     value: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-        match key {
+    match key {
         "bind_addr" => config.bind_addr = value,
         "state_dir" => config.state_dir = PathBuf::from(value),
         "server_id" => config.server_id = parse_server_id(&value)?,
@@ -344,6 +371,13 @@ fn apply_config_value(
             config.public_url = if value.is_empty() { None } else { Some(value) };
         }
         "topology_version" => config.topology_version = value.parse()?,
+        "topology_token" => {
+            config.topology_token = if value.is_empty() { None } else { Some(value) };
+        }
+        "topology_stale_after_ms" => config.topology_stale_after_ms = value.parse()?,
+        "topology_heartbeat_interval_ms" => {
+            config.topology_heartbeat_interval_ms = value.parse()?;
+        }
         "topology_server" => config.topology_servers.push(parse_topology_server(&value)?),
         "route" => config.topology_routes.push(parse_topology_route(&value)?),
         "replication_token" => {
@@ -398,6 +432,7 @@ fn parse_topology_server(value: &str) -> Result<TopologyServer, Box<dyn std::err
         id,
         url,
         status,
+        last_seen_ms: None,
     })
 }
 

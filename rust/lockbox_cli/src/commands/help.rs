@@ -139,11 +139,15 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Alias for --report."),
                 )
                 .arg(output_format_arg()),
-            archive_command("doctor", "Show local vault and session agent diagnostics.")
+            archive_command("doctor", "Show vault, agent, or lockbox diagnostics.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox doctor",
-                    "Context:\n  Doctor reports local configuration and runtime state, including vault path, auto-unlock support, and whether the session agent is reachable. Use it when unlock, auto-unlock, or vault setup behaves unexpectedly.",
+                    "Examples:\n  lockbox doctor\n  lockbox doctor secrets.lbox",
+                    "Context:\n  With no lockbox path, doctor reports local configuration and runtime state, including vault path, auto-unlock support, and whether the session agent is reachable. With a lockbox path, doctor inspects public lockbox metadata without unlocking and adds deeper checks when the lockbox is already unlocked.",
+                ))
+                .arg(optional(
+                    "lockbox",
+                    "Lockbox path to inspect without prompting.",
                 )),
             file_command("add", "Add a file or directory to a lockbox.")
                 .after_help(verbose_help(
@@ -842,15 +846,15 @@ fn vault_command(verbose: bool) -> Command {
                 .about("Create or unlock the local vault.")
                 .after_help(verbose_help(
                     verbose,
-                    "If the vault already exists, init reports the path and makes no changes. Use --verify to validate the password, or --overwrite only when replacing the vault and losing records stored only there.",
-                    "Context:\n  The local vault stores identities, contacts, and key-directory backups. A new vault also gets a default identity. Keep the vault password backed up; reVault cannot recover identities from the vault without it.",
+                    "If the vault already exists, init reports the path and makes no changes. Use --verify to validate the pass phrase, or --overwrite only when replacing the vault and losing records stored only there.",
+                    "Context:\n  The local vault stores identities, contacts, and key-directory backups. New vault pass phrases must be at least 15 characters. A new vault also gets a default identity. Store the vault pass phrase safely; reVault cannot recover the vault without it.",
                 ))
                 .arg(
                     Arg::new("verify")
                         .long("verify")
                         .conflicts_with("overwrite")
                         .action(ArgAction::SetTrue)
-                        .help("Ask for the vault password and verify the existing vault unlocks."),
+                        .help("Ask for the vault pass phrase and verify the existing vault unlocks."),
                 )
                 .arg(
                     Arg::new("overwrite")
@@ -859,6 +863,38 @@ fn vault_command(verbose: bool) -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Replace an existing local vault."),
                 ),
+        )
+        .subcommand(
+            Command::new("backup")
+                .about("Create an encrypted backup archive of the local vault.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault backup ./vault-backup.lockbox-backup\n  lockbox vault backup --overwrite ./vault-backup.lockbox-backup",
+                    "Context:\n  Backup takes a locked snapshot of the encrypted local-vault.lbox file and stores it with a manifest and checksum. It does not decrypt or export vault records.",
+                ))
+                .arg(
+                    Arg::new("overwrite")
+                        .long("overwrite")
+                        .action(ArgAction::SetTrue)
+                        .help("Replace an existing backup file."),
+                )
+                .arg(required("output", "Backup archive output path.")),
+        )
+        .subcommand(
+            Command::new("restore")
+                .about("Restore the local vault from an encrypted backup archive.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault restore ./vault-backup.lockbox-backup\n  lockbox vault restore --overwrite ./vault-backup.lockbox-backup",
+                    "Context:\n  Restore verifies the backup checksum before replacing the local vault. Existing vaults are not overwritten unless --overwrite is passed.",
+                ))
+                .arg(
+                    Arg::new("overwrite")
+                        .long("overwrite")
+                        .action(ArgAction::SetTrue)
+                        .help("Replace the existing local vault."),
+                )
+                .arg(required("backup", "Backup archive input path.")),
         )
         .subcommand(
             Command::new("sessions")
@@ -901,13 +937,13 @@ fn vault_command(verbose: bool) -> Command {
                 )
                 .subcommand(
                     Command::new("auto-unlock")
-                        .about("Store the vault password in the operating system secret store so reVault can unlock the local vault automatically after your OS login session is unlocked.")
+                        .about("Store the vault pass phrase in the operating system secret store so reVault can unlock the local vault automatically after your OS login session is unlocked.")
                         .disable_help_subcommand(true)
                         .arg_required_else_help(false)
                         .after_help(verbose_help(
                             verbose,
                             "Examples:\n  lockbox vault sessions auto-unlock status\n  lockbox vault sessions auto-unlock enable\n  lockbox vault sessions auto-unlock forget",
-                            "Context:\n  Auto-unlock stores the vault password in the operating system secret store. After your OS login session unlocks that store, reVault can unlock the local vault without prompting for the vault password.",
+                            "Context:\n  Auto-unlock stores the vault pass phrase in the operating system secret store. After your OS login session unlocks that store, reVault can unlock the local vault without prompting for the vault pass phrase.",
                         ))
                         .subcommand(
                             Command::new("status")
@@ -921,11 +957,11 @@ fn vault_command(verbose: bool) -> Command {
                         )
                         .subcommand(
                             Command::new("enable")
-                                .about("Allow reVault to store the vault password for auto-unlock.")
+                                .about("Allow reVault to store the vault pass phrase for auto-unlock.")
                                 .after_help(verbose_help(
                                     verbose,
                                     "Examples:\n  lockbox vault sessions auto-unlock enable",
-                                    "Context:\n  Enable allows reVault to save the vault password in the operating system secret store so future commands can unlock the vault automatically after OS login.",
+                                    "Context:\n  Enable allows reVault to save the vault pass phrase in the operating system secret store so future commands can unlock the vault automatically after OS login.",
                                 )),
                         )
                         .subcommand(
@@ -934,16 +970,16 @@ fn vault_command(verbose: bool) -> Command {
                                 .after_help(verbose_help(
                                     verbose,
                                     "Examples:\n  lockbox vault sessions auto-unlock disable",
-                                    "Context:\n  Disable leaves any stored secret untouched but tells reVault not to use auto-unlock. Use forget when you want to delete the stored vault password.",
+                                    "Context:\n  Disable leaves any stored secret untouched but tells reVault not to use auto-unlock. Use forget when you want to delete the stored vault pass phrase.",
                                 )),
                         )
                         .subcommand(
                             Command::new("forget")
-                                .about("Delete the stored vault password used for auto-unlock.")
+                                .about("Delete the stored vault pass phrase used for auto-unlock.")
                                 .after_help(verbose_help(
                                     verbose,
                                     "Examples:\n  lockbox vault sessions auto-unlock forget",
-                                    "Context:\n  Forget removes the vault password from the operating system secret store. Future vault unlocks will prompt again unless auto-unlock is enabled and the password is stored again.",
+                                    "Context:\n  Forget removes the vault pass phrase from the operating system secret store. Future vault unlocks will prompt again unless auto-unlock is enabled and the pass phrase is stored again.",
                                 )),
                         ),
                 ),

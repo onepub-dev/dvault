@@ -4,15 +4,18 @@ use lockbox_core::{
     RecipientPublicKey, Result, SecretString, SecretVec,
 };
 use sha2::{Digest, Sha256};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::env;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::key_format::{export_private_key, import_private_key, KeyFormat};
 
 const VAULT_FILE_NAME: &str = "local-vault.lbox";
+const VAULT_LOCK_FILE_NAME: &str = "local-vault.lbox.lock";
+const VAULT_BACKUP_MAGIC: &[u8; 8] = b"LBVBK001";
 const VAULT_STRUCTURE_VERSION_PATH: &str = "/vault/structure-version";
 const KNOWN_LOCKBOX_MAGIC: &[u8; 4] = b"LBKL";
 const KNOWN_LOCKBOX_VERSION: u16 = 1;
@@ -23,6 +26,10 @@ const IDENTITY_EMAIL_VERSION: u16 = 1;
 const GENERATION_ACTIVE: u16 = 1;
 const GENERATION_RETIRED: u16 = 2;
 const GENERATION_COMPROMISED: u16 = 3;
+
+thread_local! {
+    static VAULT_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
 
 /// Current on-disk structure version for records stored inside the local vault.
 pub const CURRENT_VAULT_STRUCTURE_VERSION: u32 = 1;
@@ -76,6 +83,25 @@ pub struct IdentityHistory {
     pub generations: Vec<IdentityGeneration>,
 }
 
+/// Metadata stored in an encrypted vault backup archive.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct VaultBackupManifest {
+    /// Backup archive format version.
+    pub format_version: u16,
+
+    /// Backup creation time.
+    pub created_at_unix_ms: u64,
+
+    /// Name of the encrypted vault file contained in the archive.
+    pub vault_file_name: String,
+
+    /// Number of bytes in the encrypted vault file.
+    pub vault_size: u64,
+
+    /// SHA-256 checksum of the encrypted vault file, encoded as lowercase hex.
+    pub vault_sha256: String,
+}
+
 /// Password-protected local vault file for native reVault metadata.
 ///
 /// A `VaultDirectory` stores its data in `local-vault.lbox` under a private
@@ -99,6 +125,34 @@ impl VaultDirectory {
         Self::unlock_or_create(default_vault_dir()?, password)
     }
 
+    /// Replaces the default vault directory using `password`.
+    ///
+    /// The replacement is coordinated with the same interprocess lock used for
+    /// vault backups and record writes.
+    pub fn replace_default(password: &SecretString) -> Result<Self> {
+        Self::replace(default_vault_dir()?, password)
+    }
+
+    /// Replaces the vault directory at `root` using `password`.
+    pub fn replace(root: impl AsRef<Path>, password: &SecretString) -> Result<Self> {
+        let root = root.as_ref().to_path_buf();
+        create_private_dir(&root)?;
+        let _guard = VaultFileLock::acquire(&root)?;
+        let path = root.join(VAULT_FILE_NAME);
+        if path.exists() {
+            fs::remove_file(&path).map_err(|err| Error::Io(err.to_string()))?;
+        }
+        let lockbox = Lockbox::create_file(&path, LockboxProtection::Password(password))?;
+        set_private_file_permissions(&path)?;
+        let vault = Self {
+            root,
+            path,
+            lockbox: RefCell::new(lockbox),
+        };
+        vault.ensure_structure_version(true)?;
+        Ok(vault)
+    }
+
     /// Unlocks or creates a vault directory at `root`.
     ///
     /// The vault file is protected with `password`. When a new vault file is
@@ -106,6 +160,7 @@ impl VaultDirectory {
     pub fn unlock_or_create(root: impl AsRef<Path>, password: &SecretString) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         create_private_dir(&root)?;
+        let _guard = VaultFileLock::acquire(&root)?;
         let path = root.join(VAULT_FILE_NAME);
         let existed = path.exists();
         let lockbox = if existed {
@@ -480,6 +535,7 @@ impl VaultDirectory {
         bytes: &[u8],
         replace: bool,
     ) -> Result<()> {
+        let _guard = VaultFileLock::acquire(&self.root)?;
         let mut lockbox = self.lockbox.borrow_mut();
         let replace = replace && lockbox.stat(path).is_some();
         lockbox.add_file(path, bytes, replace)?;
@@ -489,6 +545,7 @@ impl VaultDirectory {
     }
 
     fn put_secret_env_record(&self, name: &EnvName, value: &SecretString) -> Result<()> {
+        let _guard = VaultFileLock::acquire(&self.root)?;
         let mut lockbox = self.lockbox.borrow_mut();
         lockbox.set_secret_env(name, value)?;
         lockbox.commit()?;
@@ -501,6 +558,7 @@ impl VaultDirectory {
     }
 
     fn delete_record_if_exists(&self, path: &LockboxPath) -> Result<()> {
+        let _guard = VaultFileLock::acquire(&self.root)?;
         let mut lockbox = self.lockbox.borrow_mut();
         if lockbox.stat(path).is_some() {
             lockbox.delete(path)?;
@@ -511,6 +569,7 @@ impl VaultDirectory {
     }
 
     fn delete_secret_env_record_if_exists(&self, name: &EnvName) -> Result<()> {
+        let _guard = VaultFileLock::acquire(&self.root)?;
         let mut lockbox = self.lockbox.borrow_mut();
         if lockbox.env_sensitivity(name)?.is_some() {
             lockbox.delete_env(name)?;
@@ -676,6 +735,249 @@ impl VaultDirectory {
             &identity_history_record_path(&history.name)?,
             &encode_identity_history(history),
         )
+    }
+}
+
+/// Writes a consistent encrypted backup archive for the default local vault.
+///
+/// The archive contains the raw encrypted `local-vault.lbox` bytes plus a JSON
+/// manifest and checksum. It does not decrypt or export vault records.
+pub fn backup_default_vault(
+    output: impl AsRef<Path>,
+    overwrite: bool,
+) -> Result<VaultBackupManifest> {
+    let root = default_vault_dir()?;
+    let path = root.join(VAULT_FILE_NAME);
+    if !path.exists() {
+        return Err(Error::VaultUnavailable(
+            "local vault is not initialized; run `lockbox vault init` first".to_string(),
+        ));
+    }
+    let _guard = VaultFileLock::acquire(&root)?;
+    let vault_bytes = fs::read(&path).map_err(|err| Error::Io(err.to_string()))?;
+    let digest: [u8; 32] = Sha256::digest(&vault_bytes).into();
+    let manifest = VaultBackupManifest {
+        format_version: 1,
+        created_at_unix_ms: unix_ms(SystemTime::now()),
+        vault_file_name: VAULT_FILE_NAME.to_string(),
+        vault_size: vault_bytes.len() as u64,
+        vault_sha256: crate::encode_hex(&digest),
+    };
+    write_vault_backup_archive(output.as_ref(), overwrite, &manifest, &vault_bytes)?;
+    Ok(manifest)
+}
+
+/// Restores the default local vault from an encrypted backup archive.
+///
+/// The archive checksum is verified before the existing vault file is replaced.
+pub fn restore_default_vault(
+    input: impl AsRef<Path>,
+    overwrite: bool,
+) -> Result<VaultBackupManifest> {
+    let (manifest, vault_bytes) = read_vault_backup_archive(input.as_ref())?;
+    let root = default_vault_dir()?;
+    create_private_dir(&root)?;
+    let path = root.join(VAULT_FILE_NAME);
+    let _guard = VaultFileLock::acquire(&root)?;
+    if path.exists() && !overwrite {
+        return Err(Error::AlreadyExists(format!(
+            "{}; pass --overwrite to replace it",
+            path.display()
+        )));
+    }
+    let tmp = root.join("local-vault.lbox.restore.tmp");
+    fs::write(&tmp, vault_bytes).map_err(|err| Error::Io(err.to_string()))?;
+    set_private_file_permissions(&tmp)?;
+    if path.exists() {
+        fs::remove_file(&path).map_err(|err| Error::Io(err.to_string()))?;
+    }
+    fs::rename(&tmp, &path).map_err(|err| Error::Io(err.to_string()))?;
+    set_private_file_permissions(&path)?;
+    Ok(manifest)
+}
+
+fn write_vault_backup_archive(
+    output: &Path,
+    overwrite: bool,
+    manifest: &VaultBackupManifest,
+    vault_bytes: &[u8],
+) -> Result<()> {
+    if output.exists() && !overwrite {
+        return Err(Error::AlreadyExists(format!(
+            "{}; pass --overwrite to replace it",
+            output.display()
+        )));
+    }
+    let manifest_bytes = serde_json::to_vec(manifest).map_err(|err| Error::Io(err.to_string()))?;
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    if !overwrite {
+        options.create_new(true);
+    }
+    let mut file = options
+        .open(output)
+        .map_err(|err| Error::Io(err.to_string()))?;
+    file.write_all(VAULT_BACKUP_MAGIC)
+        .map_err(|err| Error::Io(err.to_string()))?;
+    file.write_all(&(manifest_bytes.len() as u64).to_be_bytes())
+        .map_err(|err| Error::Io(err.to_string()))?;
+    file.write_all(&manifest_bytes)
+        .map_err(|err| Error::Io(err.to_string()))?;
+    file.write_all(vault_bytes)
+        .map_err(|err| Error::Io(err.to_string()))?;
+    file.sync_all().map_err(|err| Error::Io(err.to_string()))
+}
+
+fn read_vault_backup_archive(input: &Path) -> Result<(VaultBackupManifest, Vec<u8>)> {
+    let mut file = File::open(input).map_err(|err| Error::Io(err.to_string()))?;
+    let mut magic = [0u8; 8];
+    file.read_exact(&mut magic)
+        .map_err(|err| Error::Io(err.to_string()))?;
+    if &magic != VAULT_BACKUP_MAGIC {
+        return Err(Error::InvalidInput(
+            "backup file is not a reVault vault backup archive".to_string(),
+        ));
+    }
+    let mut len = [0u8; 8];
+    file.read_exact(&mut len)
+        .map_err(|err| Error::Io(err.to_string()))?;
+    let manifest_len = u64::from_be_bytes(len);
+    if manifest_len > 1024 * 1024 {
+        return Err(Error::SecurityLimitExceeded(
+            "vault backup manifest is too large".to_string(),
+        ));
+    }
+    let mut manifest_bytes = vec![0u8; manifest_len as usize];
+    file.read_exact(&mut manifest_bytes)
+        .map_err(|err| Error::Io(err.to_string()))?;
+    let manifest: VaultBackupManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|err| Error::InvalidInput(err.to_string()))?;
+    if manifest.format_version != 1 {
+        return Err(Error::InvalidInput(format!(
+            "vault backup format version {} is not supported",
+            manifest.format_version
+        )));
+    }
+    if manifest.vault_file_name != VAULT_FILE_NAME {
+        return Err(Error::InvalidInput(format!(
+            "vault backup contains unexpected file {}",
+            manifest.vault_file_name
+        )));
+    }
+    let mut vault_bytes = Vec::new();
+    file.read_to_end(&mut vault_bytes)
+        .map_err(|err| Error::Io(err.to_string()))?;
+    if vault_bytes.len() as u64 != manifest.vault_size {
+        return Err(Error::InvalidInput(
+            "vault backup size does not match manifest".to_string(),
+        ));
+    }
+    let digest: [u8; 32] = Sha256::digest(&vault_bytes).into();
+    if crate::encode_hex(&digest) != manifest.vault_sha256 {
+        return Err(Error::InvalidInput(
+            "vault backup checksum does not match manifest".to_string(),
+        ));
+    }
+    Ok((manifest, vault_bytes))
+}
+
+struct VaultFileLock {
+    #[cfg(unix)]
+    file: Option<File>,
+    #[cfg(not(unix))]
+    path: Option<PathBuf>,
+    active: bool,
+}
+
+impl VaultFileLock {
+    fn acquire(root: &Path) -> Result<Self> {
+        let nested = VAULT_LOCK_DEPTH.with(|depth| {
+            let value = depth.get();
+            depth.set(value.saturating_add(1));
+            value > 0
+        });
+        if nested {
+            return Ok(Self {
+                #[cfg(unix)]
+                file: None,
+                #[cfg(not(unix))]
+                path: None,
+                active: true,
+            });
+        }
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+
+            let path = root.join(VAULT_LOCK_FILE_NAME);
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(path)
+                .map_err(|err| {
+                    VAULT_LOCK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+                    Error::Io(err.to_string())
+                })?;
+            // SAFETY: flock operates on a valid file descriptor owned by `file`.
+            // The descriptor remains open for the lifetime of the guard.
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+            if rc != 0 {
+                VAULT_LOCK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+                return Err(Error::Io(std::io::Error::last_os_error().to_string()));
+            }
+            Ok(Self {
+                file: Some(file),
+                active: true,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let path = root.join(VAULT_LOCK_FILE_NAME);
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|err| {
+                    VAULT_LOCK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+                    if err.kind() == std::io::ErrorKind::AlreadyExists {
+                        Error::VaultUnavailable(
+                            "local vault is locked by another process".to_string(),
+                        )
+                    } else {
+                        Error::Io(err.to_string())
+                    }
+                })?;
+            file.write_all(std::process::id().to_string().as_bytes())
+                .map_err(|err| {
+                    VAULT_LOCK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+                    Error::Io(err.to_string())
+                })?;
+            Ok(Self {
+                path: Some(path),
+                active: true,
+            })
+        }
+    }
+}
+
+impl Drop for VaultFileLock {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        #[cfg(unix)]
+        if let Some(file) = &self.file {
+            use std::os::fd::AsRawFd;
+
+            // SAFETY: this unlocks the same valid descriptor locked in `acquire`.
+            let _ = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+        }
+        #[cfg(not(unix))]
+        if let Some(path) = &self.path {
+            let _ = fs::remove_file(path);
+        }
+        VAULT_LOCK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
 }
 

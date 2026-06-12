@@ -216,7 +216,7 @@ pub(crate) fn is_running() -> bool {
 
 fn request(message: &SecretVec) -> io::Result<AgentResponse> {
     ensure_agent()?;
-    let mut stream = UnixStream::connect(socket_path())?;
+    let mut stream = connect_started_agent()?;
     message
         .with_bytes(|message| stream.write_all(message))
         .map_err(io::Error::other)??;
@@ -226,10 +226,23 @@ fn request(message: &SecretVec) -> io::Result<AgentResponse> {
 
 fn request_control(message: &[u8]) -> io::Result<ControlResponse> {
     ensure_agent()?;
-    let mut stream = UnixStream::connect(socket_path())?;
+    let mut stream = connect_started_agent()?;
     stream.write_all(message)?;
     stream.shutdown(std::net::Shutdown::Write)?;
     parse_control_response(&read_plain_frame(stream, max_message_bytes())?)
+}
+
+fn connect_started_agent() -> io::Result<UnixStream> {
+    UnixStream::connect(socket_path()).map_err(|err| {
+        if matches!(
+            err.kind(),
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+        ) {
+            agent_start_timeout_error()
+        } else {
+            err
+        }
+    })
 }
 
 fn ensure_agent() -> io::Result<()> {
@@ -252,10 +265,14 @@ fn ensure_agent() -> io::Result<()> {
         }
         thread::sleep(Duration::from_millis(25));
     }
-    Err(io::Error::new(
+    Err(agent_start_timeout_error())
+}
+
+fn agent_start_timeout_error() -> io::Error {
+    io::Error::new(
         io::ErrorKind::TimedOut,
         "lockbox session agent did not start",
-    ))
+    )
 }
 
 fn handle_client(
@@ -263,6 +280,10 @@ fn handle_client(
     cache: &mut BTreeMap<String, CacheEntry>,
     active: &Arc<Mutex<ActiveSecretRegistry>>,
 ) -> io::Result<bool> {
+    if !client_matches_current_user(&stream)? {
+        log_agent_event("rejected agent request from a different user");
+        return Ok(false);
+    }
     let request = read_agent_frame(stream.try_clone()?, max_message_bytes())?;
     let (stop, response) = match request {
         AgentFrame::Cache(request) => {
@@ -276,6 +297,75 @@ fn handle_client(
     };
     write_agent_reply(&mut stream, response)?;
     Ok(stop)
+}
+
+fn client_matches_current_user(stream: &UnixStream) -> io::Result<bool> {
+    Ok(peer_uid(stream)? == current_effective_uid())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
+    use std::os::unix::io::AsRawFd;
+
+    let mut credential = std::mem::MaybeUninit::<libc::ucred>::uninit();
+    let mut credential_len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            credential.as_mut_ptr().cast::<libc::c_void>(),
+            &mut credential_len,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if credential_len < std::mem::size_of::<libc::ucred>() as libc::socklen_t {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "peer credential response was truncated",
+        ));
+    }
+    Ok(unsafe { credential.assume_init().uid as u32 })
+}
+
+#[cfg(any(
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
+    use std::os::unix::io::AsRawFd;
+
+    let mut euid = 0 as libc::uid_t;
+    let mut egid = 0 as libc::gid_t;
+    let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut euid, &mut egid) };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(euid as u32)
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
+fn peer_uid(_stream: &UnixStream) -> io::Result<u32> {
+    Ok(current_effective_uid())
+}
+
+fn current_effective_uid() -> u32 {
+    unsafe { libc::geteuid() as u32 }
 }
 
 fn handle_agent_request(
@@ -631,6 +721,43 @@ mod tests {
         }
 
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn peer_owner_check_accepts_current_user_socket() {
+        let dir = env::temp_dir().join(format!(
+            "lockbox-agent-peer-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("agent.sock");
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                let _ = fs::remove_dir_all(&dir);
+                return;
+            }
+            Err(err) => panic!("unable to bind local agent test socket: {err}"),
+        };
+        let client = match UnixStream::connect(&socket) {
+            Ok(client) => client,
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                let _ = fs::remove_dir_all(&dir);
+                return;
+            }
+            Err(err) => panic!("unable to connect local agent test socket: {err}"),
+        };
+        let (server, _) = listener.accept().unwrap();
+
+        assert_eq!(peer_uid(&server).unwrap(), current_effective_uid());
+        assert!(client_matches_current_user(&server).unwrap());
+
+        drop(client);
+        let _ = fs::remove_dir_all(dir);
     }
 
     fn round_trip(

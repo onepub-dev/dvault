@@ -2,11 +2,27 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 //! Native vault and unlock-cache support for reVault.
 //!
-//! This crate layers local workstation/server conveniences on top of
-//! `lockbox_core`: an agent-backed content-key cache, a password-protected
-//! local vault file, and helpers for importing and exporting recipient keys.
-//! It is intended for native applications. Browser and other sandboxed
-//! environments should usually use `lockbox_core` directly.
+//! This crate includes the **Lockbox Session Agent**, a local unlock-cache service
+//! that reduces password prompts by keeping lockbox content keys in a short-lived,
+//! in-memory process cache.
+//!
+//! The Lockbox Session Agent is started as a platform-specific local service
+//! (Unix socket on Unix, named pipe on Windows), and is used automatically by
+//! `lockbox` operations when a secret-dependent command needs a cached key.
+//! Its cache uses secure frames for key-bearing traffic, supports TTL-based expiry,
+//! supports explicit session management commands, and automatically clears cache
+//! entries during suspend events.
+//!
+//! Key public entry points:
+//! - `serve_agent` starts the session agent in-process.
+//! - `get`, `put`, `forget`, `forget_all`, `list`, and `stop` operate the
+//!   session cache.
+//! - `begin_secret_activity` and `SecretActivityGuard` support suspend-protection
+//!   and optional process termination behavior.
+//! - `local_vault` manages the on-disk vault and metadata outside the agent cache.
+//!
+//! For the runtime behavior, command integration, and security settings, see the
+//! project documentation in `docs/lockbox_session_agent.md`.
 
 /// Secure string type re-exported from `lockbox_core`.
 pub use lockbox_core::{SecretString, SecretVec};
@@ -61,7 +77,7 @@ pub use platform_secret_store::{
 };
 pub use vault::{local_vault, LocalVault, Vault};
 pub use vault_directory::{
-    default_vault_dir, default_vault_path, IdentityGeneration, IdentityGenerationStatus,
-    IdentityHistory, KnownLockbox, StoredTrustedRecipient, VaultDirectory,
-    CURRENT_VAULT_STRUCTURE_VERSION,
+    backup_default_vault, default_vault_dir, default_vault_path, restore_default_vault,
+    IdentityGeneration, IdentityGenerationStatus, IdentityHistory, KnownLockbox,
+    StoredTrustedRecipient, VaultBackupManifest, VaultDirectory, CURRENT_VAULT_STRUCTURE_VERSION,
 };

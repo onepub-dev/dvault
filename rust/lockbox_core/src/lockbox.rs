@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use crate::commit_auth::{commit_auth_digest, commit_auth_message, decode_commit_auth, CommitAuth};
 use crate::commit_root::decode_commit_root;
@@ -18,7 +19,7 @@ use crate::key_directory::{
     best_key_directory, decode_key_directory_decoded_page, scan_key_directories,
     DecodedKeyDirectory,
 };
-use crate::key_slot::KeySlot;
+use crate::key_slot::{KeySlot, LockboxKeySlot};
 use crate::lockbox_id::LockboxId;
 use crate::lockbox_path::LockboxPath;
 use crate::page::{
@@ -61,6 +62,21 @@ pub use recovery::RecoveryScanner;
 /// API.
 pub struct LockboxInspector<'a> {
     lockbox: &'a Lockbox,
+}
+
+/// Public metadata read from a lockbox file without decrypting its contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockboxFileInspection {
+    /// Stable id embedded in this lockbox.
+    pub lockbox_id: LockboxId,
+    /// Whether the primary public header was readable and authenticated.
+    pub header_readable: bool,
+    /// Best key-directory generation found in the lockbox file.
+    pub key_directory_generation: u64,
+    /// Number of readable key-directory copies found for this lockbox.
+    pub key_directory_copy_count: usize,
+    /// Public key-slot metadata for access methods stored in the lockbox.
+    pub key_slots: Vec<LockboxKeySlot>,
 }
 
 #[derive(Debug, Default)]
@@ -487,6 +503,51 @@ impl Lockbox {
     /// Return the stable id embedded in this lockbox.
     pub fn lockbox_id(&self) -> LockboxId {
         self.lockbox_id
+    }
+
+    /// Inspect public lockbox metadata without decrypting stored contents.
+    ///
+    /// This reads the lockbox header and key directory only. It does not unlock
+    /// file contents and does not require a password, recipient private key, or
+    /// cached content key.
+    pub fn inspect_file(path: impl AsRef<Path>) -> Result<LockboxFileInspection> {
+        let storage = StorageBackend::file(path.as_ref())?;
+        let header = storage.read_at(0, HEADER_LEN)?;
+        let header_result = read_header(&header);
+        let directories =
+            key_management::key_directories_from_storage(&storage).unwrap_or_default();
+
+        if let Ok(header) = header_result {
+            let matching_directories = directories
+                .into_iter()
+                .filter(|directory| directory.lockbox_id == header.lockbox_id)
+                .collect::<Vec<_>>();
+            let best = matching_directories.first();
+            return Ok(LockboxFileInspection {
+                lockbox_id: header.lockbox_id,
+                header_readable: true,
+                key_directory_generation: best.map(|directory| directory.generation).unwrap_or(0),
+                key_directory_copy_count: matching_directories.len(),
+                key_slots: best
+                    .map(|directory| directory.slots.iter().map(KeySlot::info).collect())
+                    .unwrap_or_default(),
+            });
+        }
+
+        let directories = key_management::key_directories_from_storage(&storage)?;
+        let Some(best) = directories.first() else {
+            return Err(Error::CorruptHeader);
+        };
+        Ok(LockboxFileInspection {
+            lockbox_id: best.lockbox_id,
+            header_readable: false,
+            key_directory_generation: best.generation,
+            key_directory_copy_count: directories
+                .iter()
+                .filter(|directory| directory.lockbox_id == best.lockbox_id)
+                .count(),
+            key_slots: best.slots.iter().map(KeySlot::info).collect(),
+        })
     }
 
     pub(crate) fn mark_read_only(&mut self) {

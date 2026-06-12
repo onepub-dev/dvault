@@ -5,7 +5,7 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -16,11 +16,12 @@ use sha2::{Digest, Sha256};
 use lockbox_share_protocol::client::{HttpTransport, Transport};
 use lockbox_share_protocol::payload;
 use lockbox_share_protocol::protocol::{self, Operation, Reader, Status};
+use lockbox_share_protocol::ClientError;
 use lockbox_share_protocol::{
-    encode_replication_request, share_code_locator, share_code_server_id_char, sign_replication_event,
-    ClusterTopology,
-    ReplicationEvent, ReplicationEventKind, ReplicationRequest, ServerStatus, TopologyRoute,
-    TopologyServer,
+    build_ring_routes, decode_topology, decode_topology_registration, encode_replication_request,
+    encode_topology, encode_topology_registration, share_code_locator, share_code_server_id_char,
+    sign_replication_event, ClusterTopology, ReplicationEvent, ReplicationEventKind,
+    ReplicationRequest, ServerStatus, TopologyRegistration, TopologyRoute, TopologyServer,
 };
 
 const RECORD_MAGIC: &[u8; 4] = b"LBSF";
@@ -42,6 +43,8 @@ const OUTBOX_ACK: u16 = 2;
 const REPLICATION_STATE_MAGIC: &[u8; 8] = b"LBSR2\0\0\0";
 const REPLICATION_STATE_PERSIST_INTERVAL: usize = 1024;
 const SHARE_CODE_BODY_DIGITS: usize = 12;
+const TOPOLOGY_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
+const DEFAULT_TOPOLOGY_STALE_MS: u64 = 90_000;
 
 type RecordHash = [u8; HASH_LEN];
 
@@ -89,6 +92,9 @@ pub struct ServerConfig {
     pub verification_email_command: Option<String>,
     pub verification_email_rate_limit_per_hour: u32,
     pub verification_email_ip_rate_limit_per_hour: u32,
+    pub topology_token: Option<String>,
+    pub topology_stale_after_ms: u64,
+    pub topology_heartbeat_interval_ms: u64,
 }
 
 impl Default for ServerConfig {
@@ -123,6 +129,9 @@ impl Default for ServerConfig {
             verification_email_command: None,
             verification_email_rate_limit_per_hour: 5,
             verification_email_ip_rate_limit_per_hour: 30,
+            topology_token: None,
+            topology_stale_after_ms: DEFAULT_TOPOLOGY_STALE_MS,
+            topology_heartbeat_interval_ms: TOPOLOGY_HEARTBEAT_INTERVAL_MS,
         }
     }
 }
@@ -176,6 +185,22 @@ impl From<protocol::ProtocolError> for StoreError {
     }
 }
 
+fn store_error_from_client_error(err: ClientError) -> StoreError {
+    match err {
+        ClientError::Protocol(err) => StoreError::Protocol(err),
+        ClientError::Payload(err) => StoreError::PayloadInvalid(err.to_string()),
+        ClientError::Topology(err) => StoreError::PayloadInvalid(err),
+        ClientError::Io(err) => StoreError::Io(err),
+        ClientError::Url(err) => StoreError::Config(err),
+        ClientError::Http(err) => StoreError::Config(err),
+        ClientError::Replication(err) => StoreError::Config(err),
+        ClientError::Server { message, .. } => StoreError::Config(message),
+        ClientError::UnexpectedOperation { expected, actual } => {
+            StoreError::Config(format!("unexpected operation {expected:?} != {actual:?}"))
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ShareEntry {
     share_code: String,
@@ -197,11 +222,11 @@ struct Shard {
 
 pub struct ShareStore {
     config: ServerConfig,
+    auto_routes: bool,
     secret: [u8; 32],
     bucket_dir: PathBuf,
     shards: Vec<Shard>,
     verifications: Mutex<HashMap<String, VerificationEntry>>,
-    email_index: Mutex<HashMap<String, String>>,
     email_rate_limits: Mutex<EmailRateLimits>,
     created: AtomicU64,
     fetched: AtomicU64,
@@ -214,6 +239,7 @@ pub struct ShareStore {
     replication_tx: Option<mpsc::SyncSender<ReplicationEventKind>>,
     replication_outbox_path: PathBuf,
     replication_sequence_path: PathBuf,
+    topology: Mutex<ClusterTopology>,
 }
 
 pub struct CreatedShare {
@@ -254,6 +280,41 @@ pub struct VerificationPage {
 }
 
 impl ShareStore {
+    fn encode_response_with_topology(
+        &self,
+        operation: Operation,
+        status: Status,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        let base = protocol::encode_response(operation, status, payload);
+        let topology = self.topology();
+        match encode_topology(&topology) {
+            Ok(bytes) => protocol::encode_response_with_tail(operation, status, payload, &bytes),
+            Err(_) => base,
+        }
+    }
+
+    fn encode_store_error_with_topology(&self, operation: Operation, err: StoreError) -> Vec<u8> {
+        let status = match err {
+            StoreError::PayloadTooLarge => Status::PayloadTooLarge,
+            StoreError::NotFound => Status::ShareNotFound,
+            StoreError::Expired => Status::ShareExpired,
+            StoreError::Exhausted => Status::ShareExhausted,
+            StoreError::DeleteTokenInvalid => Status::DeleteTokenInvalid,
+            StoreError::PayloadInvalid(_) => Status::MalformedRequest,
+            StoreError::Protocol(_) => Status::MalformedRequest,
+            StoreError::Config(_) => Status::StoreUnavailable,
+            StoreError::ReplicationUnauthorized => Status::ReplicationUnauthorized,
+            StoreError::RateLimited => Status::RateLimited,
+            StoreError::EmailUnverified => Status::ShareNotFound,
+            StoreError::Io(_) => Status::StoreUnavailable,
+        };
+        let mut payload = Vec::new();
+        protocol::put_u16(&mut payload, protocol::MESSAGE_VERSION);
+        protocol::put_u16(&mut payload, status as u16);
+        protocol::put_string(&mut payload, &err.to_string());
+        self.encode_response_with_topology(operation, status, &payload)
+    }
     pub fn open(mut config: ServerConfig) -> Result<Self, StoreError> {
         const MAX_SERVER_ID: u8 = 35;
         if config.developer_mode {
@@ -281,7 +342,10 @@ impl ShareStore {
         for topology_route in &config.topology_routes {
             if topology_route.owner_id > MAX_SERVER_ID
                 || topology_route.primary_id > MAX_SERVER_ID
-                || topology_route.failover_ids.iter().any(|id| *id > MAX_SERVER_ID)
+                || topology_route
+                    .failover_ids
+                    .iter()
+                    .any(|id| *id > MAX_SERVER_ID)
             {
                 return Err(StoreError::Config(
                     "topology route id must be an index 0..35 (0..9, a..z)".to_string(),
@@ -289,6 +353,7 @@ impl ShareStore {
             }
         }
         fs::create_dir_all(&config.state_dir)?;
+        let auto_routes = config.topology_routes.is_empty();
         let bucket_dir = config.state_dir.join("index");
         fs::create_dir_all(&bucket_dir)?;
         let replication_state_path = config.state_dir.join("replication-state.bin");
@@ -304,7 +369,6 @@ impl ShareStore {
         let shard_count = config.shard_count.max(1);
         let cache_per_shard = config.index_cache_entries / shard_count;
         let mut shards = Vec::with_capacity(shard_count);
-        let mut email_index = HashMap::new();
         let mut live = 0;
         for shard_id in 0..shard_count {
             let path = config.state_dir.join(format!("shares-{shard_id:03}.seg"));
@@ -315,11 +379,6 @@ impl ShareStore {
                 .open(&path)?;
             let mut index = replay(&mut file)?;
             live += index.len();
-            for entry in index.values() {
-                if let Some(email) = &entry.contact_email {
-                    email_index.insert(email.clone(), entry.share_code.clone());
-                }
-            }
             if cache_per_shard > 0 && index.len() > cache_per_shard {
                 index = index.into_iter().take(cache_per_shard).collect();
             }
@@ -330,13 +389,14 @@ impl ShareStore {
                 expiry_buckets: Mutex::new(VecDeque::new()),
             });
         }
+        let topology = Self::build_initial_topology(&config);
         Ok(Self {
             config,
+            auto_routes,
             secret,
             bucket_dir,
             shards,
             verifications: Mutex::new(HashMap::new()),
-            email_index: Mutex::new(email_index),
             email_rate_limits: Mutex::new(EmailRateLimits::default()),
             created: AtomicU64::new(0),
             fetched: AtomicU64::new(0),
@@ -349,6 +409,7 @@ impl ShareStore {
             replication_tx,
             replication_outbox_path,
             replication_sequence_path,
+            topology: Mutex::new(topology),
         })
     }
 
@@ -382,31 +443,218 @@ impl ShareStore {
         self.config.rate_limit_burst
     }
 
+    pub fn start_topology_background(self: &Arc<Self>) {
+        if self.config.topology_token.is_none() {
+            return;
+        }
+        if self.config.topology_heartbeat_interval_ms == 0 {
+            return;
+        }
+        let store = Arc::clone(self);
+        let interval = Duration::from_millis(self.config.topology_heartbeat_interval_ms.max(1_000));
+        thread::spawn(move || loop {
+            for peer_url in store.topology_peer_urls() {
+                if let Some(register_url) = Self::topology_register_url(&peer_url) {
+                    store.send_topology_registration(&register_url);
+                }
+            }
+            thread::sleep(interval);
+        });
+    }
+
+    fn normalize_routes_for_automembership(&self, topology: &mut ClusterTopology) {
+        if self.auto_routes {
+            topology.routes = build_ring_routes(&topology.servers);
+        }
+    }
+
     pub fn topology(&self) -> ClusterTopology {
-        let servers = if self.config.topology_servers.is_empty() {
+        let mut topology = self.topology.lock().unwrap().clone();
+        let stale_after_ms = self.config.topology_stale_after_ms;
+        if stale_after_ms > 0 {
+            topology = topology.with_filtered_stale_servers(stale_after_ms);
+            if topology.routes.is_empty() {
+                topology.routes = build_ring_routes(&topology.servers);
+            }
+        }
+        topology
+    }
+
+    pub fn register_topology_server(
+        &self,
+        registration: TopologyRegistration,
+    ) -> Result<ClusterTopology, StoreError> {
+        if registration.cluster_id != self.config.cluster_id {
+            return Err(StoreError::Config(
+                "topology cluster id mismatch".to_string(),
+            ));
+        }
+        if registration.server_url.is_empty() || registration.security_token.is_empty() {
+            return Err(StoreError::Config(
+                "topology registration missing required fields".to_string(),
+            ));
+        }
+        if self.config.topology_token.as_ref() != Some(&registration.security_token) {
+            return Err(StoreError::Config(
+                "topology registration token invalid".to_string(),
+            ));
+        }
+        let mut topology = self.topology.lock().unwrap().clone();
+        let now_ms = unix_ms(SystemTime::now());
+        if let Some(server) = topology
+            .servers
+            .iter_mut()
+            .find(|server| server.id == registration.server_id)
+        {
+            if server.url != registration.server_url {
+                server.url = registration.server_url;
+            }
+            server.status = registration.status;
+            server.last_seen_ms = Some(now_ms);
+        } else {
+            topology.servers.push(TopologyServer {
+                id: registration.server_id,
+                url: registration.server_url,
+                status: registration.status,
+                last_seen_ms: Some(now_ms),
+            });
+        }
+        if topology.cluster_id != self.config.cluster_id {
+            topology.cluster_id = self.config.cluster_id.clone();
+        }
+        topology.version = topology.version.saturating_add(1);
+        topology.validate().map_err(store_error_from_client_error)?;
+        topology = topology.with_filtered_stale_servers(self.config.topology_stale_after_ms);
+        self.normalize_routes_for_automembership(&mut topology);
+        *self.topology.lock().unwrap() = topology.clone();
+        Ok(topology)
+    }
+
+    pub fn handle_topology_registration(&self, payload: &[u8]) -> Result<Vec<u8>, StoreError> {
+        let registration =
+            decode_topology_registration(payload).map_err(store_error_from_client_error)?;
+        let topology = self.register_topology_server(registration)?;
+        encode_topology(&topology).map_err(store_error_from_client_error)
+    }
+
+    fn topology_peer_urls(&self) -> Vec<String> {
+        self.topology()
+            .servers
+            .iter()
+            .filter(|server| server.id != self.config.server_id)
+            .filter(|server| {
+                matches!(
+                    server.status,
+                    ServerStatus::Active | ServerStatus::Promoted | ServerStatus::Standby
+                )
+            })
+            .map(|server| server.url.clone())
+            .collect()
+    }
+
+    fn send_topology_registration(self: &Arc<Self>, register_url: &str) {
+        let token = match &self.config.topology_token {
+            Some(token) => token.clone(),
+            None => return,
+        };
+        let topology = self.topology();
+        let Some(self_server) = topology
+            .servers
+            .iter()
+            .find(|server| server.id == self.config.server_id)
+        else {
+            return;
+        };
+        if matches!(self_server.status, ServerStatus::Disabled) {
+            return;
+        }
+        let registration = TopologyRegistration {
+            cluster_id: topology.cluster_id.clone(),
+            server_id: self.config.server_id,
+            server_url: self_server.url.clone(),
+            status: self_server.status.clone(),
+            security_token: token,
+        };
+        let payload = match encode_topology_registration(&registration) {
+            Ok(payload) => payload,
+            Err(_) => return,
+        };
+        let Ok(transport) = HttpTransport::new(register_url) else {
+            return;
+        };
+        let Ok(response) = transport.post_binary(&payload) else {
+            return;
+        };
+        if let Ok(updated) = decode_topology(&response) {
+            let _ = self.apply_topology_update(updated);
+        }
+    }
+
+    fn apply_topology_update(&self, mut topology: ClusterTopology) -> Result<(), StoreError> {
+        if topology.with_filtered_stale_servers(0).servers.is_empty() {
+            return Err(StoreError::Config("topology has no servers".to_string()));
+        }
+        if topology.version == 0 {
+            topology.version = 1;
+        }
+        topology = topology.with_filtered_stale_servers(self.config.topology_stale_after_ms);
+        self.normalize_routes_for_automembership(&mut topology);
+        if topology.servers.is_empty() {
+            return Err(StoreError::Config(
+                "topology has no healthy servers".to_string(),
+            ));
+        }
+        topology.version = topology.version.max(1);
+        let version = self.topology.lock().unwrap().version;
+        if topology.version < version {
+            return Ok(());
+        }
+        *self.topology.lock().unwrap() = topology;
+        Ok(())
+    }
+
+    fn build_initial_topology(config: &ServerConfig) -> ClusterTopology {
+        let servers = if config.topology_servers.is_empty() {
             vec![TopologyServer {
-                id: self.config.server_id,
-                url: self.public_share_url(),
+                id: config.server_id,
+                url: config
+                    .public_url
+                    .clone()
+                    .unwrap_or_else(|| format!("http://{}/v1/share", config.bind_addr)),
                 status: ServerStatus::Active,
+                last_seen_ms: None,
             }]
         } else {
-            self.config.topology_servers.clone()
+            config.topology_servers.clone()
         };
-        let routes = if self.config.topology_routes.is_empty() {
-            vec![TopologyRoute {
-                owner_id: self.config.server_id,
-                primary_id: self.config.server_id,
-                failover_ids: Vec::new(),
-            }]
+        let mut routes = if config.topology_routes.is_empty() {
+            build_ring_routes(&servers)
         } else {
-            self.config.topology_routes.clone()
+            config.topology_routes.clone()
         };
+        if routes.is_empty() {
+            routes = vec![TopologyRoute {
+                owner_id: config.server_id,
+                primary_id: config.server_id,
+                failover_ids: vec![config.server_id],
+            }];
+        }
         ClusterTopology {
-            cluster_id: self.config.cluster_id.clone(),
-            version: self.config.topology_version,
+            cluster_id: config.cluster_id.clone(),
+            version: config.topology_version,
             servers,
             routes,
         }
+    }
+
+    fn topology_register_url(server_url: &str) -> Option<String> {
+        let trimmed = server_url.trim().trim_end_matches('/');
+        let base = trimmed
+            .split("/v1/")
+            .next()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(trimmed);
+        Some(format!("{base}/v1/topology/register"))
     }
 
     fn public_share_url(&self) -> String {
@@ -433,9 +681,9 @@ impl ShareStore {
                 if let Some(verification_url) = &created.verification_url {
                     protocol::put_string(&mut body, verification_url);
                 }
-                protocol::encode_response(Operation::Share, Status::Success, &body)
+                self.encode_response_with_topology(Operation::Share, Status::Success, &body)
             }
-            Err(err) => encode_store_error(Operation::Share, err),
+            Err(err) => self.encode_store_error_with_topology(Operation::Share, err),
         }
     }
 
@@ -444,7 +692,7 @@ impl ShareStore {
             let mut reader = Reader::new(payload);
             reader.message_version()?;
             let share_code = reader.string()?;
-            self.fetch(&share_code)
+            self.fetch_by_lookup(&share_code)
         })();
         match result {
             Ok(fetched) => {
@@ -459,9 +707,9 @@ impl ShareStore {
                     protocol::put_u64(&mut body, verification.verified_at_unix_ms);
                     protocol::put_bytes(&mut body, &verification.attestation);
                 }
-                protocol::encode_response(Operation::Fetch, Status::Success, &body)
+                self.encode_response_with_topology(Operation::Fetch, Status::Success, &body)
             }
-            Err(err) => encode_store_error(Operation::Fetch, err),
+            Err(err) => self.encode_store_error_with_topology(Operation::Fetch, err),
         }
     }
 
@@ -478,21 +726,20 @@ impl ShareStore {
                 let mut body = Vec::new();
                 protocol::put_u16(&mut body, protocol::MESSAGE_VERSION);
                 body.push(u8::from(deleted));
-                protocol::encode_response(Operation::Delete, Status::Success, &body)
+                self.encode_response_with_topology(Operation::Delete, Status::Success, &body)
             }
-            Err(err) => encode_store_error(Operation::Delete, err),
+            Err(err) => self.encode_store_error_with_topology(Operation::Delete, err),
         }
     }
 
     fn handle_replication(&self, payload: &[u8]) -> Vec<u8> {
         match self.apply_replication_payload(payload) {
-            Ok(_) => protocol::encode_response(Operation::Replicate, Status::Success, &[]),
-            Err(StoreError::ReplicationUnauthorized) => protocol::encode_error(
+            Ok(_) => self.encode_response_with_topology(Operation::Replicate, Status::Success, &[]),
+            Err(StoreError::ReplicationUnauthorized) => self.encode_store_error_with_topology(
                 Operation::Replicate,
-                Status::ReplicationUnauthorized,
-                "replication unauthorized",
+                StoreError::ReplicationUnauthorized,
             ),
-            Err(err) => encode_store_error(Operation::Replicate, err),
+            Err(err) => self.encode_store_error_with_topology(Operation::Replicate, err),
         }
     }
 
@@ -564,7 +811,6 @@ impl ShareStore {
         entry.payload_len = payload_len;
         self.append_bucket_put(&code_hash, &entry)?;
         let contact_email = entry.contact_email.clone();
-        self.index_contact_email(contact_email.as_deref(), &share_code);
         if index.len() < self.config.index_cache_entries / self.shards.len().max(1) {
             index.insert(code_hash, entry);
         }
@@ -649,46 +895,13 @@ impl ShareStore {
         if lookup.is_empty() {
             return Err(StoreError::NotFound);
         }
-        if share_code_locator(lookup).is_none() {
-            return Err(StoreError::NotFound);
-        }
-        Ok(lookup.to_string())
-    }
-
-    fn index_contact_email(&self, email: Option<&str>, share_code: &str) {
-        if let Some(email) = email {
-            self.email_index
-                .lock()
-                .unwrap()
-                .insert(email.to_string(), share_code.to_string());
-        }
-    }
-
-    fn remove_contact_email(&self, email: Option<&str>, share_code: &str) {
-        let mut index = self.email_index.lock().unwrap();
-        if let Some(email) = email {
-            if index
-                .get(email)
-                .is_some_and(|current| current == share_code)
-            {
-                index.remove(email);
+        if share_code_locator(lookup).is_some() {
+            if !self.can_serve_share_code(lookup) {
+                return Err(StoreError::NotFound);
             }
-        } else {
-            index.retain(|_, current| current != share_code);
+            return Ok(lookup.to_string());
         }
-    }
-
-    fn is_email_verified_for_share(
-        &self,
-        share_code: &str,
-        email: &str,
-    ) -> Result<bool, StoreError> {
-        let email = normalize_verification_email(email)?;
-        let verifications = self.verifications.lock().unwrap();
-        let Some(entry) = verifications.get(share_code) else {
-            return Ok(false);
-        };
-        Ok(entry.email == email && entry.verified_at_ms.is_some())
+        Err(StoreError::NotFound)
     }
 
     fn create_verification(
@@ -836,7 +1049,6 @@ impl ShareStore {
             index.remove(&code_hash);
             append_tombstone(&mut shard.file.lock().unwrap(), &code_hash)?;
             self.append_bucket_tombstone(&code_hash)?;
-            self.remove_contact_email(entry.contact_email.as_deref(), share_code);
             self.enqueue_replication(ReplicationEventKind::Tombstone {
                 share_code: share_code.to_string(),
             });
@@ -848,7 +1060,6 @@ impl ShareStore {
             index.remove(&code_hash);
             append_tombstone(&mut shard.file.lock().unwrap(), &code_hash)?;
             self.append_bucket_tombstone(&code_hash)?;
-            self.remove_contact_email(entry.contact_email.as_deref(), share_code);
             self.enqueue_replication(ReplicationEventKind::Tombstone {
                 share_code: share_code.to_string(),
             });
@@ -863,7 +1074,6 @@ impl ShareStore {
         let fetches = entry.fetches;
         if remaining == 0 {
             index.remove(&code_hash);
-            self.remove_contact_email(entry.contact_email.as_deref(), share_code);
             self.live.fetch_sub(1, Ordering::Relaxed);
         } else if cached {
             index.insert(code_hash, entry.clone());
@@ -899,7 +1109,8 @@ impl ShareStore {
     }
 
     pub fn fetch_by_lookup(&self, lookup: &str) -> Result<FetchedShare, StoreError> {
-        self.fetch(lookup)
+        let share_code = self.resolve_share_lookup(lookup)?;
+        self.fetch(&share_code)
     }
 
     pub fn verify_email(&self, share_code: &str, token: &str) -> VerificationPage {
@@ -944,7 +1155,6 @@ impl ShareStore {
         index.remove(&code_hash);
         append_tombstone(&mut shard.file.lock().unwrap(), &code_hash)?;
         self.append_bucket_tombstone(&code_hash)?;
-        self.remove_contact_email(entry.contact_email.as_deref(), share_code);
         self.verifications.lock().unwrap().remove(share_code);
         self.deleted.fetch_add(1, Ordering::Relaxed);
         self.live.fetch_sub(1, Ordering::Relaxed);
@@ -1104,7 +1314,6 @@ impl ShareStore {
         entry.payload_offset = payload_offset;
         entry.payload_len = payload_len;
         self.append_bucket_put(&code_hash, &entry)?;
-        self.index_contact_email(entry.contact_email.as_deref(), share_code);
         if index.len() < self.config.index_cache_entries / self.shards.len().max(1) {
             index.insert(code_hash, entry);
         }
@@ -1139,7 +1348,6 @@ impl ShareStore {
             || self.lookup_bucket(&code_hash)?.is_some();
         append_tombstone(&mut shard.file.lock().unwrap(), &code_hash)?;
         self.append_bucket_tombstone(&code_hash)?;
-        self.remove_contact_email(None, share_code);
         if removed {
             self.live.fetch_sub(1, Ordering::Relaxed);
         }
@@ -1183,10 +1391,9 @@ impl ShareStore {
             let mut index = shard.index.lock().unwrap();
             let mut file = shard.file.lock().unwrap();
             for (hash, share_code) in due {
-                if let Some(entry) = index.remove(&hash) {
+                if index.remove(&hash).is_some() {
                     let _ = append_tombstone(&mut file, &hash);
                     let _ = self.append_bucket_tombstone(&hash);
-                    self.remove_contact_email(entry.contact_email.as_deref(), &share_code);
                     self.enqueue_replication(ReplicationEventKind::Tombstone { share_code });
                     purged += 1;
                 }
@@ -1334,18 +1541,24 @@ impl ShareStore {
     }
 
     fn share_code_locator(&self) -> (u8, u8) {
-        let primary_id = self.config.server_id;
-        let secondary_id = self
-            .config
-            .topology_routes
+        let topology = self.topology();
+        let primary_id = topology
+            .routes
             .iter()
-            .find(|route| route.owner_id == primary_id)
+            .find(|route| route.owner_id == self.config.server_id)
+            .map(|route| route.primary_id)
+            .unwrap_or(self.config.server_id);
+        let secondary_id = topology
+            .routes
+            .iter()
+            .find(|route| route.owner_id == self.config.server_id)
             .and_then(|route| route.failover_ids.first().copied())
             .or_else(|| {
-                self.config
-                    .topology_servers
+                topology
+                    .servers
                     .iter()
-                    .find(|server| server.id != primary_id)
+                    .filter(|server| server.status != ServerStatus::Disabled)
+                    .find(|server| server.id != self.config.server_id)
                     .map(|server| server.id)
             })
             .unwrap_or(primary_id);
@@ -1355,31 +1568,46 @@ impl ShareStore {
     fn generate_unique_code(&self) -> Result<String, StoreError> {
         let space = 10_u64.pow(SHARE_CODE_BODY_DIGITS as u32);
         let (primary_id, secondary_id) = self.share_code_locator();
-        let primary = share_code_server_id_char(primary_id)
-            .ok_or_else(|| StoreError::Config("invalid primary server id".to_string()))?;
-        let secondary = share_code_server_id_char(secondary_id)
-            .ok_or_else(|| StoreError::Config("invalid secondary server id".to_string()))?;
         for _ in 0..100 {
             let mut random = [0_u8; 8];
             getrandom(&mut random)
                 .map_err(|err| StoreError::Io(std::io::Error::other(err.to_string())))?;
             let value = u64::from_be_bytes(random) % space;
-            let code = format!(
-                "{}{}{:0width$}",
-                primary as char,
-                secondary as char,
-                value,
-                width = SHARE_CODE_BODY_DIGITS
-            );
-            let hash = self.code_hash(&code);
-            let shard = &self.shards[self.shard_for(&hash)];
-            if !shard.index.lock().unwrap().contains_key(&hash) {
+            if let Some(code) = self.unique_code_from_value(primary_id, secondary_id, value)? {
                 return Ok(code);
             }
         }
         Err(StoreError::Io(std::io::Error::other(
             "unable to allocate unique share code",
         )))
+    }
+
+    fn unique_code_from_value(
+        &self,
+        primary_id: u8,
+        secondary_id: u8,
+        value: u64,
+    ) -> Result<Option<String>, StoreError> {
+        let primary = share_code_server_id_char(primary_id)
+            .ok_or_else(|| StoreError::Config("invalid primary server id".to_string()))?;
+        let secondary = share_code_server_id_char(secondary_id)
+            .ok_or_else(|| StoreError::Config("invalid secondary server id".to_string()))?;
+        let code = format!(
+            "{}{}{:0width$}",
+            primary as char,
+            secondary as char,
+            value % 10_u64.pow(SHARE_CODE_BODY_DIGITS as u32),
+            width = SHARE_CODE_BODY_DIGITS
+        );
+        let hash = self.code_hash(&code);
+        let shard = &self.shards[self.shard_for(&hash)];
+        if shard.index.lock().unwrap().contains_key(&hash) {
+            return Ok(None);
+        }
+        if self.lookup_bucket(&hash)?.is_some() {
+            return Ok(None);
+        }
+        Ok(Some(code))
     }
 
     fn code_hash(&self, code: &str) -> RecordHash {
@@ -1535,24 +1763,6 @@ impl CompactionReport {
     }
 }
 
-fn encode_store_error(operation: Operation, err: StoreError) -> Vec<u8> {
-    let status = match err {
-        StoreError::PayloadTooLarge => Status::PayloadTooLarge,
-        StoreError::NotFound => Status::ShareNotFound,
-        StoreError::Expired => Status::ShareExpired,
-        StoreError::Exhausted => Status::ShareExhausted,
-        StoreError::DeleteTokenInvalid => Status::DeleteTokenInvalid,
-        StoreError::PayloadInvalid(_) => Status::MalformedRequest,
-        StoreError::Protocol(_) => Status::MalformedRequest,
-        StoreError::Config(_) => Status::StoreUnavailable,
-        StoreError::ReplicationUnauthorized => Status::ReplicationUnauthorized,
-        StoreError::RateLimited => Status::RateLimited,
-        StoreError::EmailUnverified => Status::ShareNotFound,
-        StoreError::Io(_) => Status::StoreUnavailable,
-    };
-    protocol::encode_error(operation, status, &err.to_string())
-}
-
 fn prune_rate_bucket(bucket: &mut VecDeque<u64>, cutoff_ms: u64) {
     while matches!(bucket.front(), Some(value) if *value < cutoff_ms) {
         bucket.pop_front();
@@ -1562,21 +1772,59 @@ fn prune_rate_bucket(bucket: &mut VecDeque<u64>, cutoff_ms: u64) {
 fn load_or_create_secret(state_dir: &std::path::Path) -> Result<[u8; 32], StoreError> {
     let path = state_dir.join("server.secret");
     if path.exists() {
-        let mut bytes = fs::read(path)?;
-        if bytes.len() < 32 {
-            return Err(StoreError::Io(std::io::Error::other(
-                "server secret is too short",
-            )));
-        }
-        bytes.truncate(32);
-        let mut secret = [0_u8; 32];
-        secret.copy_from_slice(&bytes);
-        return Ok(secret);
+        restrict_secret_file_permissions(&path)?;
+        return load_existing_secret(&path);
     }
     let mut secret = [0_u8; 32];
     getrandom(&mut secret).map_err(|err| StoreError::Io(std::io::Error::other(err.to_string())))?;
-    fs::write(path, secret)?;
+    match write_secret_file(&path, &secret) {
+        Ok(()) => Ok(secret),
+        Err(StoreError::Io(err)) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            restrict_secret_file_permissions(&path)?;
+            load_existing_secret(&path)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn load_existing_secret(path: &std::path::Path) -> Result<[u8; 32], StoreError> {
+    let mut bytes = fs::read(path)?;
+    if bytes.len() < 32 {
+        return Err(StoreError::Io(std::io::Error::other(
+            "server secret is too short",
+        )));
+    }
+    bytes.truncate(32);
+    let mut secret = [0_u8; 32];
+    secret.copy_from_slice(&bytes);
     Ok(secret)
+}
+
+fn write_secret_file(path: &std::path::Path, secret: &[u8; 32]) -> Result<(), StoreError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(secret)?;
+    file.sync_data()?;
+    Ok(())
+}
+
+fn restrict_secret_file_permissions(path: &std::path::Path) -> Result<(), StoreError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
 }
 
 fn load_replication_state(path: &Path) -> Result<ReplicationState, StoreError> {
@@ -2296,6 +2544,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn auto_routes_are_rebuilt_when_topology_members_join() {
+        let temp = std::env::temp_dir().join(format!(
+            "lockbox-share-topology-auto-routes-{}",
+            unix_ms(SystemTime::now())
+        ));
+        fs::create_dir_all(&temp).unwrap();
+        let config = ServerConfig {
+            state_dir: temp.clone(),
+            topology_token: Some("token".to_string()),
+            topology_servers: vec![TopologyServer {
+                id: 0,
+                url: "http://share-0.example/v1/share".to_string(),
+                status: ServerStatus::Active,
+                last_seen_ms: None,
+            }],
+            ..ServerConfig::default()
+        };
+        let store = ShareStore::open(config.clone()).unwrap();
+
+        let topology = store
+            .register_topology_server(TopologyRegistration {
+                cluster_id: config.cluster_id.clone(),
+                server_id: 2,
+                server_url: "http://share-2.example/v1/share".to_string(),
+                status: ServerStatus::Active,
+                security_token: "token".to_string(),
+            })
+            .unwrap();
+
+        let route_map: std::collections::HashSet<_> = topology
+            .routes
+            .iter()
+            .map(|route| (route.owner_id, route.primary_id, route.failover_ids.clone()))
+            .collect();
+        assert_eq!(route_map.len(), 2);
+        assert!(route_map.contains(&(0, 0, vec![2])));
+        assert!(route_map.contains(&(2, 2, vec![0])));
+
+        assert_eq!(topology.servers.len(), 2);
+        assert_eq!(store.topology().routes.len(), 2);
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
     fn outbox_reloads_only_unacked_events() {
         let path = std::env::temp_dir().join(format!(
             "lockbox-share-outbox-test-{}",
@@ -2396,6 +2689,80 @@ mod tests {
 
         let _ = fs::remove_dir_all(state_a);
         let _ = fs::remove_dir_all(state_b);
+    }
+
+    #[test]
+    fn share_code_generation_rejects_persisted_bucket_collision() {
+        let state_dir = temp_state_dir("persisted-collision");
+        let store = ShareStore::open(ServerConfig {
+            state_dir: state_dir.clone(),
+            index_cache_entries: 0,
+            ..ServerConfig::default()
+        })
+        .unwrap();
+        let code = store.unique_code_from_value(0, 0, 123).unwrap().unwrap();
+        let code_hash = store.code_hash(&code);
+        let entry = ShareEntry {
+            share_code: code,
+            delete_token_hash: [7_u8; HASH_LEN],
+            contact_email: None,
+            payload_offset: 0,
+            payload_len: 0,
+            expires_at_ms: unix_ms(SystemTime::now()) + 60_000,
+            max_fetches: 1,
+            fetches: 0,
+        };
+
+        store.append_bucket_put(&code_hash, &entry).unwrap();
+
+        assert!(store.unique_code_from_value(0, 0, 123).unwrap().is_none());
+        let _ = fs::remove_dir_all(state_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn server_secret_file_is_private_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let state_dir = temp_state_dir("server-secret-private");
+        fs::create_dir_all(&state_dir).unwrap();
+
+        let _ = load_or_create_secret(&state_dir).unwrap();
+
+        let mode = fs::metadata(state_dir.join("server.secret"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = fs::remove_dir_all(state_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_server_secret_file_is_restricted_on_load() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let state_dir = temp_state_dir("server-secret-existing-private");
+        fs::create_dir_all(&state_dir).unwrap();
+        let path = state_dir.join("server.secret");
+        fs::write(&path, [3_u8; 32]).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let secret = load_or_create_secret(&state_dir).unwrap();
+
+        assert_eq!(secret, [3_u8; 32]);
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = fs::remove_dir_all(state_dir);
+    }
+
+    fn temp_state_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "lockbox-share-{label}-{}-{}",
+            std::process::id(),
+            unix_ms(SystemTime::now())
+        ))
     }
 
     fn replication_put_event(sequence: u64, share_code: &str, label: &str) -> ReplicationEvent {

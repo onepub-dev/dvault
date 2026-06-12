@@ -302,9 +302,6 @@ fn vault_unlock_uses_key_directory_backup_when_embedded_directory_is_corrupt() {
     let _ = fs::remove_file(&path);
     let _ = fs::remove_dir_all(&vault_root);
 
-    std::env::set_var("LOCKBOX_VAULT_DIR", &vault_root);
-    std::env::set_var("LOCKBOX_VAULT_PASSWORD", "vault-password");
-
     let password = SecretString::try_from_bytes(b"shared password".to_vec()).unwrap();
     let mut lockbox = Lockbox::create_file(&path, LockboxProtection::Password(&password))
         .expect("create password lockbox");
@@ -323,14 +320,14 @@ fn vault_unlock_uses_key_directory_backup_when_embedded_directory_is_corrupt() {
 
     corrupt_key_directories(&path);
 
+    let _vault_dir_guard = EnvVarGuard::set("LOCKBOX_VAULT_DIR", &vault_root);
+    let _vault_password_guard = EnvVarGuard::set("LOCKBOX_VAULT_PASSWORD", "vault-password");
     let vault = Vault::new(MemoryStore::default());
     let opened = vault
         .unlock_lockbox(&path, LockboxUnlock::Password(&password))
         .unwrap();
     assert_eq!(opened.get_file(&p("/secret.txt")).unwrap(), b"bravo");
 
-    std::env::remove_var("LOCKBOX_VAULT_DIR");
-    std::env::remove_var("LOCKBOX_VAULT_PASSWORD");
     let _ = fs::remove_file(path);
     let _ = fs::remove_dir_all(vault_root);
 }
@@ -604,6 +601,28 @@ fn monotonic_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
+}
+
+struct EnvVarGuard {
+    name: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let previous = std::env::var_os(name);
+        std::env::set_var(name, value);
+        Self { name, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var(self.name, value),
+            None => std::env::remove_var(self.name),
+        }
+    }
 }
 
 fn corrupt_key_directories(path: &PathBuf) {

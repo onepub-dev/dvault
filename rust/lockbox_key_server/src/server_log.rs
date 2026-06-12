@@ -158,7 +158,7 @@ fn platform_log_dir() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|_| env::var("APPDATA").map(PathBuf::from))
         .unwrap_or_else(|_| env::temp_dir())
-    .join("reVault")
+        .join("reVault")
         .join("Logs")
         .join("KeyServer")
 }

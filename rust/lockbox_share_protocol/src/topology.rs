@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -6,9 +7,11 @@ use crate::client::ClientError;
 use crate::protocol::{self, ProtocolError, Reader};
 
 const TOPOLOGY_MAGIC: &[u8; 4] = b"LBST";
-const TOPOLOGY_VERSION: u16 = 1;
+const TOPOLOGY_VERSION: u16 = 2;
 const TOPOLOGY_CACHE_MAGIC: &[u8; 4] = b"LBTC";
 const TOPOLOGY_CACHE_VERSION: u16 = 1;
+const TOPOLOGY_REGISTRATION_MAGIC: &[u8; 4] = b"LBTR";
+const TOPOLOGY_REGISTRATION_VERSION: u16 = 1;
 const STATUS_ACTIVE: u8 = 1;
 const STATUS_STANDBY: u8 = 2;
 const STATUS_PROMOTED: u8 = 3;
@@ -29,6 +32,16 @@ pub struct TopologyServer {
     pub id: u8,
     pub url: String,
     pub status: ServerStatus,
+    pub last_seen_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopologyRegistration {
+    pub cluster_id: String,
+    pub server_id: u8,
+    pub server_url: String,
+    pub status: ServerStatus,
+    pub security_token: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,12 +68,60 @@ impl ClusterTopology {
                 id: server_id,
                 url: url.into(),
                 status: ServerStatus::Active,
+                last_seen_ms: None,
             }],
             routes: vec![TopologyRoute {
                 owner_id: server_id,
                 primary_id: server_id,
                 failover_ids: Vec::new(),
             }],
+        }
+    }
+
+    pub fn with_filtered_stale_servers(&self, stale_after_ms: u64) -> ClusterTopology {
+        if stale_after_ms == 0 {
+            return self.clone();
+        }
+        let now_ms = unix_ms(SystemTime::now());
+        let active_server_ids = self
+            .servers
+            .iter()
+            .filter(|server| !is_topology_server_stale(server, now_ms, stale_after_ms))
+            .filter(|server| {
+                matches!(
+                    server.status,
+                    ServerStatus::Active | ServerStatus::Promoted | ServerStatus::Standby
+                )
+            })
+            .map(|server| server.id)
+            .collect::<HashSet<_>>();
+        let servers = self
+            .servers
+            .iter()
+            .filter(|server| active_server_ids.contains(&server.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut routes = self
+            .routes
+            .iter()
+            .filter(|route| active_server_ids.contains(&route.owner_id))
+            .filter(|route| active_server_ids.contains(&route.primary_id))
+            .filter(|route| {
+                route
+                    .failover_ids
+                    .iter()
+                    .all(|id| active_server_ids.contains(id))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if routes.is_empty() {
+            routes = build_ring_routes(&servers);
+        }
+        ClusterTopology {
+            cluster_id: self.cluster_id.clone(),
+            version: self.version,
+            servers,
+            routes,
         }
     }
 
@@ -152,6 +213,70 @@ impl ClusterTopology {
             .map(|server| server.url.clone())
             .collect()
     }
+
+    pub fn active_urls_with_ttl(&self, stale_after_ms: u64) -> Vec<String> {
+        self.with_filtered_stale_servers(stale_after_ms)
+            .servers
+            .into_iter()
+            .filter(|server| {
+                matches!(
+                    server.status,
+                    ServerStatus::Active | ServerStatus::Promoted | ServerStatus::Standby
+                )
+            })
+            .map(|server| server.url)
+            .collect()
+    }
+
+    pub fn routes_for_owner(&self, owner_id: u8) -> Option<&TopologyRoute> {
+        self.route(owner_id)
+    }
+}
+
+pub fn build_ring_routes(servers: &[TopologyServer]) -> Vec<TopologyRoute> {
+    let mut active_ids = servers
+        .iter()
+        .filter(|server| {
+            matches!(
+                server.status,
+                ServerStatus::Active | ServerStatus::Promoted | ServerStatus::Standby
+            )
+        })
+        .map(|server| server.id)
+        .collect::<Vec<_>>();
+    active_ids.sort_unstable();
+    active_ids.dedup();
+    if active_ids.is_empty() {
+        return Vec::new();
+    }
+    let mut routes = Vec::with_capacity(active_ids.len());
+    for (index, owner_id) in active_ids.iter().enumerate() {
+        let failover_ids = if active_ids.len() > 1 {
+            vec![active_ids[(index + 1) % active_ids.len()]]
+        } else {
+            vec![*owner_id]
+        };
+        routes.push(TopologyRoute {
+            owner_id: *owner_id,
+            primary_id: *owner_id,
+            failover_ids,
+        });
+    }
+    routes
+}
+
+pub fn is_topology_server_stale(server: &TopologyServer, now_ms: u64, stale_after_ms: u64) -> bool {
+    if stale_after_ms == 0 {
+        return false;
+    }
+    match server.last_seen_ms {
+        Some(last_seen_ms) => now_ms.saturating_sub(last_seen_ms) > stale_after_ms,
+        None => false,
+    }
+}
+
+pub fn parse_share_locator(value: &str) -> Option<(u8, u8)> {
+    share_code_locator(value)
 }
 
 pub fn encode_topology(topology: &ClusterTopology) -> Result<Vec<u8>, ClientError> {
@@ -170,6 +295,10 @@ pub fn encode_topology(topology: &ClusterTopology) -> Result<Vec<u8>, ClientErro
     for server in &topology.servers {
         out.push(server.id);
         out.push(server_status_to_u8(&server.status));
+        out.push(if server.last_seen_ms.is_some() { 1 } else { 0 });
+        if let Some(last_seen_ms) = server.last_seen_ms {
+            protocol::put_u64(&mut out, last_seen_ms);
+        }
         protocol::put_string(&mut out, &server.url);
     }
     protocol::put_u16(&mut out, topology.routes.len() as u16);
@@ -210,8 +339,19 @@ pub fn decode_topology(bytes: &[u8]) -> Result<ClusterTopology, ClientError> {
     for _ in 0..server_count {
         let id = reader.u8().map_err(topology_protocol_error)?;
         let status = server_status_from_u8(reader.u8().map_err(topology_protocol_error)?)?;
+        let has_last_seen = reader.u8().map_err(topology_protocol_error)? != 0;
+        let last_seen_ms = if has_last_seen {
+            Some(reader.u64().map_err(topology_protocol_error)?)
+        } else {
+            None
+        };
         let url = reader.string().map_err(topology_protocol_error)?;
-        servers.push(TopologyServer { id, url, status });
+        servers.push(TopologyServer {
+            id,
+            url,
+            status,
+            last_seen_ms,
+        });
     }
     let route_count = reader.u16().map_err(topology_protocol_error)? as usize;
     let mut routes = Vec::with_capacity(route_count);
@@ -281,6 +421,50 @@ pub fn write_topology_cache(
     fs::write(path, out).map_err(ClientError::Io)
 }
 
+pub fn encode_topology_registration(
+    registration: &TopologyRegistration,
+) -> Result<Vec<u8>, ClientError> {
+    let mut out = Vec::new();
+    out.extend_from_slice(TOPOLOGY_REGISTRATION_MAGIC);
+    protocol::put_u16(&mut out, TOPOLOGY_REGISTRATION_VERSION);
+    protocol::put_string(&mut out, &registration.cluster_id);
+    protocol::put_u64(&mut out, registration.server_id as u64);
+    protocol::put_string(&mut out, &registration.server_url);
+    out.push(server_status_to_u8(&registration.status));
+    protocol::put_string(&mut out, &registration.security_token);
+    Ok(out)
+}
+
+pub fn decode_topology_registration(bytes: &[u8]) -> Result<TopologyRegistration, ClientError> {
+    let mut reader = Reader::new(bytes);
+    let magic = reader
+        .fixed_bytes(TOPOLOGY_REGISTRATION_MAGIC.len())
+        .map_err(topology_protocol_error)?;
+    if magic != TOPOLOGY_REGISTRATION_MAGIC {
+        return Err(ClientError::Topology(
+            "topology registration document has invalid magic".to_string(),
+        ));
+    }
+    let version = reader.u16().map_err(topology_protocol_error)?;
+    if version != TOPOLOGY_REGISTRATION_VERSION {
+        return Err(ClientError::Topology(format!(
+            "topology registration version {version} is not supported"
+        )));
+    }
+    let cluster_id = reader.string().map_err(topology_protocol_error)?;
+    let server_id = reader.u64().map_err(topology_protocol_error)? as u8;
+    let server_url = reader.string().map_err(topology_protocol_error)?;
+    let status = server_status_from_u8(reader.u8().map_err(topology_protocol_error)?)?;
+    let security_token = reader.string().map_err(topology_protocol_error)?;
+    Ok(TopologyRegistration {
+        cluster_id,
+        server_id,
+        server_url,
+        status,
+        security_token,
+    })
+}
+
 pub fn read_topology_cache(
     path: impl AsRef<Path>,
     max_age: Duration,
@@ -347,6 +531,110 @@ fn server_status_from_u8(value: u8) -> Result<ServerStatus, ClientError> {
 
 fn topology_protocol_error(err: ProtocolError) -> ClientError {
     ClientError::Topology(err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_filtered_stale_servers_removes_stale_servers_and_routes() {
+        let now_ms = unix_ms(SystemTime::now());
+        let topology = ClusterTopology {
+            cluster_id: "acme".to_string(),
+            version: 1,
+            servers: vec![
+                TopologyServer {
+                    id: 0,
+                    url: "http://share0/v1/share".to_string(),
+                    status: ServerStatus::Active,
+                    last_seen_ms: Some(now_ms),
+                },
+                TopologyServer {
+                    id: 1,
+                    url: "http://share1/v1/share".to_string(),
+                    status: ServerStatus::Active,
+                    last_seen_ms: Some(now_ms - 200),
+                },
+                TopologyServer {
+                    id: 2,
+                    url: "http://share2/v1/share".to_string(),
+                    status: ServerStatus::Disabled,
+                    last_seen_ms: Some(now_ms),
+                },
+            ],
+            routes: vec![
+                TopologyRoute {
+                    owner_id: 0,
+                    primary_id: 0,
+                    failover_ids: vec![1],
+                },
+                TopologyRoute {
+                    owner_id: 1,
+                    primary_id: 1,
+                    failover_ids: vec![0],
+                },
+                TopologyRoute {
+                    owner_id: 2,
+                    primary_id: 2,
+                    failover_ids: vec![0],
+                },
+            ],
+        };
+
+        let filtered = topology.with_filtered_stale_servers(100);
+
+        assert_eq!(filtered.servers.len(), 1);
+        assert_eq!(filtered.servers[0].id, 0);
+        assert_eq!(
+            filtered.routes,
+            vec![TopologyRoute {
+                owner_id: 0,
+                primary_id: 0,
+                failover_ids: vec![0],
+            }],
+        );
+    }
+
+    #[test]
+    fn build_ring_routes_ignores_inactive_servers() {
+        let routes = build_ring_routes(&[
+            TopologyServer {
+                id: 0,
+                url: "http://share0/v1/share".to_string(),
+                status: ServerStatus::Active,
+                last_seen_ms: Some(10),
+            },
+            TopologyServer {
+                id: 1,
+                url: "http://share1/v1/share".to_string(),
+                status: ServerStatus::Disabled,
+                last_seen_ms: Some(20),
+            },
+            TopologyServer {
+                id: 2,
+                url: "http://share2/v1/share".to_string(),
+                status: ServerStatus::Standby,
+                last_seen_ms: Some(30),
+            },
+        ]);
+
+        assert_eq!(
+            routes,
+            vec![
+                TopologyRoute {
+                    owner_id: 0,
+                    primary_id: 0,
+                    failover_ids: vec![2],
+                },
+                TopologyRoute {
+                    owner_id: 2,
+                    primary_id: 2,
+                    failover_ids: vec![0],
+                },
+            ]
+        );
+    }
 }
 
 fn unix_ms(time: SystemTime) -> u64 {

@@ -9,11 +9,11 @@ use lockbox_share_protocol::{
     CONTACT_FINGERPRINT_LEN,
 };
 use lockbox_vault::{
-    default_vault_dir, default_vault_path, disable_platform_secret_store,
+    backup_default_vault, default_vault_dir, default_vault_path, disable_platform_secret_store,
     enable_platform_secret_store, encode_hex, export_private_key, export_public_key,
     forget_platform_vault_password, import_private_key_file, import_public_key,
-    list as list_open_lockboxes, local_vault, platform_secret_store_status, stop as stop_agent,
-    IdentityGenerationStatus, KeyFormat, VaultDirectory,
+    list as list_open_lockboxes, local_vault, platform_secret_store_status, restore_default_vault,
+    stop as stop_agent, IdentityGenerationStatus, KeyFormat, VaultDirectory,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -30,6 +30,8 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault command")?;
     match command {
         "init" => init(&args[1..]),
+        "backup" => backup(&args[1..]),
+        "restore" => restore(&args[1..]),
         "path" => path(),
         "identity" => identity_command(&args[1..]),
         "contact" => contact_command(&args[1..]),
@@ -167,8 +169,7 @@ fn init(args: &[String]) -> CliResult<()> {
             println!("WARNING: replacing it will remove identities, contacts,");
             println!("and key-directory backups stored only in this vault.");
             let password = read_new_vault_password()?;
-            fs::remove_file(&path)?;
-            let vault = VaultDirectory::unlock_or_create_default(&password)?;
+            let vault = VaultDirectory::replace_default(&password)?;
             let generated = ensure_default_private_key(&vault)?;
             remember_default_vault_password(&password)?;
             println!("Vault replaced successfully.");
@@ -181,12 +182,12 @@ fn init(args: &[String]) -> CliResult<()> {
             return Ok(());
         }
         if verify {
-            let password = read_vault_password("Vault password: ")?;
+            let password = read_vault_password("Vault pass phrase: ")?;
             match VaultDirectory::unlock_or_create_default(&password) {
                 Ok(_) => {}
                 Err(Error::InvalidKey) => {
                     return Err(cli_error(
-                        "vault unlock failed: check the vault password. If the password is correct, the local vault file may be damaged",
+                        "vault unlock failed: check the vault pass phrase. If the pass phrase is correct, the local vault file may be damaged",
                     ));
                 }
                 Err(err) => return Err(err.into()),
@@ -199,28 +200,67 @@ fn init(args: &[String]) -> CliResult<()> {
         println!("Use `lockbox vault init --overwrite` only when replacing the vault.");
         return Ok(());
     } else {
-        println!("This will create the local reVault vault.");
-        println!("Path: {}", path.display());
+        println!("Create the local reVault vault.");
         println!();
-        println!("The vault stores identities, contacts, and");
-        println!("key-directory backups for lockboxes you create or share.");
+        println!("Stores:");
+        println!("  - identities and contacts");
+        println!("  - key-directory backups for shared lockboxes");
         println!();
-        println!("Choose a vault password you can back up safely. If you lose it,");
-        println!("reVault cannot recover the private keys stored in this vault.");
     }
     let password = read_new_vault_password()?;
     let vault = VaultDirectory::unlock_or_create_default(&password)?;
     let generated = ensure_default_private_key(&vault)?;
     remember_default_vault_password(&password)?;
     println!("Vault created successfully.");
+    println!();
+    println!("Directory:");
+    println!("  {}", vault.root().display());
     if generated {
-        println!(
-            "Created default identity: {}",
-            VaultDirectory::DEFAULT_KEY_NAME
-        );
+        println!();
+        println!("Identity: {}", VaultDirectory::DEFAULT_KEY_NAME);
     }
-    println!("Back up your vault password before storing important keys.");
-    println!("Directory: {}", vault.root().display());
+    println!();
+    println!("Pass phrase reminder:");
+    println!("  Store the vault pass phrase somewhere safe.");
+    println!("  If it is lost, reVault cannot recover this vault.");
+    Ok(())
+}
+
+fn backup(args: &[String]) -> CliResult<()> {
+    let overwrite = args.iter().any(|arg| arg == "--overwrite");
+    let args = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--overwrite")
+        .cloned()
+        .collect::<Vec<_>>();
+    let output = require_arg(&args, 0, "backup output")?;
+    let manifest = backup_default_vault(output, overwrite)?;
+    println!("backup={output}");
+    println!("vault_file={}", manifest.vault_file_name);
+    println!("vault_size={}", manifest.vault_size);
+    println!("vault_sha256={}", manifest.vault_sha256);
+    println!(
+        "created_at_utc={}",
+        format_unix_ms_utc(manifest.created_at_unix_ms)
+    );
+    Ok(())
+}
+
+fn restore(args: &[String]) -> CliResult<()> {
+    let overwrite = args.iter().any(|arg| arg == "--overwrite");
+    let args = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--overwrite")
+        .cloned()
+        .collect::<Vec<_>>();
+    let input = require_arg(&args, 0, "backup input")?;
+    let manifest = restore_default_vault(input, overwrite)?;
+    let _ = forget_platform_vault_password();
+    println!("restored={input}");
+    println!("vault_file={}", manifest.vault_file_name);
+    println!("vault_size={}", manifest.vault_size);
+    println!("vault_sha256={}", manifest.vault_sha256);
+    println!("Vault restored successfully.");
     Ok(())
 }
 
@@ -355,11 +395,6 @@ fn share_receive(args: &[String]) -> CliResult<()> {
         .first()
         .cloned()
         .ok_or_else(|| Error::InvalidInput("missing share code".to_string()))?;
-    let contact_name = options
-        .positionals
-        .get(1)
-        .cloned()
-        .unwrap_or_else(|| "contact".to_string());
     let expected_fingerprint = options
         .fingerprint
         .clone()
@@ -393,6 +428,11 @@ fn share_receive(args: &[String]) -> CliResult<()> {
         ))
         .into());
     }
+    let contact_name = options
+        .positionals
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| contact_name_from_email(&verification.email));
     let recipient = RecipientPublicKey::from_bytes(&contact.public_key)?;
     let signing_public = OwnerSigningPublicKey::from_bytes(&contact.signing_public_key)?;
     let vault = default_vault()?;
@@ -426,9 +466,10 @@ fn share_receive(args: &[String]) -> CliResult<()> {
 
 fn share_delete(args: &[String]) -> CliResult<()> {
     let options = ShareCliOptions::parse(args)?;
-    let share_code = options.positionals.first().ok_or_else(|| {
-        Error::InvalidInput("missing share code".to_string())
-    })?;
+    let share_code = options
+        .positionals
+        .first()
+        .ok_or_else(|| Error::InvalidInput("missing share code".to_string()))?;
     let delete_token = options
         .positionals
         .get(1)
@@ -602,6 +643,26 @@ fn format_unix_ms_utc(unix_ms: u64) -> String {
     format!("{year:04}/{month:02}/{day:02} {hour:02}:{minute:02} UTC")
 }
 
+fn contact_name_from_email(email: &str) -> String {
+    let mut name = String::with_capacity(email.len());
+    let mut last_underscore = false;
+    for ch in email.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            name.push(ch.to_ascii_lowercase());
+            last_underscore = false;
+        } else {
+            if !last_underscore && !name.is_empty() {
+                name.push('_');
+            }
+            last_underscore = true;
+        }
+    }
+    while name.ends_with('_') {
+        name.pop();
+    }
+    name
+}
+
 fn prompt_line(prompt: &str) -> CliResult<String> {
     print!("{prompt}");
     io::stdout().flush()?;
@@ -636,26 +697,6 @@ fn decode_fingerprint_hex(value: &str) -> CliResult<Vec<u8>> {
         .into());
     }
     Ok(fingerprint)
-}
-
-fn contact_name_from_email(email: &str) -> String {
-    let mut out = String::with_capacity(email.len());
-    let mut previous_separator = false;
-    for byte in email.bytes() {
-        if byte.is_ascii_alphanumeric() {
-            out.push(byte as char);
-            previous_separator = false;
-        } else if !previous_separator {
-            out.push('_');
-            previous_separator = true;
-        }
-    }
-    let trimmed = out.trim_matches('_');
-    if trimmed.is_empty() {
-        "contact".to_string()
-    } else {
-        trimmed.to_string()
-    }
 }
 
 fn civil_from_days(days: i64) -> (i64, i64, i64) {

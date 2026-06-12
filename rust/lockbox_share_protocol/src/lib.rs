@@ -22,7 +22,8 @@ pub use replication::{
 };
 pub use status::{decode_status, encode_status, KeyServerStatus};
 pub use topology::{
-    decode_topology, encode_topology, read_topology_cache, share_code_owner_id,
-    share_code_locator, share_code_server_id_char, write_topology_cache,
-    ClusterTopology, ServerStatus, TopologyRoute, TopologyServer,
+    build_ring_routes, decode_topology, decode_topology_registration, encode_topology,
+    encode_topology_registration, parse_share_locator, read_topology_cache, share_code_locator,
+    share_code_owner_id, share_code_server_id_char, write_topology_cache, ClusterTopology,
+    ServerStatus, TopologyRegistration, TopologyRoute, TopologyServer,
 };

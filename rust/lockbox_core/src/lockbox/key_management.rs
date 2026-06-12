@@ -784,7 +784,7 @@ fn key_directories_from_bytes(
     Ok(directories)
 }
 
-fn key_directories_from_storage(
+pub(crate) fn key_directories_from_storage(
     storage: &StorageBackend,
 ) -> Result<Vec<crate::key_directory::DecodedKeyDirectory>> {
     let header = storage.read_at(0, crate::constants::HEADER_LEN)?;

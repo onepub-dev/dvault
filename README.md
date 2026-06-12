@@ -202,6 +202,8 @@ vault.lock_lockbox("secrets.lbox")?;
 - [CLI how-to](docs/cli_how_to.md): command examples.
 - [Key management](docs/key_management.md): vaults, keys, recipients, and
   unlock caching.
+- [Lockbox Session Agent](docs/lockbox_session_agent.md): local unlock cache
+  lifecycle, protocol, and security model.
 - [Security audit](docs/security_audit.md): security analysis and release
   blockers.
 - [File formats](docs/file_formats.md): lockbox/vault format details and page

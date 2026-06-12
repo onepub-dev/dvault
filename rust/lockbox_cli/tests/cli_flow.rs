@@ -284,9 +284,8 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let auto_unlock_help = run_output(bin, &["vault", "sessions", "auto-unlock", "--help"]);
     assert_success(&auto_unlock_help);
     let auto_unlock_help = String::from_utf8_lossy(&auto_unlock_help.stdout);
-    assert!(
-        auto_unlock_help.contains("Store the vault password in the operating system secret store")
-    );
+    assert!(auto_unlock_help
+        .contains("Store the vault pass phrase in the operating system secret store"));
     assert!(auto_unlock_help.contains("status"));
     assert!(auto_unlock_help.contains("enable"));
     assert!(auto_unlock_help.contains("disable"));
@@ -1247,6 +1246,88 @@ fn doctor_and_vault_sessions_report_agent_state() {
 }
 
 #[test]
+fn doctor_lockbox_reports_closed_metadata_and_unlock_guidance() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("doctor-lockbox-closed");
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("closed.lbox");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(bin, &["lock", "--all"], &vault_root, &agent_root);
+
+    let doctor = run_output_without_lockbox_password(
+        bin,
+        &["doctor", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    )
+    .output()
+    .unwrap();
+    assert_success(&doctor);
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(doctor.contains("Lockbox"));
+    assert!(doctor.contains(lockbox.to_str().unwrap()));
+    assert!(doctor.contains("header: ok"));
+    assert!(doctor.contains("Access methods"));
+    assert!(doctor.contains("pass phrase slots: 1"));
+    assert!(doctor.contains("recipient-key slots: 0"));
+    assert!(doctor.contains("Open checks"));
+    assert!(doctor.contains("additional checks"));
+}
+
+#[test]
+fn doctor_lockbox_adds_open_checks_when_unlocked() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("doctor-lockbox-open");
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("open.lbox");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    let unlock = run_output_without_content_key(
+        bin,
+        &["unlock", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    if is_session_agent_unavailable(&unlock) {
+        eprintln!("skipping doctor open checks: lockbox session agent unavailable");
+        return;
+    }
+    assert_success(&unlock);
+
+    let doctor = run_output_without_lockbox_password(
+        bin,
+        &["doctor", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    )
+    .output()
+    .unwrap();
+    assert_success(&doctor);
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(doctor.contains("Open checks"));
+    assert!(doctor.contains("unlocked: yes"));
+    assert!(doctor.contains("pages:"));
+    assert!(doctor.contains("intact files:"));
+}
+
+#[test]
 fn cli_env_rename_and_visualize_flow() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir();
@@ -1862,9 +1943,38 @@ fn password_create_requires_explicit_vault_init() {
     let init = run_output_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
     assert_success(&init);
     let init = String::from_utf8_lossy(&init.stdout);
-    assert!(init.contains("This will create the local reVault vault."));
+    assert!(init.contains("Create the local reVault vault."));
+    assert!(init.contains("Stores:\n  - identities and contacts"));
+    assert!(init.contains("  - key-directory backups for shared lockboxes\n\n"));
+    assert!(!init.contains("Set a vault password."));
+    assert!(!init.contains("The vault stores identities, contacts, and"));
+    assert!(!init.contains("Choose a vault password you can remember or store securely."));
+    assert!(!init.contains("Choose a vault password you can back up safely."));
     assert!(init.contains("Vault created successfully."));
-    assert!(init.contains("Created default identity: default"));
+    assert!(init.contains("Directory:\n  "));
+    assert!(init.contains("Identity: default"));
+    assert!(init.contains(
+        "Pass phrase reminder:\n  Store the vault pass phrase somewhere safe.\n  If it is lost, reVault cannot recover this vault."
+    ));
+    assert!(!init.contains("Path:"));
+    assert!(!init.contains("Default identity:\n  default"));
+    assert!(!init.contains("Created default identity: default"));
+    assert!(!init.contains("Password reminder:"));
+    assert!(!init.contains("Store the vault password somewhere safe."));
+    assert!(!init.contains("Keep the vault password somewhere safe."));
+    assert!(!init.contains("Record your vault password in a secure place"));
+    assert!(!init.contains("Back up your vault password before storing important keys."));
+    assert_contains_in_order(
+        &init,
+        &[
+            "Create the local reVault vault.",
+            "Vault created successfully.",
+            "Directory:",
+            "Identity: default",
+            "Pass phrase reminder:",
+            "If it is lost, reVault cannot recover this vault.",
+        ],
+    );
     assert!(vault_root.join("local-vault.lbox").exists());
 
     let vault_list = run_output_without_content_key(
@@ -1884,6 +1994,63 @@ fn password_create_requires_explicit_vault_init() {
         &agent_root,
     );
     assert!(lockbox.exists());
+}
+
+#[test]
+fn vault_init_rejects_blank_pass_phrase() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("blank-vault-pass-phrase");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    let output = Command::new(bin)
+        .args(["vault", "init"])
+        .env("LOCKBOX_PASSWORD", "test-lockbox-password")
+        .env("LOCKBOX_VAULT_PASSWORD", "")
+        .env("LOCKBOX_SESSION_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(&agent_root))
+        .env("LOCKBOX_VAULT_DIR", &vault_root)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("vault pass phrase must be at least 15 characters"));
+    assert!(!vault_root.join("local-vault.lbox").exists());
+}
+
+#[test]
+fn vault_init_prompt_mentions_minimum_pass_phrase_length() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-pass-phrase-prompt");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    let mut child = Command::new(bin)
+        .args(["vault", "init"])
+        .env("LOCKBOX_PASSWORD", "test-lockbox-password")
+        .env_remove("LOCKBOX_VAULT_PASSWORD")
+        .env("LOCKBOX_SESSION_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(&agent_root))
+        .env("LOCKBOX_VAULT_DIR", &vault_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("New vault pass phrase (minimum 15 characters):"));
+    assert!(stderr.contains("vault pass phrase must be at least 15 characters"));
+    assert!(!vault_root.join("local-vault.lbox").exists());
 }
 
 #[test]
@@ -1943,7 +2110,7 @@ fn vault_init_verify_wrong_password_reports_vault_specific_error() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("vault unlock failed: check the vault password"));
+    assert!(stderr.contains("vault unlock failed: check the vault pass phrase"));
     assert!(stderr.contains("local vault file may be damaged"));
     assert!(!stderr.contains("content key"));
     assert!(!stderr.contains("recipient keypair"));
@@ -1998,6 +2165,76 @@ fn vault_init_overwrite_replaces_existing_vault_with_warning() {
     let after = String::from_utf8_lossy(&after.stdout);
     assert!(after.contains("default"));
     assert!(!after.contains("extra"));
+}
+
+#[test]
+fn vault_backup_and_restore_round_trip_encrypted_vault() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-backup-restore");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let backup = dir.join("vault.lockbox-backup");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &["vault", "identity", "create", "extra"],
+        &vault_root,
+        &agent_root,
+    );
+
+    let backed_up = run_output_without_content_key(
+        bin,
+        &["vault", "backup", backup.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&backed_up);
+    let backed_up = String::from_utf8_lossy(&backed_up.stdout);
+    assert!(backed_up.contains("backup="));
+    assert!(backed_up.contains("vault_sha256="));
+    assert!(backup.exists());
+
+    fs::remove_file(vault_root.join("local-vault.lbox")).unwrap();
+
+    let restored = run_output_without_content_key(
+        bin,
+        &["vault", "restore", backup.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&restored);
+    assert!(String::from_utf8_lossy(&restored.stdout).contains("Vault restored successfully."));
+
+    let after_restore = run_output_without_content_key(
+        bin,
+        &["vault", "identity", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&after_restore);
+    let after_restore = String::from_utf8_lossy(&after_restore.stdout);
+    assert!(after_restore.contains("default"));
+    assert!(after_restore.contains("extra"));
+
+    let refused = run_output_without_content_key(
+        bin,
+        &["vault", "restore", backup.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("pass --overwrite"));
+
+    let overwritten = run_output_without_content_key(
+        bin,
+        &["vault", "restore", "--overwrite", backup.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&overwritten);
 }
 
 #[test]
@@ -2310,8 +2547,8 @@ fn unlock_accepts_password_sources_and_session_duration() {
     .env("LBX_TEST_PASSWORD", "test-lockbox-password")
     .output()
     .unwrap();
-    if String::from_utf8_lossy(&env_unlock.stderr).contains("lockbox session agent did not start") {
-        eprintln!("skipping session agent assertions: lockbox session agent did not start");
+    if is_session_agent_unavailable(&env_unlock) {
+        eprintln!("skipping session agent assertions: lockbox session agent unavailable");
         return;
     }
     assert_success(&env_unlock);
@@ -2366,6 +2603,10 @@ fn unlock_accepts_password_sources_and_session_duration() {
         &vault_root,
         &agent_root,
     );
+    if is_session_agent_unavailable(&sessions) {
+        eprintln!("skipping session agent assertions: lockbox session agent unavailable");
+        return;
+    }
     assert_success(&sessions);
     assert!(String::from_utf8_lossy(&sessions.stdout).contains(lockbox.to_str().unwrap()));
 
@@ -2378,6 +2619,15 @@ fn unlock_accepts_password_sources_and_session_duration() {
     );
     assert!(!listing.status.success());
     assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is locked"));
+}
+
+fn is_session_agent_unavailable(output: &Output) -> bool {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout.contains("lockbox session agent did not start")
+        || stderr.contains("lockbox session agent did not start")
+        || stdout.contains("lockbox session agent is not supported on this platform")
+        || stderr.contains("lockbox session agent is not supported on this platform")
 }
 
 #[test]

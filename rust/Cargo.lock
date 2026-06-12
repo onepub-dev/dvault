@@ -1259,6 +1259,7 @@ dependencies = [
  "clap",
  "libc",
  "lockbox_core",
+ "lockbox_key_server",
  "lockbox_share_protocol",
  "lockbox_vault",
  "sha2",

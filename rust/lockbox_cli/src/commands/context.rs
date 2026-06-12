@@ -15,6 +15,7 @@ use std::io;
 use std::path::Path;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
+const MIN_VAULT_PASS_PHRASE_CHARS: usize = 15;
 
 #[derive(Debug)]
 struct CliMessage(String);
@@ -133,16 +134,29 @@ pub(crate) fn read_vault_password(prompt: &str) -> CliResult<SecretString> {
 
 pub(crate) fn read_new_vault_password() -> CliResult<SecretString> {
     if let Some(password) = SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
+        validate_new_vault_pass_phrase(&password)?;
         return Ok(password);
     }
-    let password = prompt_secret("New vault password: ")?;
-    let mut confirm = prompt_secret("Confirm vault password: ")?;
+    let password = prompt_secret("New vault pass phrase (minimum 15 characters): ")?;
+    validate_new_vault_pass_phrase(&password)?;
+    let mut confirm = prompt_secret("Confirm vault pass phrase: ")?;
     if password != confirm {
         confirm.zeroize()?;
-        return Err(Error::InvalidInput("passwords do not match".to_string()).into());
+        return Err(Error::InvalidInput("pass phrases do not match".to_string()).into());
     }
     confirm.zeroize()?;
     Ok(password)
+}
+
+fn validate_new_vault_pass_phrase(password: &SecretString) -> CliResult<()> {
+    let chars = password.with_str(|text| text.chars().count())?;
+    if chars < MIN_VAULT_PASS_PHRASE_CHARS {
+        return Err(Error::InvalidInput(format!(
+            "vault pass phrase must be at least {MIN_VAULT_PASS_PHRASE_CHARS} characters"
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 pub(crate) fn remember_default_vault_password(password: &SecretString) -> Result<(), Error> {
@@ -169,7 +183,8 @@ pub(crate) fn default_vault() -> Result<VaultDirectory, Error> {
         }
     }
 
-    let password = prompt_secret("Vault password: ").map_err(|err| Error::Io(err.to_string()))?;
+    let password =
+        prompt_secret("Vault pass phrase: ").map_err(|err| Error::Io(err.to_string()))?;
     let vault = VaultDirectory::unlock_or_create_default(&password)?;
     if platform_enabled {
         let _ = put_platform_vault_password(&password);

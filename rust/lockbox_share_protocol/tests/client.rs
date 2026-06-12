@@ -393,11 +393,13 @@ fn topology_binary_round_trips_and_validates_routes() {
                 id: 0,
                 url: "http://share0.example/v1/share".to_string(),
                 status: ServerStatus::Active,
+                last_seen_ms: None,
             },
             TopologyServer {
                 id: 1,
                 url: "http://share1.example/v1/share".to_string(),
                 status: ServerStatus::Standby,
+                last_seen_ms: None,
             },
         ],
         routes: vec![TopologyRoute {

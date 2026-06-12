@@ -51,7 +51,7 @@ pub(crate) fn run() -> CliResult<()> {
 
     match command {
         "create" => keys::create(&create_args(command_matches), &access)?,
-        "doctor" => doctor::run()?,
+        "doctor" => doctor::run(&one_optional_arg(command_matches, "lockbox"))?,
         "unlock" => keys::unlock(&unlock_args(command_matches))?,
         "lock" => keys::lock(&lock_args(command_matches))?,
         "keygen" => keys::keygen(&two_args(command_matches, "private-key", "public-key"))?,
@@ -361,6 +361,14 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "verify", "--verify");
             push_flag(&mut args, sub, "overwrite", "--overwrite");
         }
+        "backup" => {
+            push_flag(&mut args, sub, "overwrite", "--overwrite");
+            args.push(value(sub, "output"));
+        }
+        "restore" => {
+            push_flag(&mut args, sub, "overwrite", "--overwrite");
+            args.push(value(sub, "backup"));
+        }
         "path" => {}
         "publish" => {
             push_share_publish_options(&mut args, sub);
@@ -577,6 +585,13 @@ fn access_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
 
 fn one_arg(matches: &ArgMatches, name: &str) -> Vec<String> {
     vec![value(matches, name)]
+}
+
+fn one_optional_arg(matches: &ArgMatches, name: &str) -> Vec<String> {
+    matches
+        .get_one::<String>(name)
+        .map(|value| vec![value.clone()])
+        .unwrap_or_default()
 }
 
 fn two_args(matches: &ArgMatches, first: &str, second: &str) -> Vec<String> {

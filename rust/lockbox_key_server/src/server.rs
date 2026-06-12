@@ -15,6 +15,7 @@ use lockbox_share_protocol::topology;
 
 const MAX_HTTP_HEADER: usize = 16 * 1024;
 const MAX_WIRE_OVERHEAD: usize = 128;
+const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn run_server(bind: &str, store: Arc<ShareStore>) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind)?;
@@ -160,6 +161,7 @@ pub fn handle_stream(
     store: Arc<ShareStore>,
     limiter: Arc<RateLimiter>,
 ) -> std::io::Result<()> {
+    configure_stream_deadlines(&stream)?;
     let mut buffer = Vec::with_capacity(MAX_HTTP_HEADER);
     let mut chunk = [0_u8; 1024];
     let peer_ip = stream.peer_addr().ok().map(|addr| addr.ip());
@@ -207,15 +209,19 @@ pub fn handle_stream(
             write_binary(&mut stream, 200, &body)?;
             return Ok(());
         }
+        let topology_registration_endpoint =
+            request_line.starts_with("POST /v1/topology/register ");
         let replicate_endpoint = if request_line.starts_with("POST /v1/share ") {
             false
         } else if request_line.starts_with("POST /v1/replicate ") {
             true
+        } else if topology_registration_endpoint {
+            false
         } else {
             write_plain(&mut stream, 404, b"not found")?;
             return Ok(());
         };
-        if !limiter.allow(peer_ip) {
+        if !topology_registration_endpoint && !limiter.allow(peer_ip) {
             write_response(
                 &mut stream,
                 protocol::encode_error(Operation::Share, Status::RateLimited, "rate limited"),
@@ -242,7 +248,16 @@ pub fn handle_stream(
         }
         let body_end = body_start + content_len;
         let body = buffer[body_start..body_end].to_vec();
-        let response =
+        let response = if topology_registration_endpoint {
+            match store.handle_topology_registration(&body) {
+                Ok(response) => response,
+                Err(err) => protocol::encode_error(
+                    Operation::Share,
+                    Status::StoreUnavailable,
+                    &err.to_string(),
+                ),
+            }
+        } else {
             match protocol::decode_request(&body, store.max_payload_bytes() + MAX_WIRE_OVERHEAD) {
                 Ok(request) => {
                     let _ = request.flags;
@@ -267,13 +282,19 @@ pub fn handle_stream(
                     Status::MalformedRequest,
                     &err.to_string(),
                 ),
-            };
+            }
+        };
         write_response(&mut stream, response, close)?;
         buffer.drain(..body_end);
         if close {
             return Ok(());
         }
     }
+}
+
+fn configure_stream_deadlines(stream: &TcpStream) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(REQUEST_IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(REQUEST_IO_TIMEOUT))
 }
 
 pub fn bench_http(mut config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -779,9 +800,11 @@ fn wants_close(headers: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::io::ErrorKind;
+    use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
+    use std::thread;
 
-    use super::RateLimiter;
+    use super::{configure_stream_deadlines, RateLimiter, REQUEST_IO_TIMEOUT};
 
     #[test]
     fn rate_limiter_enforces_burst_capacity() {
@@ -801,5 +824,24 @@ mod tests {
         assert!(limiter.allow(ip));
         assert!(limiter.allow(ip));
         assert!(limiter.allow(None));
+    }
+
+    #[test]
+    fn stream_deadlines_are_configured_for_requests() {
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("unable to bind local test listener: {err}"),
+        };
+        let addr = listener.local_addr().unwrap();
+        let client = thread::spawn(move || TcpStream::connect(addr).unwrap());
+        let (server, _) = listener.accept().unwrap();
+        let client = client.join().unwrap();
+
+        configure_stream_deadlines(&server).unwrap();
+
+        assert_eq!(server.read_timeout().unwrap(), Some(REQUEST_IO_TIMEOUT));
+        assert_eq!(server.write_timeout().unwrap(), Some(REQUEST_IO_TIMEOUT));
+        drop(client);
     }
 }

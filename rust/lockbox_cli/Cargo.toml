@@ -34,3 +34,6 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_Console",
 ] }
+
+[dev-dependencies]
+lockbox_key_server = { path = "../lockbox_key_server" }

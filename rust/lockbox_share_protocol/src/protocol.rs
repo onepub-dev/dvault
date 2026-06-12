@@ -157,6 +157,18 @@ pub fn decode_response(
     bytes: &[u8],
     max_payload: usize,
 ) -> Result<ResponseEnvelope, ProtocolError> {
+    Ok(decode_response_with_tail(bytes, max_payload)?.envelope)
+}
+
+pub struct ResponseWithTail {
+    pub envelope: ResponseEnvelope,
+    pub tail: Vec<u8>,
+}
+
+pub fn decode_response_with_tail(
+    bytes: &[u8],
+    max_payload: usize,
+) -> Result<ResponseWithTail, ProtocolError> {
     if bytes.len() < ENVELOPE_LEN {
         return Err(ProtocolError::TooShort);
     }
@@ -174,13 +186,16 @@ pub fn decode_response(
     if payload_len > max_payload {
         return Err(ProtocolError::PayloadTooLarge);
     }
-    if bytes.len() != ENVELOPE_LEN + payload_len {
+    if bytes.len() < ENVELOPE_LEN + payload_len {
         return Err(ProtocolError::LengthMismatch);
     }
-    Ok(ResponseEnvelope {
-        operation,
-        status,
-        payload: bytes[ENVELOPE_LEN..].to_vec(),
+    Ok(ResponseWithTail {
+        envelope: ResponseEnvelope {
+            operation,
+            status,
+            payload: bytes[ENVELOPE_LEN..ENVELOPE_LEN + payload_len].to_vec(),
+        },
+        tail: bytes[ENVELOPE_LEN + payload_len..].to_vec(),
     })
 }
 
@@ -270,6 +285,17 @@ pub fn encode_response(operation: Operation, status: Status, payload: &[u8]) -> 
     put_u16(&mut out, operation as u16);
     put_u32(&mut out, payload.len() as u32);
     out.extend_from_slice(payload);
+    out
+}
+
+pub fn encode_response_with_tail(
+    operation: Operation,
+    status: Status,
+    payload: &[u8],
+    tail: &[u8],
+) -> Vec<u8> {
+    let mut out = encode_response(operation, status, payload);
+    out.extend_from_slice(tail);
     out
 }
 

@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::net::IpAddr;
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -6,6 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use lockbox_key_server::store::{ServerConfig, ShareStore, StoreError};
 use lockbox_share_protocol::client::{ContactShare, ShareClient};
 use lockbox_share_protocol::protocol::{
     decode_request, encode_delete_request, encode_fetch_request, encode_share_request, Operation,
@@ -15,7 +17,6 @@ use lockbox_share_protocol::{
     encode_replication_request, sign_replication_event, ReplicationEvent, ReplicationEventKind,
     ReplicationRequest, ServerStatus, TopologyRoute, TopologyServer,
 };
-use lockbox_key_server::store::{ServerConfig, ShareStore, StoreError};
 
 fn contact_payload(label: &str) -> Vec<u8> {
     lockbox_share_protocol::payload::encode_contact_share(
@@ -126,7 +127,7 @@ fn store_attaches_email_verification_to_pending_share() {
 }
 
 #[test]
-fn store_fetches_verified_share_by_publisher_email_without_share_code() {
+fn store_does_not_fetch_verified_share_by_publisher_email_without_share_code() {
     let (_guard, mut config) = temp_config("email-fetch");
     config.public_url = Some("https://share.example.test/v1/share".to_string());
     let store = ShareStore::open(config).unwrap();
@@ -157,11 +158,10 @@ fn store_fetches_verified_share_by_publisher_email_without_share_code() {
     let verified_fetch =
         decode_request(&encode_fetch_request("publisher@example.test"), 2048).unwrap();
     let response = store.handle(verified_fetch.operation, &verified_fetch.payload);
-    assert_status(&response, Status::Success);
-    assert!(matches!(
-        store.fetch(&create.share_code),
-        Err(lockbox_key_server::store::StoreError::NotFound)
-    ));
+    assert_status(&response, Status::ShareNotFound);
+
+    let fetched = store.fetch(&create.share_code).unwrap();
+    assert_eq!(fetched.payload, payload);
 }
 
 #[test]
@@ -293,7 +293,7 @@ fn share_codes_use_fixed_digit_count() {
 #[test]
 fn store_rejects_invalid_server_id() {
     let (_guard, mut config) = temp_config("bad-server-id");
-    config.server_id = 32;
+    config.server_id = 36;
     match ShareStore::open(config) {
         Ok(_) => panic!("invalid server id should be rejected"),
         Err(err) => assert!(err.to_string().contains("server id")),
@@ -310,11 +310,13 @@ fn store_publishes_configured_topology() {
             id: 0,
             url: "http://share0.example/v1/share".to_string(),
             status: ServerStatus::Active,
+            last_seen_ms: None,
         },
         TopologyServer {
             id: 1,
             url: "http://share1.example/v1/share".to_string(),
             status: ServerStatus::Standby,
+            last_seen_ms: None,
         },
     ];
     config.topology_routes = vec![TopologyRoute {
@@ -678,6 +680,10 @@ fn encoded_requests_are_accepted_by_store_handler() {
 #[test]
 #[ignore = "requires local TCP sockets, which are blocked in the test sandbox"]
 fn client_api_can_share_fetch_and_delete() {
+    if !has_loopback_sockets() {
+        eprintln!("skipping local-socket e2e test in restricted environment");
+        return;
+    }
     let (_guard, config) = temp_config("client-api");
     let store = Arc::new(ShareStore::open(config).unwrap());
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -719,6 +725,17 @@ fn client_api_can_share_fetch_and_delete() {
         .unwrap());
 }
 
+fn has_loopback_sockets() -> bool {
+    match TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => false,
+        Err(error) => panic!("unable to bind 127.0.0.1:0 for local e2e server: {error}"),
+    }
+}
+
 fn assert_success(response: &[u8]) {
     assert_status(response, Status::Success);
 }
@@ -751,6 +768,9 @@ fn temp_config(name: &str) -> (TempGuard, ServerConfig) {
         topology_servers: Vec::new(),
         topology_routes: Vec::new(),
         replication_token: None,
+        topology_token: None,
+        topology_stale_after_ms: 90_000,
+        topology_heartbeat_interval_ms: 30_000,
         replication_peer_urls: Vec::new(),
         origin_epoch: 1,
         promoted_owner_ids: Vec::new(),

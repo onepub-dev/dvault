@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -5,20 +6,24 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use lockbox_key_server::server::run_listener;
+use lockbox_key_server::store::{ServerConfig, ShareStore};
 use lockbox_share_protocol::protocol::{self, Operation, Status};
 use lockbox_share_protocol::{
     decode_contact_share, encode_contact_share, encode_replication_request, ClientError,
     HttpTransport, ReplicationEvent, ReplicationEventKind, ReplicationRequest, ServerStatus,
     ShareClient, ShareClientPool, TopologyRoute, TopologyServer, Transport,
 };
-use lockbox_key_server::server::run_listener;
-use lockbox_key_server::store::{ServerConfig, ShareStore};
 
 const REPLICATION_TOKEN: &str = "e2e-replication-token";
 
 #[test]
 #[ignore = "requires local TCP sockets; run explicitly on a host with loopback networking"]
 fn two_server_failover_fetch_delete_and_edge_cases() {
+    if !has_loopback_sockets() {
+        eprintln!("skipping local-socket e2e test in restricted environment");
+        return;
+    }
     let cluster = TwoServerCluster::start("route-failover", PeerMode::BothDirections);
     let primary = ShareClient::new(&cluster.primary.share_url())
         .unwrap()
@@ -81,6 +86,10 @@ fn two_server_failover_fetch_delete_and_edge_cases() {
 #[test]
 #[ignore = "requires local TCP sockets; run explicitly on a host with loopback networking"]
 fn resync_recovers_cold_standby_after_missed_replication() {
+    if !has_loopback_sockets() {
+        eprintln!("skipping local-socket e2e test in restricted environment");
+        return;
+    }
     let cluster = TwoServerCluster::start("cold-standby", PeerMode::NoAutomaticPeers);
     let primary = ShareClient::new(&cluster.primary.share_url())
         .unwrap()
@@ -149,6 +158,10 @@ fn resync_recovers_cold_standby_after_missed_replication() {
 #[test]
 #[ignore = "requires local TCP sockets and performs a concurrent failover load test"]
 fn heavy_failover_recovery_under_load() {
+    if !has_loopback_sockets() {
+        eprintln!("skipping local-socket e2e test in restricted environment");
+        return;
+    }
     let flows = std::env::var("LOCKBOX_SHARE_E2E_FLOWS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -254,11 +267,13 @@ impl TwoServerCluster {
                 id: 0,
                 url: primary_url.clone(),
                 status: ServerStatus::Active,
+                last_seen_ms: None,
             },
             TopologyServer {
                 id: 1,
                 url: standby_url.clone(),
                 status: ServerStatus::Promoted,
+                last_seen_ms: None,
             },
         ];
         let topology_routes = vec![
@@ -531,6 +546,17 @@ fn default_heavy_workers() -> usize {
         .unwrap_or(4)
         .saturating_mul(8)
         .clamp(32, 128)
+}
+
+fn has_loopback_sockets() -> bool {
+    match TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => false,
+        Err(error) => panic!("unable to bind 127.0.0.1:0 for local e2e server: {error}"),
+    }
 }
 
 fn contact_payload(label: &str) -> Vec<u8> {
