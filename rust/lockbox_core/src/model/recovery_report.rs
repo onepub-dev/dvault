@@ -14,10 +14,10 @@ pub struct RecoveryReport {
     pub corrupt_records: usize,
     /// Whether the latest TOC could be read.
     pub toc_recovered: bool,
-    /// Whether environment metadata was recovered from the latest commit root.
-    pub env_recovered: bool,
-    /// Number of environment values recovered.
-    pub env_count: usize,
+    /// Whether variable metadata was recovered from the latest commit root.
+    pub variables_recovered: bool,
+    /// Number of variable values recovered.
+    pub variable_count: usize,
     /// Whether form metadata was recovered from the latest commit root.
     pub forms_recovered: bool,
     /// Number of latest form definitions recovered.
@@ -44,9 +44,9 @@ impl RecoveryReport {
             }
         ));
         out.push_str(&format!(
-            "  Environment values: {} ({})\n",
-            self.env_count,
-            if self.env_recovered {
+            "  Variables: {} ({})\n",
+            self.variable_count,
+            if self.variables_recovered {
                 "recovered"
             } else {
                 "not recovered"

@@ -6,7 +6,7 @@ const COMMIT_ROOT_VERSION: u8 = 4;
 pub(crate) struct CommitRoot {
     pub(crate) sequence: u64,
     pub(crate) toc_root_offset: u64,
-    pub(crate) env_root_offset: u64,
+    pub(crate) variable_root_offset: u64,
     pub(crate) form_root_offset: u64,
     pub(crate) free_index_root_offset: u64,
     pub(crate) key_directory_offset: u64,
@@ -22,7 +22,7 @@ pub(crate) fn encode_commit_root(root: &CommitRoot) -> Vec<u8> {
     out.extend_from_slice(&[0; 7]);
     out.extend_from_slice(&root.sequence.to_le_bytes());
     out.extend_from_slice(&root.toc_root_offset.to_le_bytes());
-    out.extend_from_slice(&root.env_root_offset.to_le_bytes());
+    out.extend_from_slice(&root.variable_root_offset.to_le_bytes());
     out.extend_from_slice(&root.form_root_offset.to_le_bytes());
     out.extend_from_slice(&root.free_index_root_offset.to_le_bytes());
     out.extend_from_slice(&root.key_directory_offset.to_le_bytes());
@@ -44,7 +44,7 @@ pub(crate) fn decode_commit_root(payload: &[u8]) -> Result<CommitRoot> {
     let mut offset = 8usize;
     let sequence = read_u64(payload, &mut offset);
     let toc_root_offset = read_u64(payload, &mut offset);
-    let env_root_offset = read_u64(payload, &mut offset);
+    let variable_root_offset = read_u64(payload, &mut offset);
     let form_root_offset = read_u64(payload, &mut offset);
     let free_index_root_offset = read_u64(payload, &mut offset);
     let key_directory_offset = read_u64(payload, &mut offset);
@@ -61,7 +61,7 @@ pub(crate) fn decode_commit_root(payload: &[u8]) -> Result<CommitRoot> {
     Ok(CommitRoot {
         sequence,
         toc_root_offset,
-        env_root_offset,
+        variable_root_offset,
         form_root_offset,
         free_index_root_offset,
         key_directory_offset,
@@ -87,7 +87,7 @@ mod tests {
         let root = CommitRoot {
             sequence: 10,
             toc_root_offset: 100,
-            env_root_offset: 150,
+            variable_root_offset: 150,
             form_root_offset: 175,
             free_index_root_offset: 200,
             key_directory_offset: 300,
@@ -108,7 +108,7 @@ mod tests {
         let root = CommitRoot {
             sequence: 0x0102_0304_0506_0708,
             toc_root_offset: 0x1112_1314_1516_1718,
-            env_root_offset: 0x2122_2324_2526_2728,
+            variable_root_offset: 0x2122_2324_2526_2728,
             form_root_offset: 0x3132_3334_3536_3738,
             free_index_root_offset: 0x4142_4344_4546_4748,
             key_directory_offset: 0x5152_5354_5556_5758,
@@ -172,7 +172,7 @@ mod tests {
         let root = CommitRoot {
             sequence: 10,
             toc_root_offset: 0,
-            env_root_offset: 0,
+            variable_root_offset: 0,
             form_root_offset: 0,
             free_index_root_offset: 0,
             key_directory_offset: 0,

@@ -1,8 +1,8 @@
 use lockbox_core::{
-    EnvName, EnvValueRef, ExtractPolicy, ListOptions, Lockbox, LockboxId, LockboxKeySlotAlgorithm,
+    ExtractPolicy, ListOptions, Lockbox, LockboxId, LockboxKeySlotAlgorithm,
     LockboxKeySlotProtection, LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair,
     RecipientPublicKey, RecipientWrappedKey, RecoveryReportOptions, RecoveryScanner, SecretString,
-    SecretVec, WorkloadProfile,
+    SecretVec, VariableName, VariableValueRef, WorkloadProfile,
 };
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -13,12 +13,12 @@ fn p(path: impl AsRef<str>) -> LockboxPath {
     LockboxPath::new(path).unwrap()
 }
 
-fn env(name: impl AsRef<str>) -> EnvName {
-    EnvName::new(name).unwrap()
+fn variable(name: impl AsRef<str>) -> VariableName {
+    VariableName::new(name).unwrap()
 }
 
 #[test]
-fn public_api_files_listing_env_symlink_and_rename_flow() {
+fn public_api_files_listing_variables_symlink_and_rename_flow() {
     let root = unique_dir("files");
     let lockbox_path = root.join("files.lbox");
     let _ = std::fs::remove_dir_all(&root);
@@ -39,9 +39,10 @@ fn public_api_files_listing_env_symlink_and_rename_flow() {
     .unwrap();
     lb.add_symlink(&p("/app/latest.log"), &p("/app/logs/today.txt"), false)
         .unwrap();
-    lb.set_env(&env("DATABASE_URL"), "postgres://localhost/app")
+    lb.set_variable(&variable("DATABASE_URL"), "postgres://localhost/app")
         .unwrap();
-    lb.set_env(&env("API_TOKEN"), "secret-token").unwrap();
+    lb.set_variable(&variable("API_TOKEN"), "secret-token")
+        .unwrap();
     lb.rename(&p("/app"), &p("/srv/app")).unwrap();
     lb.commit().unwrap();
 
@@ -87,31 +88,33 @@ fn public_api_files_listing_env_symlink_and_rename_flow() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path, "/srv/app/logs/today.txt");
 
-    let mut env = std::collections::BTreeMap::new();
+    let mut variables = std::collections::BTreeMap::new();
     reopened
-        .visit_env(|name, value| {
-            let EnvValueRef::Normal(value) = value else {
-                panic!("fixture stores normal env values");
+        .visit_variables(|name, value| {
+            let VariableValueRef::Normal(value) = value else {
+                panic!("fixture stores normal variable values");
             };
-            env.insert(
+            variables.insert(
                 name.to_string(),
-                (value.to_string(), lockbox_core::EnvSensitivity::Normal),
+                (value.to_string(), lockbox_core::VariableSensitivity::Normal),
             );
             Ok(())
         })
         .unwrap();
     assert_eq!(
-        env.get("/DATABASE_URL")
+        variables
+            .get("/DATABASE_URL")
             .map(|(value, sensitivity)| (value.as_str(), *sensitivity)),
         Some((
             "postgres://localhost/app",
-            lockbox_core::EnvSensitivity::Normal
+            lockbox_core::VariableSensitivity::Normal
         ))
     );
     assert_eq!(
-        env.get("/API_TOKEN")
+        variables
+            .get("/API_TOKEN")
             .map(|(value, sensitivity)| (value.as_str(), *sensitivity)),
-        Some(("secret-token", lockbox_core::EnvSensitivity::Normal))
+        Some(("secret-token", lockbox_core::VariableSensitivity::Normal))
     );
     assert!(reopened
         .list(ListOptions::new(&p("/srv")))
@@ -327,8 +330,8 @@ fn public_api_path_inspector_and_file_helpers_flow() {
         .unwrap();
     lb.add_file_from_reader(&p("/docs/reader.txt"), Cursor::new(b"from reader"), false)
         .unwrap();
-    lb.set_env(&env("TEMP"), "1").unwrap();
-    lb.delete_env(&env("TEMP")).unwrap();
+    lb.set_variable(&variable("TEMP"), "1").unwrap();
+    lb.delete_variable(&variable("TEMP")).unwrap();
     lb.commit().unwrap();
 
     let entries = lb.list(ListOptions::new(&p("/docs"))).unwrap();

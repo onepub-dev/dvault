@@ -3,7 +3,7 @@
 //! Core encrypted lockbox storage engine.
 //!
 //! `lockbox_core` owns the portable `.lbox` file format and the in-memory API
-//! for storing files, symlinks, environment values, and key slots. It does not
+//! for storing files, symlinks, variable values, and key slots. It does not
 //! know about a user's local vault or unlock-cache agent; those are implemented in
 //! `lockbox_vault`.
 
@@ -35,18 +35,16 @@ pub(crate) use file_format::{
 };
 pub(crate) use keys::{crypto, key_derivation, key_slot, key_wrap, secret_vec, signing};
 pub(crate) use model::{
-    compression_frame_manifest, entry, env_name, env_sensitivity, extract_policy, file_chunk, form,
-    list_options, lockbox_id, node_kind, page_object_packer, record, recovery_report,
-    recovery_report_options,
+    compression_frame_manifest, entry, extract_policy, file_chunk, form, list_options, lockbox_id,
+    node_kind, page_object_packer, record, recovery_report, recovery_report_options, variable_name,
+    variable_sensitivity,
 };
 pub(crate) use paths::{host_path, lockbox_path};
 pub(crate) use storage::{cache_options, free_index, free_slot, memory_pressure, page_cache};
-pub(crate) use toc::{env_btree, form_btree, page_tree, toc_btree, toc_codec, toc_entry};
+pub(crate) use toc::{form_btree, page_tree, toc_btree, toc_codec, toc_entry, variable_btree};
 
 pub use cache_options::{CacheLimit, CacheStats, LockboxOptions, WorkerPolicy, WorkloadProfile};
 pub use entry::{LockboxEntry, LockboxEntryKind};
-pub use env_name::{EnvName, EnvNamePattern};
-pub use env_sensitivity::EnvSensitivity;
 pub use error::{Error, Result};
 pub use extract_policy::ExtractPolicy;
 pub use form::{
@@ -59,8 +57,8 @@ pub use key_slot::{
 pub use key_wrap::{RecipientKeyPair, RecipientPublicKey, RecipientWrappedKey};
 pub use list_options::ListOptions;
 pub use lockbox::{
-    EnvValueRef, ImportStats, Lockbox, LockboxFileInspection, LockboxInspector, LockboxProtection,
-    LockboxUnlock, RecoveryScanner,
+    ImportStats, Lockbox, LockboxFileInspection, LockboxInspector, LockboxProtection,
+    LockboxUnlock, RecoveryScanner, VariableValueRef,
 };
 pub use lockbox_id::LockboxId;
 pub use lockbox_path::LockboxPath;
@@ -69,3 +67,5 @@ pub use recovery_report::RecoveryReport;
 pub use recovery_report_options::RecoveryReportOptions;
 pub use secret_vec::{SecretString, SecretVec};
 pub use signing::{OwnerSigningKeyPair, OwnerSigningPublicKey};
+pub use variable_name::{VariableName, VariableNamePattern};
+pub use variable_sensitivity::VariableSensitivity;

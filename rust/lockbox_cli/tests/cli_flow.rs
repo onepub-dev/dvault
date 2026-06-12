@@ -66,26 +66,26 @@ fn help_is_grouped_and_commands_have_specific_help() {
         ],
     );
 
-    let env_help = run_output(bin, &["env", "set", "--help"]);
+    let env_help = run_output(bin, &["variables", "set", "--help"]);
     assert_success(&env_help);
     let env_help = String::from_utf8_lossy(&env_help.stdout);
     assert!(env_help.contains("-v, --value <VALUE>"));
     assert!(!env_help.contains("Context:"));
 
-    let env_help = run_output(bin, &["env", "--help"]);
+    let env_help = run_output(bin, &["variables", "--help"]);
     assert_success(&env_help);
     let env_help = String::from_utf8_lossy(&env_help.stdout);
-    assert!(env_help.contains("Print one stored environment value by name."));
-    assert!(env_help.contains("Print all non-secret environment values in an importable format."));
-    assert!(!env_help.contains("Normal values are printed by `env get`"));
+    assert!(env_help.contains("Print one stored variable value by name."));
+    assert!(env_help.contains("Print all non-secret variable values in an importable format."));
+    assert!(!env_help.contains("Normal values are printed by `variables get`"));
 
-    let env_verbose_help = run_output(bin, &["env", "--help", "--verbose"]);
+    let env_verbose_help = run_output(bin, &["variables", "--help", "--verbose"]);
     assert_success(&env_verbose_help);
     let env_verbose_help = String::from_utf8_lossy(&env_verbose_help.stdout);
     assert!(env_verbose_help.contains("Context:"));
-    assert!(env_verbose_help.contains("Normal values are printed by `env get`"));
+    assert!(env_verbose_help.contains("Normal values are printed by `variables get`"));
     assert!(env_verbose_help.contains("Secret values are encrypted the same way"));
-    assert!(env_verbose_help.contains("require `env get --secret` to print"));
+    assert!(env_verbose_help.contains("require `variables get --secret` to print"));
 
     let form_help = run_output(bin, &["form", "--help"]);
     assert_success(&form_help);
@@ -118,19 +118,19 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(form_set_help.contains("-e, --from-env <NAME>"));
     assert!(form_set_help.contains("-i, --interactive"));
 
-    let env_set_verbose_help = run_output(bin, &["env", "set", "--help", "--verbose"]);
+    let env_set_verbose_help = run_output(bin, &["variables", "set", "--help", "--verbose"]);
     assert_success(&env_set_verbose_help);
     let env_set_verbose_help = String::from_utf8_lossy(&env_set_verbose_help.stdout);
     assert!(env_set_verbose_help.contains("Context:"));
     assert!(env_set_verbose_help.contains("Choose one value source"));
 
-    let env_get_help = run_output(bin, &["env", "get", "--help"]);
+    let env_get_help = run_output(bin, &["variables", "get", "--help"]);
     assert_success(&env_get_help);
     let env_get_help = String::from_utf8_lossy(&env_get_help.stdout);
-    assert!(env_get_help.contains("lockbox env get secrets.lbox APP_MODE"));
-    assert!(env_get_help.contains("lockbox env get --secret secrets.lbox API_TOKEN"));
+    assert!(env_get_help.contains("lockbox variables get secrets.lbox APP_MODE"));
+    assert!(env_get_help.contains("lockbox variables get --secret secrets.lbox API_TOKEN"));
     assert!(env_get_help.contains("--output <FILE>"));
-    assert!(env_get_help.contains("lockbox env get --secret --output api-token.txt"));
+    assert!(env_get_help.contains("lockbox variables get --secret --output api-token.txt"));
 
     let form_get_help = run_output(bin, &["form", "get", "--help"]);
     assert_success(&form_get_help);
@@ -140,11 +140,11 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(form_get_help.contains("--output <FILE>"));
     assert!(form_get_help.contains("--overwrite"));
 
-    let env_export_help = run_output(bin, &["env", "export", "--help"]);
+    let env_export_help = run_output(bin, &["variables", "export", "--help"]);
     assert_success(&env_export_help);
     let env_export_help = String::from_utf8_lossy(&env_export_help.stdout);
     assert!(env_export_help.contains("--format <posix|powershell|cmd|json>"));
-    assert!(env_export_help.contains("eval \"$(lockbox env export secrets.lbox)\""));
+    assert!(env_export_help.contains("eval \"$(lockbox variables export secrets.lbox)\""));
     assert!(env_export_help.contains("Use shell redirection to write it to a file."));
 
     let vault_init_help = run_output(bin, &["vault", "init", "--help"]);
@@ -189,7 +189,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_identity_help = run_output(bin, &["vault", "identity", "--help"]);
     assert_success(&vault_identity_help);
     let vault_identity_help = String::from_utf8_lossy(&vault_identity_help.stdout);
-    assert!(vault_identity_help.contains("Manage your lockbox unlock identities."));
+    assert!(vault_identity_help.contains("Manage your lockbox open identities."));
     assert!(!vault_identity_help.contains("has a public key and a private key"));
     assert!(!vault_identity_help.contains("lockbox vault contact add"));
     assert!(!vault_identity_help.contains("on this machine"));
@@ -213,7 +213,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_contains_in_order(
         &vault_identity_verbose_help,
         &[
-            "Manage your lockbox unlock identities.",
+            "Manage your lockbox open identities.",
             "Context:",
             "Usage: lockbox vault identity",
         ],
@@ -238,13 +238,13 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_contact_verbose_help = String::from_utf8_lossy(&vault_contact_verbose_help.stdout);
     assert!(vault_contact_verbose_help.contains("Context:"));
     assert!(vault_contact_verbose_help.contains("Contacts are saved public keys"));
-    assert!(vault_contact_verbose_help.contains("unlocking requires the matching private identity"));
+    assert!(vault_contact_verbose_help.contains("opening requires the matching private identity"));
     assert!(!vault_contact_verbose_help.contains("on this machine"));
 
     let access_help = run_output(bin, &["access", "--help"]);
     assert_success(&access_help);
     let access_help = String::from_utf8_lossy(&access_help.stdout);
-    assert!(access_help.contains("Manage who can unlock a lockbox."));
+    assert!(access_help.contains("Manage who can open a lockbox."));
     assert!(access_help.contains("add"));
     assert!(access_help.contains("remove"));
     assert!(!access_help.contains("  help"));
@@ -275,13 +275,13 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let sessions_help = run_output(bin, &["vault", "sessions", "--help"]);
     assert_success(&sessions_help);
     let sessions_help = String::from_utf8_lossy(&sessions_help.stdout);
-    assert!(sessions_help.contains("Manage unlocked lockbox sessions."));
-    assert!(sessions_help.contains("lock"));
-    assert!(sessions_help.contains("lock-all"));
-    assert!(sessions_help.contains("auto-unlock"));
+    assert!(sessions_help.contains("Manage open lockbox sessions."));
+    assert!(sessions_help.contains("close"));
+    assert!(sessions_help.contains("close-all"));
+    assert!(sessions_help.contains("auto-open"));
     assert!(sessions_help.contains("stop"));
 
-    let auto_unlock_help = run_output(bin, &["vault", "sessions", "auto-unlock", "--help"]);
+    let auto_unlock_help = run_output(bin, &["vault", "sessions", "auto-open", "--help"]);
     assert_success(&auto_unlock_help);
     let auto_unlock_help = String::from_utf8_lossy(&auto_unlock_help.stdout);
     assert!(auto_unlock_help
@@ -291,7 +291,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(auto_unlock_help.contains("disable"));
     assert!(auto_unlock_help.contains("forget"));
 
-    let unlock_help = run_output(bin, &["unlock", "--help"]);
+    let unlock_help = run_output(bin, &["open", "--help"]);
     assert_success(&unlock_help);
     let unlock_help = String::from_utf8_lossy(&unlock_help.stdout);
     assert!(unlock_help.contains("--duration <DURATION>"));
@@ -599,21 +599,21 @@ fn form_definitions_and_records_flow() {
 
     run(
         bin,
-        &["env", "set", &lockbox, "/prod/API_KEY", "normal-key"],
+        &["variables", "set", &lockbox, "/prod/API_KEY", "normal-key"],
     );
     let visualize = run_output(bin, &["visualize", &lockbox]);
     assert_success(&visualize);
     let visualize = String::from_utf8_lossy(&visualize.stdout);
-    assert!(visualize.contains("env vars: 1"));
+    assert!(visualize.contains("variables: 1"));
     assert!(visualize.contains("form definitions: 1"));
     assert!(visualize.contains("form records: 2"));
-    assert!(visualize.contains("env recovered: true"));
+    assert!(visualize.contains("variables recovered: true"));
     assert!(visualize.contains("forms recovered: true"));
 
     let report = run_output(bin, &["recover", "--report", &lockbox]);
     assert_success(&report);
     let report = String::from_utf8_lossy(&report.stdout);
-    assert!(report.contains("env_recovered"));
+    assert!(report.contains("variables_recovered"));
     assert!(report.contains("forms_recovered"));
     assert!(report.contains("form_record_count"));
 }
@@ -758,7 +758,7 @@ fn clap_errors_are_not_double_prefixed() {
 fn unlock_list_flag_is_not_supported() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
 
-    let output = run_output(bin, &["unlock", "--list"]);
+    let output = run_output(bin, &["open", "--list"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--list'"));
 }
@@ -775,12 +775,12 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
         &[
             "Archives",
             "  create",
-            "  unlock",
+            "  open",
             "Files",
             "  add",
             "  extract",
-            "Environment",
-            "  env",
+            "Variables",
+            "  variables",
             "Sharing",
             "  access",
             "Vault",
@@ -789,7 +789,7 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
     );
     assert!(!help.contains("keygen          Generate raw keypair files."));
     assert!(!help.contains("add-recipient   Share a lockbox with another public key."));
-    assert!(!help.contains("list-keys       List keys that can unlock a lockbox."));
+    assert!(!help.contains("list-keys       List keys that can open a lockbox."));
     assert!(!help.contains("remove-key      Remove a key from a lockbox."));
     assert!(!help.contains("LOCKBOX_KEY=<raw-content-key>"));
 
@@ -798,7 +798,7 @@ fn top_level_help_pins_command_groups_and_hidden_commands() {
     let verbose_help = String::from_utf8_lossy(&verbose_help.stderr);
     assert!(verbose_help.contains("Advanced global options:"));
     assert!(!verbose_help.contains("add-recipient   Share a lockbox with another public key."));
-    assert!(!verbose_help.contains("list-keys       List keys that can unlock a lockbox."));
+    assert!(!verbose_help.contains("list-keys       List keys that can open a lockbox."));
     assert!(!verbose_help.contains("remove-key      Remove a key from a lockbox."));
     assert!(verbose_help.contains("keygen          Generate raw keypair files."));
     assert!(verbose_help.contains("LOCKBOX_KEY=<raw-content-key>"));
@@ -865,17 +865,23 @@ fn file_env_and_developer_aliases_execute_real_flows() {
 
     run(
         bin,
-        &["env", "set", lockbox.to_str().unwrap(), "APP_MODE", "prod"],
+        &[
+            "variables",
+            "set",
+            lockbox.to_str().unwrap(),
+            "APP_MODE",
+            "prod",
+        ],
     );
-    let env_list = run_output(bin, &["env", "ls", lockbox.to_str().unwrap()]);
+    let env_list = run_output(bin, &["variables", "ls", lockbox.to_str().unwrap()]);
     assert_success(&env_list);
     assert!(String::from_utf8_lossy(&env_list.stdout).contains("APP_MODE"));
 
     run(
         bin,
-        &["env", "remove", lockbox.to_str().unwrap(), "APP_MODE"],
+        &["variables", "remove", lockbox.to_str().unwrap(), "APP_MODE"],
     );
-    let env_list = run_output(bin, &["env", "list", lockbox.to_str().unwrap()]);
+    let env_list = run_output(bin, &["variables", "list", lockbox.to_str().unwrap()]);
     assert_success(&env_list);
     assert!(!String::from_utf8_lossy(&env_list.stdout).contains("APP_MODE"));
 
@@ -1011,7 +1017,7 @@ fn negative_cli_errors_remain_specific() {
     let invalid_env_set = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "APP_MODE",
@@ -1022,12 +1028,12 @@ fn negative_cli_errors_remain_specific() {
     );
     assert!(!invalid_env_set.status.success());
     assert!(String::from_utf8_lossy(&invalid_env_set.stderr)
-        .contains("env set requires exactly one value source"));
+        .contains("variables set requires exactly one value source"));
 
     let invalid_export = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "export",
             "--format",
             "fish",
@@ -1036,7 +1042,7 @@ fn negative_cli_errors_remain_specific() {
     );
     assert!(!invalid_export.status.success());
     assert!(String::from_utf8_lossy(&invalid_export.stderr)
-        .contains("unsupported env export format: fish"));
+        .contains("unsupported variables export format: fish"));
 }
 
 #[test]
@@ -1201,7 +1207,7 @@ fn doctor_and_vault_sessions_report_agent_state() {
     assert_contains_in_order(
         &doctor,
         &[
-            "Auto-unlock",
+            "Auto-open",
             "supported:",
             "enabled:",
             "backend:",
@@ -1211,9 +1217,9 @@ fn doctor_and_vault_sessions_report_agent_state() {
     assert!(!doctor.contains("  vault:"));
     assert!(!doctor.contains("running: unknown"));
 
-    let unlocked = run_output_in(bin, &["vault", "sessions"], &vault_root, &agent_root);
-    assert_success(&unlocked);
-    assert_eq!(String::from_utf8_lossy(&unlocked.stdout).trim(), "empty");
+    let open = run_output_in(bin, &["vault", "sessions"], &vault_root, &agent_root);
+    assert_success(&open);
+    assert_eq!(String::from_utf8_lossy(&open.stdout).trim(), "empty");
 
     let stop = run_output_in(
         bin,
@@ -1229,7 +1235,7 @@ fn doctor_and_vault_sessions_report_agent_state() {
         &[
             "vault",
             "sessions",
-            "auto-unlock",
+            "auto-open",
             "status",
             "--format",
             "tsv",
@@ -1261,7 +1267,7 @@ fn doctor_lockbox_reports_closed_metadata_and_unlock_guidance() {
         &vault_root,
         &agent_root,
     );
-    run_without_content_key(bin, &["lock", "--all"], &vault_root, &agent_root);
+    run_without_content_key(bin, &["close", "--all"], &vault_root, &agent_root);
 
     let doctor = run_output_without_lockbox_password(
         bin,
@@ -1299,17 +1305,17 @@ fn doctor_lockbox_adds_open_checks_when_unlocked() {
         &vault_root,
         &agent_root,
     );
-    let unlock = run_output_without_content_key(
+    let open = run_output_without_content_key(
         bin,
-        &["unlock", lockbox.to_str().unwrap()],
+        &["open", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
-    if is_session_agent_unavailable(&unlock) {
+    if is_session_agent_unavailable(&open) {
         eprintln!("skipping doctor open checks: lockbox session agent unavailable");
         return;
     }
-    assert_success(&unlock);
+    assert_success(&open);
 
     let doctor = run_output_without_lockbox_password(
         bin,
@@ -1322,7 +1328,7 @@ fn doctor_lockbox_adds_open_checks_when_unlocked() {
     assert_success(&doctor);
     let doctor = String::from_utf8_lossy(&doctor.stdout);
     assert!(doctor.contains("Open checks"));
-    assert!(doctor.contains("unlocked: yes"));
+    assert!(doctor.contains("open: yes"));
     assert!(doctor.contains("pages:"));
     assert!(doctor.contains("intact files:"));
 }
@@ -1358,7 +1364,7 @@ fn cli_env_rename_and_visualize_flow() {
     run(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "DATABASE_URL",
@@ -1375,7 +1381,12 @@ fn cli_env_rename_and_visualize_flow() {
 
     let env_get = run_output(
         bin,
-        &["env", "get", lockbox.to_str().unwrap(), "DATABASE_URL"],
+        &[
+            "variables",
+            "get",
+            lockbox.to_str().unwrap(),
+            "DATABASE_URL",
+        ],
     );
     assert_success(&env_get);
     assert_eq!(
@@ -1389,7 +1400,7 @@ fn cli_env_rename_and_visualize_flow() {
     assert!(visualize.contains("Lockbox"));
     assert!(visualize.contains("summary:"));
     assert!(visualize.contains("files: 1"));
-    assert!(visualize.contains("env vars: 1"));
+    assert!(visualize.contains("variables: 1"));
     assert!(visualize.contains("pages:"));
     assert!(visualize.contains("----------------------------------------"));
     assert!(!visualize.contains("DATABASE_URL"));
@@ -1473,7 +1484,7 @@ fn cli_env_rename_and_visualize_flow() {
     assert_success(&doctor);
     let doctor = String::from_utf8_lossy(&doctor.stdout);
     assert!(doctor.contains("Local vault"));
-    assert!(doctor.contains("Auto-unlock"));
+    assert!(doctor.contains("Auto-open"));
     assert!(doctor.contains("local-vault.lbox"));
 }
 
@@ -2072,7 +2083,7 @@ fn vault_init_existing_is_noop_unless_verify_is_requested() {
     assert!(existing.contains("Path:"));
     assert!(existing.contains("No changes made."));
     assert!(existing.contains("Use `lockbox vault init --verify`"));
-    assert!(!existing.contains("Vault unlocked successfully."));
+    assert!(!existing.contains("Vault open successfully."));
     assert!(!existing.contains("Directory:"));
 
     let verified = run_output_without_content_key(
@@ -2084,7 +2095,7 @@ fn vault_init_existing_is_noop_unless_verify_is_requested() {
     assert_success(&verified);
     let verified = String::from_utf8_lossy(&verified.stdout);
     assert!(verified.contains("Local vault already exists."));
-    assert!(verified.contains("Vault unlocked successfully."));
+    assert!(verified.contains("Vault opened successfully."));
     assert!(!verified.contains("Directory:"));
 }
 
@@ -2110,11 +2121,11 @@ fn vault_init_verify_wrong_password_reports_vault_specific_error() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("vault unlock failed: check the vault pass phrase"));
+    assert!(stderr.contains("vault open failed: check the vault pass phrase"));
     assert!(stderr.contains("local vault file may be damaged"));
     assert!(!stderr.contains("content key"));
     assert!(!stderr.contains("recipient keypair"));
-    assert!(!stderr.contains("local vault unlock state"));
+    assert!(!stderr.contains("local vault open state"));
 }
 
 #[test]
@@ -2456,7 +2467,7 @@ fn vault_identity_export_reports_missing_output_for_named_identity() {
 #[test]
 fn vault_sessions_and_lock_report_empty_cache_and_already_locked_state() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
-    let dir = unique_dir_named("unlock-list-lock");
+    let dir = unique_dir_named("open-list-close");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let vault_root = dir.join("vault");
@@ -2475,32 +2486,32 @@ fn vault_sessions_and_lock_report_empty_cache_and_already_locked_state() {
     assert_success(&unlock_list);
     assert_eq!(String::from_utf8_lossy(&unlock_list.stdout).trim(), "empty");
 
-    let locked = run_output_without_content_key(
+    let closed = run_output_without_content_key(
         bin,
-        &["lock", lockbox.to_str().unwrap()],
+        &["close", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
-    assert_success(&locked);
-    assert!(String::from_utf8_lossy(&locked.stdout).contains("already locked"));
+    assert_success(&closed);
+    assert!(String::from_utf8_lossy(&closed.stdout).contains("already closed"));
 
     let session_lock = run_output_without_content_key(
         bin,
-        &["vault", "sessions", "lock", lockbox.to_str().unwrap()],
+        &["vault", "sessions", "close", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
     assert_success(&session_lock);
-    assert!(String::from_utf8_lossy(&session_lock.stdout).contains("session locked"));
+    assert!(String::from_utf8_lossy(&session_lock.stdout).contains("session closed"));
 
     let lock_all = run_output_without_content_key(
         bin,
-        &["vault", "sessions", "lock-all"],
+        &["vault", "sessions", "close-all"],
         &vault_root,
         &agent_root,
     );
     assert_success(&lock_all);
-    assert!(String::from_utf8_lossy(&lock_all.stdout).contains("sessions locked"));
+    assert!(String::from_utf8_lossy(&lock_all.stdout).contains("sessions closed"));
 
     let listing = run_output_without_content_key(
         bin,
@@ -2509,8 +2520,8 @@ fn vault_sessions_and_lock_report_empty_cache_and_already_locked_state() {
         &agent_root,
     );
     assert!(!listing.status.success());
-    assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is locked"));
-    assert!(!String::from_utf8_lossy(&listing.stderr).contains("Unlock the lockbox"));
+    assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is closed"));
+    assert!(!String::from_utf8_lossy(&listing.stderr).contains("Open the lockbox"));
     assert!(!String::from_utf8_lossy(&listing.stderr).contains("use the API intended"));
 }
 
@@ -2531,12 +2542,12 @@ fn unlock_accepts_password_sources_and_session_duration() {
         &vault_root,
         &agent_root,
     );
-    run_without_content_key(bin, &["lock", "--all"], &vault_root, &agent_root);
+    run_without_content_key(bin, &["close", "--all"], &vault_root, &agent_root);
 
     let env_unlock = run_output_without_lockbox_password(
         bin,
         &[
-            "unlock",
+            "open",
             "--password-env",
             "LBX_TEST_PASSWORD",
             lockbox.to_str().unwrap(),
@@ -2554,7 +2565,7 @@ fn unlock_accepts_password_sources_and_session_duration() {
     assert_success(&env_unlock);
     run_without_content_key(
         bin,
-        &["lock", lockbox.to_str().unwrap()],
+        &["close", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
@@ -2564,7 +2575,7 @@ fn unlock_accepts_password_sources_and_session_duration() {
     let file_unlock = run_output_without_lockbox_password(
         bin,
         &[
-            "unlock",
+            "open",
             "--password-file",
             password_file.to_str().unwrap(),
             lockbox.to_str().unwrap(),
@@ -2577,7 +2588,7 @@ fn unlock_accepts_password_sources_and_session_duration() {
     assert_success(&file_unlock);
     run_without_content_key(
         bin,
-        &["lock", lockbox.to_str().unwrap()],
+        &["close", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
@@ -2585,7 +2596,7 @@ fn unlock_accepts_password_sources_and_session_duration() {
     let stdin_unlock = run_output_without_lockbox_password_with_stdin(
         bin,
         &[
-            "unlock",
+            "open",
             "--password-stdin",
             "--duration",
             "1s",
@@ -2618,7 +2629,7 @@ fn unlock_accepts_password_sources_and_session_duration() {
         &agent_root,
     );
     assert!(!listing.status.success());
-    assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is locked"));
+    assert!(String::from_utf8_lossy(&listing.stderr).contains("lockbox is closed"));
 }
 
 fn is_session_agent_unavailable(output: &Output) -> bool {
@@ -2670,19 +2681,19 @@ fn add_accepts_jobs_option_for_large_files() {
 }
 
 #[test]
-fn cli_secret_env_requires_explicit_source_and_redacts_export() {
+fn cli_secret_variables_require_explicit_source_and_redact_export() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
-    let dir = unique_dir_named("secret-env");
+    let dir = unique_dir_named("secret-variables");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    let lockbox = dir.join("env.lbox");
+    let lockbox = dir.join("variables.lbox");
     let secret_file = dir.join("secret.txt");
     fs::write(&secret_file, "file-secret").unwrap();
 
     run(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "APP_MODE",
@@ -2693,7 +2704,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     run(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "EMPTY_VALUE",
@@ -2704,7 +2715,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     run(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "-s",
@@ -2716,7 +2727,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     run(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "/production/APP_MODE",
@@ -2727,7 +2738,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     run(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "/production/database/DATABASE_URL",
@@ -2738,7 +2749,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     run(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "/staging/APP_MODE",
@@ -2749,7 +2760,13 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
 
     let listing = run_output(
         bin,
-        &["env", "list", "--format", "tsv", lockbox.to_str().unwrap()],
+        &[
+            "variables",
+            "list",
+            "--format",
+            "tsv",
+            lockbox.to_str().unwrap(),
+        ],
     );
     assert_success(&listing);
     let listing = String::from_utf8_lossy(&listing.stdout);
@@ -2761,7 +2778,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     let production_listing = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "list",
             "--format",
             "tsv",
@@ -2778,7 +2795,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     let app_mode_listing = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "list",
             "--format",
             "tsv",
@@ -2793,7 +2810,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     assert!(app_mode_listing.contains("/staging/APP_MODE"));
     assert!(!app_mode_listing.contains("/API_TOKEN"));
 
-    let export = run_output(bin, &["env", "export", lockbox.to_str().unwrap()]);
+    let export = run_output(bin, &["variables", "export", lockbox.to_str().unwrap()]);
     assert_success(&export);
     let export = String::from_utf8_lossy(&export.stdout);
     assert!(export.contains("APP_MODE='prod'"));
@@ -2804,7 +2821,12 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
 
     let production_export = run_output(
         bin,
-        &["env", "export", lockbox.to_str().unwrap(), "/production"],
+        &[
+            "variables",
+            "export",
+            lockbox.to_str().unwrap(),
+            "/production",
+        ],
     );
     assert_success(&production_export);
     let production_export = String::from_utf8_lossy(&production_export.stdout);
@@ -2815,7 +2837,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     let powershell_export = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "export",
             "--format",
             "powershell",
@@ -2829,7 +2851,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     let cmd_export = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "export",
             "--format",
             "cmd",
@@ -2843,7 +2865,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     let json_export = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "export",
             "--format",
             "json",
@@ -2856,7 +2878,13 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
 
     let secret_get = run_output(
         bin,
-        &["env", "get", lockbox.to_str().unwrap(), "-s", "API_TOKEN"],
+        &[
+            "variables",
+            "get",
+            lockbox.to_str().unwrap(),
+            "-s",
+            "API_TOKEN",
+        ],
     );
     assert_success(&secret_get);
     assert_eq!(
@@ -2866,19 +2894,22 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
 
     let empty_get = run_output(
         bin,
-        &["env", "get", lockbox.to_str().unwrap(), "EMPTY_VALUE"],
+        &["variables", "get", lockbox.to_str().unwrap(), "EMPTY_VALUE"],
     );
     assert_success(&empty_get);
     assert_eq!(String::from_utf8_lossy(&empty_get.stdout), "\n");
 
-    let missing_get = run_output(bin, &["env", "get", lockbox.to_str().unwrap(), "MISSING"]);
+    let missing_get = run_output(
+        bin,
+        &["variables", "get", lockbox.to_str().unwrap(), "MISSING"],
+    );
     assert!(!missing_get.status.success());
     assert!(String::from_utf8_lossy(&missing_get.stderr).contains("not found"));
 
     let missing_secret_get = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "get",
             lockbox.to_str().unwrap(),
             "--secret",
@@ -2892,7 +2923,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     run(
         bin,
         &[
-            "env",
+            "variables",
             "get",
             "--secret",
             "--output",
@@ -2915,7 +2946,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     let rejected_output = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "get",
             "--secret",
             "--output",
@@ -2930,7 +2961,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     run(
         bin,
         &[
-            "env",
+            "variables",
             "get",
             "--secret",
             "--output",
@@ -2945,7 +2976,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     let rejected = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "API_TOKEN",
@@ -2957,7 +2988,7 @@ fn cli_secret_env_requires_explicit_source_and_redacts_export() {
     let rejected_value = run_output(
         bin,
         &[
-            "env",
+            "variables",
             "set",
             lockbox.to_str().unwrap(),
             "-s",

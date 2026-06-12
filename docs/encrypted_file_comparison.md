@@ -16,9 +16,9 @@ support, and both password and recipient-key access.
 - Basic model: Lockbox is a structured `.lbox` container. GPG usually
   encrypts one file or blob. SOPS and age-style workflows usually encrypt
   structured files or simple blobs.
-- Best fit: Lockbox fits multi-file and env-var bundles. GPG fits a single
+- Best fit: Lockbox fits multi-file and variable bundles. GPG fits a single
   file or tarball. SOPS fits YAML, JSON, dotenv, and config-secret files.
-- Metadata privacy: Lockbox hides paths, env names, and small-object sizes
+- Metadata privacy: Lockbox hides paths, variable names, and small-object sizes
   inside encrypted pages. GPG usually leaks the outer filename and blob size.
   SOPS often leaves keys or document structure visible, depending on mode.
 - Random access: Lockbox is designed for selected file and range reads. GPG,
@@ -43,7 +43,7 @@ support, and both password and recipient-key access.
   encrypted container instead of requiring a tarball or directory convention.
 - Paths, file names, environment variable names, values, and TOC entries
   are private metadata rather than cleartext indexes.
-- Fixed-size encrypted pages hide the exact size of tiny files and env entries
+- Fixed-size encrypted pages hide the exact size of tiny files and variable entries
   better than a simple encrypted file.
 - The format is designed for range reads, browser/WASM access, and extracting
   selected files without decrypting a whole archive.
@@ -51,8 +51,8 @@ support, and both password and recipient-key access.
   TOCs, or records are damaged.
 - Password slots and public-key recipient slots can coexist in the same
   container.
-- The UX can be domain-specific: `lockbox env export`,
-  `lockbox add-recipient`, `lockbox remove-key`, and local unlock caching are
+- The UX can be domain-specific: `lockbox variables export`,
+  `lockbox add-recipient`, `lockbox remove-key`, and local open caching are
   clearer for secret bundles than raw GPG commands.
 
 ## Where Lockbox Is Weaker
@@ -82,7 +82,7 @@ gpg --decrypt secrets.env.gpg
 ```
 
 ```bash
-lockbox env export secrets.lbox
+lockbox variables export secrets.lbox
 ```
 
 The Lockbox command may be better once installed, but GPG often wins the first
@@ -99,7 +99,7 @@ Lockbox intentionally uses a narrower model:
 - password slots derived with Argon2id
 - recipient slots using ML-KEM-1024
 - a local encrypted vault for private keys and trusted public keys
-- an in-memory unlock agent for cached content keys
+- an in-memory open agent for cached content keys
 
 That model is cleaner for Lockbox's use case, but it does not yet match the
 broader operational ecosystem that OpenPGP and KMS-backed SOPS deployments
@@ -111,7 +111,7 @@ A `.gpg`, `.asc`, `.age`, or SOPS-managed YAML file can be handled by many
 existing tools and libraries. A `.lbox` file requires Lockbox-compatible code.
 
 That is the tradeoff for richer semantics. Lockbox can provide private paths,
-env pages, recovery, and range access because it owns the container format. The
+variable pages, recovery, and range access because it owns the container format. The
 cost is that users cannot fall back to standard OpenPGP tooling to inspect,
 decrypt, or rewrap the file.
 
@@ -162,7 +162,7 @@ to compete, it needs first-class examples for:
 - Kubernetes init containers and jobs
 - air-gapped build systems
 
-The examples should show where the unlock secret comes from, how values are
+The examples should show where the open secret comes from, how values are
 exported, how masking is handled, and how decrypted files are removed after use.
 
 ## Product Implications
@@ -170,7 +170,7 @@ exported, how masking is handled, and how decrypted files are removed after use.
 Lockbox should lean into the things GPG-style files do poorly:
 
 - encrypted metadata, not just encrypted bytes
-- one portable bundle for files and env vars
+- one portable bundle for files and variables
 - easy recipient management without exposing human labels by default
 - good recovery behavior
 - browser/WASM/range-read support

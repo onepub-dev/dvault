@@ -235,7 +235,7 @@ extraction.
 | Workload | Commit | Lockbox bytes | Notes |
 | --- | ---: | ---: | --- |
 | Append/delete, 5,000 initial + 1,000 appended/replaced | 76.33ms | 1,696,864 | Commit path baseline |
-| Metadata, 10,000 env vars + 16 MiB large file | 2.05ms | 17,316,960 | Metadata sizing baseline |
+| Metadata, 10,000 variables + 16 MiB large file | 2.05ms | 17,316,960 | Metadata sizing baseline |
 
 Outcome: commit/metadata CPU is not yet the obvious bottleneck in these small
 local runs. Profile before optimizing H6/H7.
@@ -589,7 +589,7 @@ reuse optimization is only justified if its CPU cost shows up in profiling.
 
 Measured outcome:
 
-- Metadata baseline commit was 2.05ms for 10,000 env vars plus a 16 MiB file.
+- Metadata baseline commit was 2.05ms for 10,000 variables plus a 16 MiB file.
 - Conclusion: no evidence yet that page-sizing reuse is worth extra cache
   complexity.
 

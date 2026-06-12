@@ -99,10 +99,9 @@ fn scan_report(lockbox_path: &str, access: &Access) -> CliResult<RecoveryReport>
                 .map_err(|err| Error::Io(format!("read lockbox {lockbox_path}: {err}")))?;
             Ok(key.with_bytes(|key| RecoveryScanner::scan_bytes(bytes, key))?)
         }
-        Access::PromptPassword => Err(Error::InvalidInput(
-            "recover requires --key or an unlocked lockbox".to_string(),
-        )
-        .into()),
+        Access::PromptPassword => {
+            Err(Error::InvalidInput("recover requires --key or an open lockbox".to_string()).into())
+        }
     }
 }
 
@@ -117,10 +116,9 @@ fn salvage_bytes(
             let key = cached_key(lockbox_path)?;
             Ok(RecoveryScanner::salvage_bytes_with_secret_key(bytes, &key)?)
         }
-        Access::PromptPassword => Err(Error::InvalidInput(
-            "recover requires --key or an unlocked lockbox".to_string(),
-        )
-        .into()),
+        Access::PromptPassword => {
+            Err(Error::InvalidInput("recover requires --key or an open lockbox".to_string()).into())
+        }
     }
 }
 
@@ -132,7 +130,7 @@ fn cached_key(lockbox_path: &str) -> CliResult<SecretVec> {
     })?;
     get_cached_content_key(lockbox_id)?.ok_or_else(|| {
         cli_error(format!(
-            "lockbox is locked: {lockbox_path}. Run `lockbox unlock {lockbox_path}` first or pass --key."
+            "lockbox is closed: {lockbox_path}. Run `lockbox open {lockbox_path}` first or pass --key."
         ))
     })
 }
@@ -160,10 +158,13 @@ fn report_rows(report: &RecoveryReport, output: Option<&str>) -> Vec<Vec<String>
             report.toc_recovered.to_string(),
         ],
         vec![
-            "env_recovered".to_string(),
-            report.env_recovered.to_string(),
+            "variables_recovered".to_string(),
+            report.variables_recovered.to_string(),
         ],
-        vec!["env_count".to_string(), report.env_count.to_string()],
+        vec![
+            "variable_count".to_string(),
+            report.variable_count.to_string(),
+        ],
         vec![
             "forms_recovered".to_string(),
             report.forms_recovered.to_string(),

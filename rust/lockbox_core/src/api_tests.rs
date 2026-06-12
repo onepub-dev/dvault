@@ -1,9 +1,9 @@
 use crate::{
-    CacheLimit, EnvName, EnvNamePattern, EnvSensitivity, EnvValueRef, Error, ExtractPolicy,
-    FormFieldDefinition, FormFieldKind, FormValue, ListOptions, Lockbox, LockboxEntry,
-    LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotProtection, LockboxOptions,
-    LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair, RecipientPublicKey,
-    RecoveryReportOptions, RecoveryScanner, Result, SecretString, SecretVec, WorkerPolicy,
+    CacheLimit, Error, ExtractPolicy, FormFieldDefinition, FormFieldKind, FormValue, ListOptions,
+    Lockbox, LockboxEntry, LockboxEntryKind, LockboxKeySlotAlgorithm, LockboxKeySlotProtection,
+    LockboxOptions, LockboxPath, LockboxProtection, LockboxUnlock, RecipientKeyPair,
+    RecipientPublicKey, RecoveryReportOptions, RecoveryScanner, Result, SecretString, SecretVec,
+    VariableName, VariableNamePattern, VariableSensitivity, VariableValueRef, WorkerPolicy,
     WorkloadProfile, MAX_KEY_SLOT_NAME_BYTES,
 };
 use sha2::{Digest, Sha256};
@@ -19,8 +19,8 @@ fn p(path: impl AsRef<str>) -> LockboxPath {
     LockboxPath::new(path).unwrap()
 }
 
-fn env(name: impl AsRef<str>) -> EnvName {
-    EnvName::new(name).unwrap()
+fn variable(name: impl AsRef<str>) -> VariableName {
+    VariableName::new(name).unwrap()
 }
 
 #[test]
@@ -156,14 +156,14 @@ fn add_file_stages_small_disk_files_until_commit() {
 }
 
 #[test]
-fn small_env_pages_use_variable_page_quantum() {
+fn small_variable_pages_use_variable_page_quantum() {
     let mut lb = Lockbox::create(KEY);
     let before = lb.to_bytes().len();
 
-    lb.set_env(&env("TOKEN"), "x").unwrap();
+    lb.set_variable(&variable("TOKEN"), "x").unwrap();
 
     lb.commit().unwrap();
-    let env_page = lb
+    let variable_page = lb
         .inspector()
         .inspect_pages()
         .unwrap()
@@ -171,41 +171,48 @@ fn small_env_pages_use_variable_page_quantum() {
         .find(|page| {
             page.objects
                 .iter()
-                .any(|object| object.kind == "env-leaf" && object.payload_len > 0)
+                .any(|object| object.kind == "variable-leaf" && object.payload_len > 0)
         })
         .unwrap();
-    assert!(env_page.page_size as usize >= PAGE_QUANTUM_BYTES);
-    assert_eq!(env_page.page_size as usize % PAGE_QUANTUM_BYTES, 0);
-    assert!(env_page.unused_bytes < env_page.page_size);
+    assert!(variable_page.page_size as usize >= PAGE_QUANTUM_BYTES);
+    assert_eq!(variable_page.page_size as usize % PAGE_QUANTUM_BYTES, 0);
+    assert!(variable_page.unused_bytes < variable_page.page_size);
     assert!(lb.inspector().inspect_pages().unwrap().iter().any(|page| {
         page.objects
             .iter()
-            .any(|object| object.kind == "env-leaf" && object.payload_len > 0)
+            .any(|object| object.kind == "variable-leaf" && object.payload_len > 0)
     }));
     let after = lb.to_bytes().len();
 
     assert!(after > before);
-    assert_eq!(lb.get_env(&env("TOKEN")).unwrap().as_deref(), Some("x"));
+    assert_eq!(
+        lb.get_variable(&variable("TOKEN")).unwrap().as_deref(),
+        Some("x")
+    );
 }
 
 #[test]
-fn env_scan_fails_closed_when_env_page_is_corrupt() {
+fn variable_scan_fails_closed_when_variable_page_is_corrupt() {
     let mut lb = Lockbox::create(KEY);
-    lb.set_env(&env("TOKEN"), "x").unwrap();
+    lb.set_variable(&variable("TOKEN"), "x").unwrap();
     lb.commit().unwrap();
 
-    let env_page = lb
+    let variable_page = lb
         .inspector()
         .inspect_pages()
         .unwrap()
         .into_iter()
-        .find(|page| page.objects.iter().any(|object| object.kind == "env-leaf"))
+        .find(|page| {
+            page.objects
+                .iter()
+                .any(|object| object.kind == "variable-leaf")
+        })
         .unwrap();
     let mut bytes = lb.to_bytes();
-    bytes[env_page.offset as usize + HEADER_LEN + 8] ^= 0x55;
+    bytes[variable_page.offset as usize + HEADER_LEN + 8] ^= 0x55;
 
     let reopened = Lockbox::open(bytes, KEY).unwrap();
-    assert!(reopened.get_env(&env("TOKEN")).is_err());
+    assert!(reopened.get_variable(&variable("TOKEN")).is_err());
 }
 
 #[test]
@@ -1760,99 +1767,111 @@ fn invalid_permissions_are_rejected() {
 }
 
 #[test]
-fn env_vars_round_trip_and_are_returned_as_a_map() {
+fn variables_round_trip_and_are_returned_as_a_map() {
     let mut lb = Lockbox::create(KEY);
-    lb.set_env(&env("DATABASE_URL"), "postgres://localhost/app")
+    lb.set_variable(&variable("DATABASE_URL"), "postgres://localhost/app")
         .unwrap();
-    lb.set_env(&env("FEATURE_FLAG"), "enabled").unwrap();
-    lb.set_env(&env("/production/API_KEY"), "production-key")
+    lb.set_variable(&variable("FEATURE_FLAG"), "enabled")
         .unwrap();
-    lb.set_env(&env("/staging/API_KEY"), "staging-key").unwrap();
+    lb.set_variable(&variable("/production/API_KEY"), "production-key")
+        .unwrap();
+    lb.set_variable(&variable("/staging/API_KEY"), "staging-key")
+        .unwrap();
     lb.commit().unwrap();
 
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
     assert_eq!(
-        reopened.get_env(&env("DATABASE_URL")).unwrap().as_deref(),
+        reopened
+            .get_variable(&variable("DATABASE_URL"))
+            .unwrap()
+            .as_deref(),
         Some("postgres://localhost/app")
     );
     assert_eq!(
-        reopened.list_env().unwrap(),
+        reopened.list_variables().unwrap(),
         vec![
-            (env("DATABASE_URL"), EnvSensitivity::Normal),
-            (env("FEATURE_FLAG"), EnvSensitivity::Normal),
-            (env("/production/API_KEY"), EnvSensitivity::Normal),
-            (env("/staging/API_KEY"), EnvSensitivity::Normal)
+            (variable("DATABASE_URL"), VariableSensitivity::Normal),
+            (variable("FEATURE_FLAG"), VariableSensitivity::Normal),
+            (variable("/production/API_KEY"), VariableSensitivity::Normal),
+            (variable("/staging/API_KEY"), VariableSensitivity::Normal)
         ]
     );
-    let mut env_values = std::collections::BTreeMap::new();
+    let mut variable_values = std::collections::BTreeMap::new();
     reopened
-        .visit_env(|name, value| {
-            let EnvValueRef::Normal(value) = value else {
-                panic!("FEATURE_FLAG fixture only stores normal env values");
+        .visit_variables(|name, value| {
+            let VariableValueRef::Normal(value) = value else {
+                panic!("FEATURE_FLAG fixture only stores normal variable values");
             };
-            env_values.insert(
+            variable_values.insert(
                 name.to_string(),
-                (value.to_string(), EnvSensitivity::Normal),
+                (value.to_string(), VariableSensitivity::Normal),
             );
             Ok(())
         })
         .unwrap();
     assert_eq!(
-        env_values
+        variable_values
             .get("/FEATURE_FLAG")
             .map(|(value, sensitivity)| (value.as_str(), *sensitivity)),
-        Some(("enabled", EnvSensitivity::Normal))
+        Some(("enabled", VariableSensitivity::Normal))
     );
-    let production = EnvNamePattern::new("/production").unwrap();
-    let root_feature = EnvNamePattern::new("FEATURE_FLAG").unwrap();
-    let api_keys = EnvNamePattern::new("**/API_KEY").unwrap();
-    assert!(env("/production/API_KEY").matches_pattern(&production));
-    assert!(!env("/staging/API_KEY").matches_pattern(&production));
-    assert!(env("FEATURE_FLAG").matches_pattern(&root_feature));
-    assert!(!env("/production/FEATURE_FLAG").matches_pattern(&root_feature));
-    assert!(env("/production/API_KEY").matches_pattern(&api_keys));
-    assert!(env("/staging/API_KEY").matches_pattern(&api_keys));
-    assert!(!env("FEATURE_FLAG").matches_pattern(&api_keys));
+    let production = VariableNamePattern::new("/production").unwrap();
+    let root_feature = VariableNamePattern::new("FEATURE_FLAG").unwrap();
+    let api_keys = VariableNamePattern::new("**/API_KEY").unwrap();
+    assert!(variable("/production/API_KEY").matches_pattern(&production));
+    assert!(!variable("/staging/API_KEY").matches_pattern(&production));
+    assert!(variable("FEATURE_FLAG").matches_pattern(&root_feature));
+    assert!(!variable("/production/FEATURE_FLAG").matches_pattern(&root_feature));
+    assert!(variable("/production/API_KEY").matches_pattern(&api_keys));
+    assert!(variable("/staging/API_KEY").matches_pattern(&api_keys));
+    assert!(!variable("FEATURE_FLAG").matches_pattern(&api_keys));
 }
 
 #[test]
-fn env_vars_can_be_removed_and_replaced() {
+fn variables_can_be_removed_and_replaced() {
     let mut lb = Lockbox::create(KEY);
-    lb.set_env(&env("TOKEN"), "one").unwrap();
-    lb.set_env(&env("TOKEN"), "two").unwrap();
-    lb.set_env(&env("REMOVE_ME"), "gone").unwrap();
-    lb.delete_env(&env("REMOVE_ME")).unwrap();
+    lb.set_variable(&variable("TOKEN"), "one").unwrap();
+    lb.set_variable(&variable("TOKEN"), "two").unwrap();
+    lb.set_variable(&variable("REMOVE_ME"), "gone").unwrap();
+    lb.delete_variable(&variable("REMOVE_ME")).unwrap();
     lb.commit().unwrap();
 
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
     assert_eq!(
-        reopened.get_env(&env("TOKEN")).unwrap().as_deref(),
+        reopened
+            .get_variable(&variable("TOKEN"))
+            .unwrap()
+            .as_deref(),
         Some("two")
     );
-    assert_eq!(reopened.get_env(&env("REMOVE_ME")).unwrap(), None);
+    assert_eq!(reopened.get_variable(&variable("REMOVE_ME")).unwrap(), None);
 }
 
 #[test]
-fn secret_env_vars_preserve_sensitivity_until_delete() {
+fn secret_variables_preserve_sensitivity_until_delete() {
     let mut lb = Lockbox::create(KEY);
     let first = password("first-secret");
     let second = password("second-secret");
 
-    lb.set_secret_env(&env("API_TOKEN"), &first).unwrap();
+    lb.set_secret_variable(&variable("API_TOKEN"), &first)
+        .unwrap();
     lb.commit().unwrap();
 
     let mut reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
     assert_eq!(
-        reopened.env_sensitivity(&env("API_TOKEN")).unwrap(),
-        Some(EnvSensitivity::Secret)
+        reopened
+            .variable_sensitivity(&variable("API_TOKEN"))
+            .unwrap(),
+        Some(VariableSensitivity::Secret)
     );
     assert!(matches!(
-        reopened.get_env(&env("API_TOKEN")),
+        reopened.get_variable(&variable("API_TOKEN")),
         Err(Error::InvalidOperation(_))
     ));
     assert_eq!(
         reopened
-            .with_secret_env(&env("API_TOKEN"), |value| value.with_str(str::to_string))
+            .with_secret_variable(&variable("API_TOKEN"), |value| value
+                .with_str(str::to_string))
             .unwrap()
             .transpose()
             .unwrap()
@@ -1861,12 +1880,16 @@ fn secret_env_vars_preserve_sensitivity_until_delete() {
     );
     let mut visited = Vec::new();
     reopened
-        .visit_env(|name, value| {
-            let EnvValueRef::Secret(value) = value else {
-                panic!("API_TOKEN fixture stores a secret env value");
+        .visit_variables(|name, value| {
+            let VariableValueRef::Secret(value) = value else {
+                panic!("API_TOKEN fixture stores a secret variable value");
             };
             value.with_str(|value| {
-                visited.push((name.to_string(), value.to_string(), EnvSensitivity::Secret));
+                visited.push((
+                    name.to_string(),
+                    value.to_string(),
+                    VariableSensitivity::Secret,
+                ));
             })?;
             Ok(())
         })
@@ -1876,20 +1899,23 @@ fn secret_env_vars_preserve_sensitivity_until_delete() {
         vec![(
             "/API_TOKEN".to_string(),
             "first-secret".to_string(),
-            EnvSensitivity::Secret
+            VariableSensitivity::Secret
         )]
     );
     assert!(matches!(
-        reopened.set_env(&env("API_TOKEN"), "normal"),
+        reopened.set_variable(&variable("API_TOKEN"), "normal"),
         Err(Error::InvalidOperation(_))
     ));
 
-    reopened.set_secret_env(&env("API_TOKEN"), &second).unwrap();
+    reopened
+        .set_secret_variable(&variable("API_TOKEN"), &second)
+        .unwrap();
     reopened.commit().unwrap();
     let mut reopened = Lockbox::open(reopened.to_bytes(), KEY).unwrap();
     assert_eq!(
         reopened
-            .with_secret_env(&env("API_TOKEN"), |value| value.with_str(str::to_string))
+            .with_secret_variable(&variable("API_TOKEN"), |value| value
+                .with_str(str::to_string))
             .unwrap()
             .transpose()
             .unwrap()
@@ -1897,20 +1923,24 @@ fn secret_env_vars_preserve_sensitivity_until_delete() {
         Some("second-secret")
     );
 
-    reopened.delete_env(&env("API_TOKEN")).unwrap();
-    reopened.set_env(&env("API_TOKEN"), "normal").unwrap();
+    reopened.delete_variable(&variable("API_TOKEN")).unwrap();
+    reopened
+        .set_variable(&variable("API_TOKEN"), "normal")
+        .unwrap();
     assert_eq!(
-        reopened.env_sensitivity(&env("API_TOKEN")).unwrap(),
-        Some(EnvSensitivity::Normal)
+        reopened
+            .variable_sensitivity(&variable("API_TOKEN"))
+            .unwrap(),
+        Some(VariableSensitivity::Normal)
     );
     assert!(matches!(
-        reopened.set_secret_env(&env("API_TOKEN"), &first),
+        reopened.set_secret_variable(&variable("API_TOKEN"), &first),
         Err(Error::InvalidOperation(_))
     ));
 }
 
 #[test]
-fn secret_env_access_caches_secure_decoded_page() {
+fn secret_variable_access_caches_secure_decoded_page() {
     let mut lb = Lockbox::create_with_options(
         KEY,
         LockboxOptions {
@@ -1919,7 +1949,8 @@ fn secret_env_access_caches_secure_decoded_page() {
         },
     );
     let secret = password("cache-secret");
-    lb.set_secret_env(&env("API_TOKEN"), &secret).unwrap();
+    lb.set_secret_variable(&variable("API_TOKEN"), &secret)
+        .unwrap();
     lb.commit().unwrap();
 
     let reopened = Lockbox::open_with_options(
@@ -1933,7 +1964,8 @@ fn secret_env_access_caches_secure_decoded_page() {
     .unwrap();
     assert_eq!(
         reopened
-            .with_secret_env(&env("API_TOKEN"), |value| value.with_str(str::to_string))
+            .with_secret_variable(&variable("API_TOKEN"), |value| value
+                .with_str(str::to_string))
             .unwrap()
             .transpose()
             .unwrap()
@@ -1943,8 +1975,10 @@ fn secret_env_access_caches_secure_decoded_page() {
     let stats_after_secret_read = reopened.inspector().cache_stats();
 
     assert_eq!(
-        reopened.env_sensitivity(&env("API_TOKEN")).unwrap(),
-        Some(EnvSensitivity::Secret)
+        reopened
+            .variable_sensitivity(&variable("API_TOKEN"))
+            .unwrap(),
+        Some(VariableSensitivity::Secret)
     );
     let stats_after_sensitivity_read = reopened.inspector().cache_stats();
     assert_eq!(
@@ -1954,69 +1988,80 @@ fn secret_env_access_caches_secure_decoded_page() {
 }
 
 #[test]
-fn many_env_vars_are_packed_into_leaf_pages() {
+fn many_variables_are_packed_into_leaf_pages() {
     let mut lb = Lockbox::create(KEY);
     for index in 0..200 {
-        lb.set_env(&env(format!("VAR_{index:03}")), "value")
+        lb.set_variable(&variable(format!("VAR_{index:03}")), "value")
             .unwrap();
     }
     lb.commit().unwrap();
 
-    let env_leaf_pages = lb
+    let variable_leaf_pages = lb
         .inspector()
         .inspect_pages()
         .unwrap()
         .into_iter()
-        .filter(|page| page.objects.iter().any(|object| object.kind == "env-leaf"))
+        .filter(|page| {
+            page.objects
+                .iter()
+                .any(|object| object.kind == "variable-leaf")
+        })
         .count();
-    assert_eq!(env_leaf_pages, 1);
+    assert_eq!(variable_leaf_pages, 1);
 
     let reopened = Lockbox::open(lb.to_bytes(), KEY).unwrap();
-    assert_eq!(reopened.list_env().unwrap().len(), 200);
+    assert_eq!(reopened.list_variables().unwrap().len(), 200);
 }
 
 #[test]
-fn removing_env_var_sanitizes_original_env_page() {
+fn removing_variable_sanitizes_original_variable_page() {
     let mut lb = Lockbox::create(KEY);
-    lb.set_env(&env("KEEP_ME"), "still-here").unwrap();
-    lb.set_env(&env("REMOVE_ME"), "gone").unwrap();
+    lb.set_variable(&variable("KEEP_ME"), "still-here").unwrap();
+    lb.set_variable(&variable("REMOVE_ME"), "gone").unwrap();
     lb.commit().unwrap();
-    let original_env_offset = lb
+    let original_variable_offset = lb
         .inspector()
         .inspect_pages()
         .unwrap()
         .into_iter()
-        .find(|page| page.objects.iter().any(|object| object.kind == "env-leaf"))
+        .find(|page| {
+            page.objects
+                .iter()
+                .any(|object| object.kind == "variable-leaf")
+        })
         .unwrap()
         .offset;
 
-    lb.delete_env(&env("REMOVE_ME")).unwrap();
+    lb.delete_variable(&variable("REMOVE_ME")).unwrap();
     lb.commit().unwrap();
 
     let after = lb.to_bytes();
     let reopened = Lockbox::open(after.clone(), KEY).unwrap();
     assert_eq!(
-        reopened.get_env(&env("KEEP_ME")).unwrap().as_deref(),
+        reopened
+            .get_variable(&variable("KEEP_ME"))
+            .unwrap()
+            .as_deref(),
         Some("still-here")
     );
-    assert_eq!(reopened.get_env(&env("REMOVE_ME")).unwrap(), None);
+    assert_eq!(reopened.get_variable(&variable("REMOVE_ME")).unwrap(), None);
     assert!(lb
         .inspector()
         .inspect_pages()
         .unwrap()
         .into_iter()
-        .any(|page| page.offset == original_env_offset
+        .any(|page| page.offset == original_variable_offset
             && page
                 .objects
                 .iter()
-                .any(|object| object.kind == "env-leaf" && object.payload_len <= 6)));
+                .any(|object| object.kind == "variable-leaf" && object.payload_len <= 6)));
 }
 
 #[test]
-fn env_names_and_values_are_validated() {
-    assert_eq!(EnvName::new("API_KEY").unwrap().as_str(), "/API_KEY");
+fn variable_names_and_values_are_validated() {
+    assert_eq!(VariableName::new("API_KEY").unwrap().as_str(), "/API_KEY");
     assert_eq!(
-        EnvName::new("/production/API_KEY").unwrap().as_str(),
+        VariableName::new("/production/API_KEY").unwrap().as_str(),
         "/production/API_KEY"
     );
     for name in [
@@ -2032,22 +2077,23 @@ fn env_names_and_values_are_validated() {
         "BAD NAME",
     ] {
         assert!(
-            matches!(EnvName::new(name), Err(Error::InvalidPath(_))),
-            "env name should be rejected: {name:?}"
+            matches!(VariableName::new(name), Err(Error::InvalidPath(_))),
+            "variable name should be rejected: {name:?}"
         );
     }
 
     let mut lb = Lockbox::create(KEY);
     assert!(matches!(
-        lb.set_env(&env("BAD_VALUE"), "has\0nul"),
+        lb.set_variable(&variable("BAD_VALUE"), "has\0nul"),
         Err(Error::InvalidInput(_))
     ));
 }
 
 #[test]
-fn env_vars_are_private_and_do_not_appear_in_listings() {
+fn variables_are_private_and_do_not_appear_in_listings() {
     let mut lb = Lockbox::create(KEY);
-    lb.set_env(&env("SECRET_TOKEN"), "super-secret").unwrap();
+    lb.set_variable(&variable("SECRET_TOKEN"), "super-secret")
+        .unwrap();
     lb.add_file(&p("/docs/a.txt"), b"alpha", false).unwrap();
     lb.commit().unwrap();
 
@@ -2566,11 +2612,11 @@ fn path_backed_compact_logically_rewrites_live_state() {
     lb.add_file(&p("/stale.txt"), b"remove me", false).unwrap();
     lb.add_symlink(&p("/links/current"), &p("/large/blob.bin"), false)
         .unwrap();
-    lb.set_env(&env("TOKEN"), "old").unwrap();
+    lb.set_variable(&variable("TOKEN"), "old").unwrap();
     lb.commit().unwrap();
 
     lb.delete(&p("/stale.txt")).unwrap();
-    lb.set_env(&env("TOKEN"), "new").unwrap();
+    lb.set_variable(&variable("TOKEN"), "new").unwrap();
     lb.compact().unwrap();
 
     let reopened = Lockbox::open_path(&path, KEY).unwrap();
@@ -2581,7 +2627,10 @@ fn path_backed_compact_logically_rewrites_live_state() {
         "/large/blob.bin"
     );
     assert_eq!(
-        reopened.get_env(&env("TOKEN")).unwrap().as_deref(),
+        reopened
+            .get_variable(&variable("TOKEN"))
+            .unwrap()
+            .as_deref(),
         Some("new")
     );
     assert!(matches!(
@@ -2722,11 +2771,12 @@ fn compact_preserves_form_state() {
 }
 
 #[test]
-fn recovery_preserves_env_paths_and_forms_from_commit_root() {
+fn recovery_preserves_variable_paths_and_forms_from_commit_root() {
     let mut lb = Lockbox::create(KEY);
     lb.add_file(&p("/payload.txt"), b"payload", false).unwrap();
-    lb.set_env(&env("/prod/API_KEY"), "normal-key").unwrap();
-    lb.set_secret_env(&env("/prod/TOKEN"), &password("secret-token"))
+    lb.set_variable(&variable("/prod/API_KEY"), "normal-key")
+        .unwrap();
+    lb.set_secret_variable(&variable("/prod/TOKEN"), &password("secret-token"))
         .unwrap();
     lb.define_form(
         "login",
@@ -2748,8 +2798,8 @@ fn recovery_preserves_env_paths_and_forms_from_commit_root() {
 
     let report = RecoveryScanner::scan_bytes(bytes.clone(), KEY);
     assert!(report.toc_recovered);
-    assert!(report.env_recovered);
-    assert_eq!(report.env_count, 2);
+    assert!(report.variables_recovered);
+    assert_eq!(report.variable_count, 2);
     assert!(report.forms_recovered);
     assert_eq!(report.form_definition_count, 1);
     assert_eq!(report.form_record_count, 1);
@@ -2757,11 +2807,14 @@ fn recovery_preserves_env_paths_and_forms_from_commit_root() {
     let recovered = RecoveryScanner::salvage_bytes(bytes, KEY).unwrap();
     assert_eq!(recovered.get_file(&p("/payload.txt")).unwrap(), b"payload");
     assert_eq!(
-        recovered.get_env(&env("/prod/API_KEY")).unwrap().as_deref(),
+        recovered
+            .get_variable(&variable("/prod/API_KEY"))
+            .unwrap()
+            .as_deref(),
         Some("normal-key")
     );
     recovered
-        .with_secret_env(&env("/prod/TOKEN"), |secret| {
+        .with_secret_variable(&variable("/prod/TOKEN"), |secret| {
             secret
                 .with_str(|value| assert_eq!(value, "secret-token"))
                 .unwrap();
@@ -2791,11 +2844,12 @@ fn recovery_preserves_env_paths_and_forms_from_commit_root() {
 }
 
 #[test]
-fn path_backed_recovery_preserves_env_paths_and_forms_from_commit_root() {
-    let path = temp_path("recovery-env-forms");
+fn path_backed_recovery_preserves_variable_paths_and_forms_from_commit_root() {
+    let path = temp_path("recovery-variables-forms");
     let key = b"test-key";
     let mut lb = Lockbox::create_path(&path, key).unwrap();
-    lb.set_env(&env("/prod/API_KEY"), "normal-key").unwrap();
+    lb.set_variable(&variable("/prod/API_KEY"), "normal-key")
+        .unwrap();
     lb.define_form(
         "login",
         "Login",
@@ -2816,8 +2870,8 @@ fn path_backed_recovery_preserves_env_paths_and_forms_from_commit_root() {
 
     let bytes = std::fs::read(&path).unwrap();
     let report = RecoveryScanner::scan_bytes(bytes.clone(), key);
-    assert!(report.env_recovered);
-    assert_eq!(report.env_count, 1);
+    assert!(report.variables_recovered);
+    assert_eq!(report.variable_count, 1);
     assert!(report.forms_recovered);
     assert_eq!(report.form_definition_count, 1);
     assert_eq!(report.form_record_count, 1);
@@ -2830,17 +2884,20 @@ fn path_backed_recovery_preserves_env_paths_and_forms_from_commit_root() {
     let reopened_bytes = reopened.bytes().unwrap();
     assert_eq!(bytes, reopened_bytes);
     let reopened_bytes_report = RecoveryScanner::scan_bytes(reopened_bytes, key);
-    assert!(reopened_bytes_report.env_recovered);
+    assert!(reopened_bytes_report.variables_recovered);
     let inspector_report = reopened.inspector().recovery_report();
-    assert!(inspector_report.env_recovered);
-    assert_eq!(inspector_report.env_count, 1);
+    assert!(inspector_report.variables_recovered);
+    assert_eq!(inspector_report.variable_count, 1);
     assert!(inspector_report.forms_recovered);
     assert_eq!(inspector_report.form_definition_count, 1);
     assert_eq!(inspector_report.form_record_count, 1);
 
     let recovered = RecoveryScanner::salvage_bytes(bytes, key).unwrap();
     assert_eq!(
-        recovered.get_env(&env("/prod/API_KEY")).unwrap().as_deref(),
+        recovered
+            .get_variable(&variable("/prod/API_KEY"))
+            .unwrap()
+            .as_deref(),
         Some("normal-key")
     );
     assert!(recovered

@@ -44,7 +44,7 @@ fn run_global() -> CliResult<()> {
     );
     println!();
     let auto_unlock = platform_secret_store_status()?;
-    println!("Auto-unlock");
+    println!("Auto-open");
     println!("  supported: {}", yes_no(auto_unlock.supported));
     println!("  enabled: {}", yes_no(!auto_unlock.disabled));
     println!("  backend: {}", auto_unlock.backend);
@@ -89,7 +89,7 @@ fn run_global() -> CliResult<()> {
             }
         }
         Ok(None) => {
-            println!("  not checked: vault is locked");
+            println!("  not checked: vault is closed");
         }
         Err(err) => {
             println!("  not checked: {err}");
@@ -178,13 +178,13 @@ fn print_lockbox_session(inspection: &LockboxFileInspection) {
             let cached = lockboxes
                 .iter()
                 .find(|lockbox| lockbox.id == inspection.lockbox_id.to_string());
-            println!("  unlocked: {}", yes_no(cached.is_some()));
+            println!("  open: {}", yes_no(cached.is_some()));
             if let Some(cached) = cached.and_then(|lockbox| lockbox.path.as_deref()) {
                 println!("  cached path: {cached}");
             }
         }
         Err(err) => {
-            println!("  unlocked: unknown");
+            println!("  open: unknown");
             println!("  session check: {err}");
         }
     }
@@ -194,7 +194,7 @@ fn print_lockbox_vault(inspection: &LockboxFileInspection) {
     println!("Local vault");
     match default_vault_noninteractive() {
         Ok(Some(vault)) => {
-            println!("  unlocked: yes");
+            println!("  open: yes");
             println!(
                 "  key-directory backup: {}",
                 yes_no(
@@ -209,11 +209,11 @@ fn print_lockbox_vault(inspection: &LockboxFileInspection) {
             }
         }
         Ok(None) => {
-            println!("  unlocked: no");
+            println!("  open: no");
             println!("  key-directory backup: not checked");
         }
         Err(err) => {
-            println!("  unlocked: no");
+            println!("  open: no");
             println!("  key-directory backup: not checked: {err}");
         }
     }
@@ -224,7 +224,7 @@ fn print_open_checks(path: &Path, lockbox_path: &str) {
     match local_vault().open_lockbox(path) {
         Ok(lockbox) => {
             let inspector = lockbox.inspector();
-            println!("  unlocked: yes");
+            println!("  open: yes");
             match inspector.storage_len() {
                 Ok(len) => println!("  storage length: {len} bytes"),
                 Err(err) => println!("  storage length: not checked: {err}"),
@@ -238,15 +238,15 @@ fn print_open_checks(path: &Path, lockbox_path: &str) {
             println!("  partial files: {}", report.partial_files);
         }
         Err(Error::VaultUnavailable(message)) if message.contains("no cached content key") => {
-            println!("  unlocked: no");
-            println!("  additional checks require an unlocked lockbox.");
-            println!("  run: lockbox unlock {lockbox_path}");
+            println!("  open: no");
+            println!("  additional checks require an open lockbox.");
+            println!("  run: lockbox open {lockbox_path}");
             println!("  then: lockbox doctor {lockbox_path}");
         }
         Err(err) => {
-            println!("  unlocked: no");
+            println!("  open: no");
             println!("  additional checks unavailable: {err}");
-            println!("  run after unlocking: lockbox doctor {lockbox_path}");
+            println!("  run after opening: lockbox doctor {lockbox_path}");
         }
     }
 }

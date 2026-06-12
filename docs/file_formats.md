@@ -40,14 +40,14 @@ secrets.lbox
 `-- encrypted page area
     |-- commit root
     |   |-- TOC root reference
-    |   |-- env root reference
+    |   |-- variable root reference
     |   |-- free-space root reference
     |   `-- key-directory mirror references
     |
     |-- TOC pages
     |   `-- current file and symlink entries
     |
-    |-- env pages
+    |-- variable pages
     |   `-- current environment variable entries
     |
     |-- file-data pages
@@ -89,8 +89,8 @@ malformed header updates. It is not a security boundary. Security decisions must
 be based on authenticated pages and authenticated commit roots.
 
 The key-directory pointer remains in the fixed header because users need the key
-directory before the content key is unlocked. The key directory stores only
-unlock metadata and must not contain private file metadata.
+directory before the content key is opened. The key directory stores only
+open metadata and must not contain private file metadata.
 
 ## Pages
 
@@ -251,7 +251,7 @@ still infer a best-effort length from intact compression frames.
 
 Paths remain private because both TOC entries and segment metadata are inside
 encrypted page bodies. They are exposed only after the caller has
-unlocked the content key.
+opened the content key.
 
 ## Page Cache Boundary
 
@@ -278,8 +278,8 @@ paths should route through the cache boundary. Direct raw decoding is reserved
 for recovery scans and low-level format tests, where the caller starts from
 untrusted bytes rather than from an opened lockbox.
 
-Unlock is part of the cache boundary, not an exception to it. Key-directory
-pages are clear-text page-cache pages, so password and recipient unlock should
+Open is part of the cache boundary, not an exception to it. Key-directory
+pages are clear-text page-cache pages, so password and recipient open should
 read the current key-directory page through the page-cache read/decode path.
 Raw byte scanning is only a fallback for damaged headers, missing roots, or
 recovery-style mirror discovery.
@@ -290,7 +290,7 @@ a commit. Other page classes, including clear-text key-directory pages, use the
 page-cache read/write boundary.
 
 Compaction is a logical rewrite rather than an in-place page defragmenter. The
-implementation reads the current TOC/env/key state, creates a fresh
+implementation reads the current TOC/variable/key state, creates a fresh
 lockbox with the same lockbox id and content key, writes each current object
 through the normal page-cache APIs, commits that replacement, then swaps the
 backing storage. It does not move encrypted or clear-text pages into free slots
@@ -334,14 +334,14 @@ Object kinds:
 4       file data
 5       reserved legacy packed file data; not emitted by the current format
 6       symlink
-7       reserved legacy env set; not emitted by the current format
-8       reserved legacy env delete; not emitted by the current format
+7       reserved legacy variable set; not emitted by the current format
+8       reserved legacy variable delete; not emitted by the current format
 9       key directory
 10      free-space index leaf
 11      free-space index internal
 12      reserved legacy delete marker; not emitted by the current format
-13      env leaf node
-14      env internal node
+13      variable leaf node
+14      variable internal node
 ```
 
 ## Commit Root
@@ -409,63 +409,63 @@ Updating a file rewrites the touched TOC leaf and changed ancestors. Unchanged
 TOC pages remain referenced by the previous and current commit roots until
 compaction reclaims unreachable history.
 
-## Environment Variables
+## Variables
 
-Environment variables are encrypted metadata, not files. They must not appear in
+Variables are encrypted metadata, not files. They must not appear in
 file listings, file recovery listings, visualizations, or unauthenticated public
 metadata.
 
-All env reads and writes must go through the decoded page cache. This keeps env
+All variable reads and writes must go through the decoded page cache. This keeps variable
 pages on the same copy-on-write, secure page decoding, redaction, and cache
 invalidation path as other lockbox metadata. Code must not scan raw storage for
-env records or append env replacement/tombstone records outside the page-cache
+variable records or append variable replacement/tombstone records outside the page-cache
 write path.
 
-The committed env namespace stores only current entries, like the TOC. It must contain only the
-current value for each env name. Old env values are secret material; they must
-not remain decryptable in old COW pages after `set_env`, `delete_env`, or
+The committed variable namespace stores only current entries, like the TOC. It must contain only the
+current value for each variable name. Old variable values are secret material; they must
+not remain decryptable in old COW pages after `set_variable`, `delete_variable`, or
 recipient changes are committed. This is required because adding a recipient
 grants access to the lockbox content key, and that recipient could otherwise
-decrypt stale env pages containing secrets that are still valid elsewhere.
+decrypt stale variable pages containing secrets that are still valid elsewhere.
 
-The env structure is commit-root referenced. The commit root points to an env
-root object, or zero when no env vars exist. Env entries are packed into
-encrypted env leaf pages so many small env vars share a page. Env internal pages
-contain only sorted routing names and child page offsets; env values exist only
-in env leaves.
+The variable structure is commit-root referenced. The commit root points to a variable
+root object, or zero when no variables exist. Variable entries are packed into
+encrypted variable leaf pages so many small variables share a page. Variable internal pages
+contain only sorted routing names and child page offsets; variable values exist only
+in variable leaves.
 
-Each env leaf entry stores its sensitivity bit. Sensitivity is declared when the
-env var is created, updates preserve it, and changing sensitivity requires
-delete plus recreate. All env values are encrypted at rest. In memory, normal
+Each variable leaf entry stores its sensitivity bit. Sensitivity is declared when the
+variable is created, updates preserve it, and changing sensitivity requires
+delete plus recreate. All variable values are encrypted at rest. In memory, normal
 values use ordinary string access and secret values use secure string storage
-and scoped access. Normal `get_env`, `list_env`, and scoped `visit_env`
-operations load from the env root and must not discover env vars by scanning the
-whole lockbox; `visit_env` includes both normal and secret values, yielding
+and scoped access. Normal `get_variable`, `list_variables`, and scoped `visit_variables`
+operations load from the variable root and must not discover variables by scanning the
+whole lockbox; `visit_variables` includes both normal and secret values, yielding
 secret entries as `SecretString` references so plaintext access still goes
 through the secret value's scoped callback.
 
-Env pages must not embed forward or backward linked-list pointers as the primary
+Variable pages must not embed forward or backward linked-list pointers as the primary
 structure. Page-embedded linked lists interact poorly with copy-on-write: when a
 middle page changes, every link that reaches it may need to be rewritten, and a
 tail/head mutation can force extra page rewrites. Use a root-referenced
 directory/tree or other immutable index structure. The current pre-1.0
-implementation writes a packed env BTree from the current namespace on env commits
+implementation writes a packed variable BTree from the current namespace on variable commits
 and reuses the same encoded-size grouping and routing-child codec as the TOC.
 
-An env update follows the same secret-redaction rule as file replacement:
+A variable update follows the same secret-redaction rule as file replacement:
 
-1. read the current env directory
-2. build replacement env page(s) containing only current env entries
-3. stage sanitized replacements for old env tree pages through the page cache
-4. publish the new env root in the next commit root
-5. add the old env tree page slots to the committed free-space index
+1. read the current variable directory
+2. build replacement variable page(s) containing only current variable entries
+3. stage sanitized replacements for old variable tree pages through the page cache
+4. publish the new variable root in the next commit root
+5. add the old variable tree page slots to the committed free-space index
 
 Appending a tombstone or replacement record without redacting the old value is
-not acceptable for env vars. Such a log can be useful for non-secret audit data,
-but env vars are encrypted active configuration values and may include declared
+not acceptable for variables. Such a log can be useful for non-secret audit data,
+but variables are encrypted active configuration values and may include declared
 secrets.
 
-No backwards-compatible env-history scan is supported. The format is still
+No backwards-compatible variable-history scan is supported. The format is still
 pre-release and there are no existing production vaults to migrate.
 
 ## Free-Space Index
@@ -503,17 +503,17 @@ published index never lists the page that stores the index itself.
 
 ## Key Directory
 
-The key directory is public unlock metadata referenced by the fixed header and
+The key directory is public open metadata referenced by the fixed header and
 mirrored in the commit root. It stores only slot ids, slot kinds,
 salts/ciphertexts, public recipient wrapping data, and encrypted content-key
 bytes.
 It must not store paths, file names, environment variable names, or file
 contents.
 
-The unlock boundary is deliberately narrow:
+The open boundary is deliberately narrow:
 
 ```text
-before unlock                         after successful unwrap
+before open                         after successful unwrap
 -------------                         -----------------------
 fixed header
     |
@@ -527,7 +527,7 @@ clear-text key directory
                                   encrypted pages become readable
                                   |-- commit root
                                   |-- TOC
-                                  |-- env
+                                  |-- variables
                                   `-- file data
 ```
 
@@ -535,7 +535,7 @@ It also must not store recipient identities. Recipient names, email addresses,
 local vault aliases, public recipient keys, and stable public-key fingerprints
 would let a holder of one lockbox correlate membership with another lockbox or
 another user's vault. The format stores only the slot material needed to attempt
-unlock. ML-KEM encapsulation data must be freshly generated per slot creation
+open. ML-KEM encapsulation data must be freshly generated per slot creation
 so the same recipient key does not produce a reusable cross-lockbox identifier.
 
 The key directory is intentionally readable before the content key is available,
@@ -565,7 +565,7 @@ offset  size  field
 The lockbox writes three copies of the key directory for every key-directory
 generation: a primary copy referenced by the fixed header, plus two mirror
 copies referenced by the commit root. Key-directory generation changes only
-when key slots are created, updated, or removed; ordinary file, symlink, env, or
+when key slots are created, updated, or removed; ordinary file, symlink, variable, or
 TOC commits keep referencing the existing key-directory pages.
 
 Recovery can also scan the raw lockbox for clear-text key-directory pages,
@@ -573,7 +573,7 @@ validate the page checksums, group decoded key-directory payloads by lockbox
 UUID, and use the highest generation that successfully unwraps the content key.
 
 The fixed header is therefore a fast path, not the only path. If the header is
-corrupt, password/public-key unlock can recover the lockbox UUID and content key
+corrupt, password/public-key open can recover the lockbox UUID and content key
 from a scanned key-directory mirror, then use those values to authenticate and
 decrypt pages while scanning for the latest valid commit root.
 
@@ -582,7 +582,7 @@ history may contain old key directories or data pages, the CLI must treat key
 removal as a conservative maintenance operation:
 
 1. remove the key slot from the current key directory
-2. logically rewrite reachable files, symlinks, env vars, TOC nodes, free-space
+2. logically rewrite reachable files, symlinks, variables, TOC nodes, free-space
    metadata, and key-directory pages through the page cache into a replacement
    lockbox
 3. commit the replacement lockbox
@@ -594,7 +594,7 @@ The core uses a unified page cache for reads and writes. Clean decoded pages
 are held in a weighted LRU cache. Normal dirty pages stay in the cache and are
 visible to reads from the same opened lockbox, but they are not written to the
 backing store until `commit()` flushes them and publishes a new commit root.
-Secure env pages are appended through the cache's secure write path, which
+Secure variable pages are appended through the cache's secure write path, which
 encodes and writes the encrypted page and caches a secure-backed `DecodedPage`.
 There is no background writer.
 
@@ -603,7 +603,7 @@ It does not infer that a page is insert-only from page contents or offsets. In
 the default `Interactive` profile, dirty pages are retained after flush. In the
 `BulkImport` profile, newly appended file-data pages may be flushed as
 discard-after-flush pages so large initial imports do not keep every written
-data page resident. Metadata pages, redaction writes, TOC nodes, env tree nodes,
+data page resident. Metadata pages, redaction writes, TOC nodes, variable tree nodes,
 free-index pages, key-directory pages, and commit roots remain on the normal
 commit-time path.
 
@@ -621,7 +621,7 @@ path must redact the physical page that held the old encrypted object. If the
 old page also contains current objects, those objects are relocated to a new
 page first; then the old physical page is overwritten with zeros and removed
 from the decoded-page cache. This is required because old COW pages may still
-contain decryptable ciphertext even after the current TOC or env root no longer
+contain decryptable ciphertext even after the current TOC or variable root no longer
 references them.
 
 `CacheLimit::Auto` is page-aware:

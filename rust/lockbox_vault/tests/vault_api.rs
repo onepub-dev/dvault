@@ -142,7 +142,7 @@ fn vault_password_create_and_unlock_cache_keys_outside_secure_read_access() {
 }
 
 #[test]
-fn vault_unlock_populates_cache_for_password_lockbox() {
+fn vault_open_populates_cache_for_password_lockbox() {
     let path = unique_path("password");
     let vault = Vault::new(MemoryStore::default());
     let password = SecretString::try_from_bytes(b"shared password".to_vec()).unwrap();

@@ -1,7 +1,7 @@
 use lockbox_core::{
-    EnvName, Error, ListOptions, Lockbox, LockboxEntryKind, LockboxId, LockboxPath,
-    LockboxProtection, LockboxUnlock, OwnerSigningKeyPair, OwnerSigningPublicKey, RecipientKeyPair,
-    RecipientPublicKey, Result, SecretString, SecretVec,
+    Error, ListOptions, Lockbox, LockboxEntryKind, LockboxId, LockboxPath, LockboxProtection,
+    LockboxUnlock, OwnerSigningKeyPair, OwnerSigningPublicKey, RecipientKeyPair,
+    RecipientPublicKey, Result, SecretString, SecretVec, VariableName,
 };
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -200,10 +200,10 @@ impl VaultDirectory {
     ///
     /// Names must contain only ASCII letters, digits, `-`, or `_`.
     pub fn store_private_key(&self, name: &str, keypair: &RecipientKeyPair) -> Result<()> {
-        let env_name = private_key_env_name(name)?;
+        let variable_name = private_key_variable_name(name)?;
         let private_record = export_private_key(keypair, KeyFormat::RawHex)?;
         let value = SecretString::from_secure_vec(private_record);
-        self.put_secret_env_record(&env_name, &value)?;
+        self.put_secret_variable_record(&variable_name, &value)?;
         if !self.owner_signing_key_exists(name)? {
             self.store_owner_signing_key_current_only(name, &OwnerSigningKeyPair::generate()?)?;
         }
@@ -229,11 +229,11 @@ impl VaultDirectory {
 
     /// Loads a recipient private key previously stored under `name`.
     pub fn load_private_key(&self, name: &str) -> Result<RecipientKeyPair> {
-        let env_name = private_key_env_name(name)?;
+        let variable_name = private_key_variable_name(name)?;
         let secret = self
             .lockbox
             .borrow()
-            .with_secret_env(&env_name, SecretString::try_clone)?
+            .with_secret_variable(&variable_name, SecretString::try_clone)?
             .transpose()?
             .ok_or_else(|| Error::NotFound(format!("vault private key {name}")))?;
         let mut bytes = SecretVec::new();
@@ -257,7 +257,7 @@ impl VaultDirectory {
     pub fn private_key_exists(&self, name: &str) -> Result<bool> {
         let lockbox = self.lockbox.borrow();
         Ok(lockbox
-            .env_sensitivity(&private_key_env_name(name)?)?
+            .variable_sensitivity(&private_key_variable_name(name)?)?
             .is_some())
     }
 
@@ -265,8 +265,8 @@ impl VaultDirectory {
     pub fn list_private_keys(&self) -> Result<Vec<String>> {
         let mut names = Vec::new();
         let lockbox = self.lockbox.borrow();
-        for (env_name, _) in lockbox.list_env()? {
-            let Some(name) = private_key_name_from_env(&env_name) else {
+        for (variable_name, _) in lockbox.list_variables()? {
+            let Some(name) = private_key_name_from_variable(&variable_name) else {
                 continue;
             };
             names.push(name?);
@@ -280,20 +280,18 @@ impl VaultDirectory {
     pub fn delete_private_key(&self, name: &str) -> Result<()> {
         if let Some(history) = self.read_identity_history(name)? {
             for generation in history.generations {
-                self.delete_secret_env_record_if_exists(&private_key_generation_env_name(
-                    name,
-                    generation.index,
-                )?)?;
-                self.delete_secret_env_record_if_exists(&owner_signing_key_generation_env_name(
-                    name,
-                    generation.index,
-                )?)?;
+                self.delete_secret_variable_record_if_exists(
+                    &private_key_generation_variable_name(name, generation.index)?,
+                )?;
+                self.delete_secret_variable_record_if_exists(
+                    &owner_signing_key_generation_variable_name(name, generation.index)?,
+                )?;
             }
             self.delete_record_if_exists(&identity_history_record_path(name)?)?;
         }
         self.delete_record_if_exists(&identity_email_record_path(name)?)?;
-        self.delete_secret_env_record_if_exists(&owner_signing_key_env_name(name)?)?;
-        self.delete_secret_env_record_if_exists(&private_key_env_name(name)?)
+        self.delete_secret_variable_record_if_exists(&owner_signing_key_variable_name(name)?)?;
+        self.delete_secret_variable_record_if_exists(&private_key_variable_name(name)?)
     }
 
     /// Stores the public email address associated with a vault identity.
@@ -362,11 +360,11 @@ impl VaultDirectory {
 
     /// Loads one identity generation by index.
     pub fn load_private_key_generation(&self, name: &str, index: u16) -> Result<RecipientKeyPair> {
-        let env_name = private_key_generation_env_name(name, index)?;
+        let variable_name = private_key_generation_variable_name(name, index)?;
         let secret = self
             .lockbox
             .borrow()
-            .with_secret_env(&env_name, SecretString::try_clone)?
+            .with_secret_variable(&variable_name, SecretString::try_clone)?
             .transpose()?
             .ok_or_else(|| {
                 Error::NotFound(format!("vault private key {name} generation {index}"))
@@ -382,11 +380,11 @@ impl VaultDirectory {
         name: &str,
         index: u16,
     ) -> Result<OwnerSigningKeyPair> {
-        let env_name = owner_signing_key_generation_env_name(name, index)?;
+        let variable_name = owner_signing_key_generation_variable_name(name, index)?;
         let secret = self
             .lockbox
             .borrow()
-            .with_secret_env(&env_name, SecretString::try_clone)?
+            .with_secret_variable(&variable_name, SecretString::try_clone)?
             .transpose()?
             .ok_or_else(|| {
                 Error::NotFound(format!("vault owner signing key {name} generation {index}"))
@@ -544,10 +542,10 @@ impl VaultDirectory {
         Ok(())
     }
 
-    fn put_secret_env_record(&self, name: &EnvName, value: &SecretString) -> Result<()> {
+    fn put_secret_variable_record(&self, name: &VariableName, value: &SecretString) -> Result<()> {
         let _guard = VaultFileLock::acquire(&self.root)?;
         let mut lockbox = self.lockbox.borrow_mut();
-        lockbox.set_secret_env(name, value)?;
+        lockbox.set_secret_variable(name, value)?;
         lockbox.commit()?;
         set_private_file_permissions(&self.path)?;
         Ok(())
@@ -568,11 +566,11 @@ impl VaultDirectory {
         Ok(())
     }
 
-    fn delete_secret_env_record_if_exists(&self, name: &EnvName) -> Result<()> {
+    fn delete_secret_variable_record_if_exists(&self, name: &VariableName) -> Result<()> {
         let _guard = VaultFileLock::acquire(&self.root)?;
         let mut lockbox = self.lockbox.borrow_mut();
-        if lockbox.env_sensitivity(name)?.is_some() {
-            lockbox.delete_env(name)?;
+        if lockbox.variable_sensitivity(name)?.is_some() {
+            lockbox.delete_variable(name)?;
             lockbox.commit()?;
             set_private_file_permissions(&self.path)?;
         }
@@ -641,13 +639,13 @@ impl VaultDirectory {
     fn store_private_key_current_only(&self, name: &str, keypair: &RecipientKeyPair) -> Result<()> {
         let private_record = export_private_key(keypair, KeyFormat::RawHex)?;
         let value = SecretString::from_secure_vec(private_record);
-        self.put_secret_env_record(&private_key_env_name(name)?, &value)
+        self.put_secret_variable_record(&private_key_variable_name(name)?, &value)
     }
 
     fn owner_signing_key_exists(&self, name: &str) -> Result<bool> {
         let lockbox = self.lockbox.borrow();
         Ok(lockbox
-            .env_sensitivity(&owner_signing_key_env_name(name)?)?
+            .variable_sensitivity(&owner_signing_key_variable_name(name)?)?
             .is_some())
     }
 
@@ -655,7 +653,10 @@ impl VaultDirectory {
         let secret = self
             .lockbox
             .borrow()
-            .with_secret_env(&owner_signing_key_env_name(name)?, SecretString::try_clone)?
+            .with_secret_variable(
+                &owner_signing_key_variable_name(name)?,
+                SecretString::try_clone,
+            )?
             .transpose()?
             .ok_or_else(|| Error::NotFound(format!("vault owner signing key {name}")))?;
         let mut bytes = SecretVec::new();
@@ -671,7 +672,7 @@ impl VaultDirectory {
     ) -> Result<()> {
         let value =
             SecretString::from_secure_vec(hex_encode_secret(keypair.private_key_record()?)?);
-        self.put_secret_env_record(&owner_signing_key_env_name(name)?, &value)
+        self.put_secret_variable_record(&owner_signing_key_variable_name(name)?, &value)
     }
 
     fn store_private_key_generation(
@@ -682,7 +683,7 @@ impl VaultDirectory {
     ) -> Result<()> {
         let private_record = export_private_key(keypair, KeyFormat::RawHex)?;
         let value = SecretString::from_secure_vec(private_record);
-        self.put_secret_env_record(&private_key_generation_env_name(name, index)?, &value)
+        self.put_secret_variable_record(&private_key_generation_variable_name(name, index)?, &value)
     }
 
     fn store_owner_signing_key_generation(
@@ -693,7 +694,10 @@ impl VaultDirectory {
     ) -> Result<()> {
         let value =
             SecretString::from_secure_vec(hex_encode_secret(keypair.private_key_record()?)?);
-        self.put_secret_env_record(&owner_signing_key_generation_env_name(name, index)?, &value)
+        self.put_secret_variable_record(
+            &owner_signing_key_generation_variable_name(name, index)?,
+            &value,
+        )
     }
 
     fn ensure_identity_history(&self, name: &str) -> Result<IdentityHistory> {
@@ -988,39 +992,39 @@ fn recursive_list(path: &str) -> ListOptions {
     options
 }
 
-fn private_key_env_name(name: &str) -> Result<EnvName> {
+fn private_key_variable_name(name: &str) -> Result<VariableName> {
     let name = validate_record_name(name)?;
-    EnvName::new(format!(
+    VariableName::new(format!(
         "LOCKBOX_VAULT_PRIVATE_KEY_{}",
         encode_name_hex(name)
     ))
 }
 
-fn private_key_generation_env_name(name: &str, index: u16) -> Result<EnvName> {
+fn private_key_generation_variable_name(name: &str, index: u16) -> Result<VariableName> {
     let name = validate_record_name(name)?;
-    EnvName::new(format!(
+    VariableName::new(format!(
         "LOCKBOX_VAULT_PRIVATE_KEY_{}_GEN_{index:04}",
         encode_name_hex(name)
     ))
 }
 
-fn owner_signing_key_env_name(name: &str) -> Result<EnvName> {
+fn owner_signing_key_variable_name(name: &str) -> Result<VariableName> {
     let name = validate_record_name(name)?;
-    EnvName::new(format!(
+    VariableName::new(format!(
         "LOCKBOX_VAULT_SIGNING_KEY_{}",
         encode_name_hex(name)
     ))
 }
 
-fn owner_signing_key_generation_env_name(name: &str, index: u16) -> Result<EnvName> {
+fn owner_signing_key_generation_variable_name(name: &str, index: u16) -> Result<VariableName> {
     let name = validate_record_name(name)?;
-    EnvName::new(format!(
+    VariableName::new(format!(
         "LOCKBOX_VAULT_SIGNING_KEY_{}_GEN_{index:04}",
         encode_name_hex(name)
     ))
 }
 
-fn private_key_name_from_env(name: &str) -> Option<Result<String>> {
+fn private_key_name_from_variable(name: &str) -> Option<Result<String>> {
     let name = name.strip_prefix('/').unwrap_or(name);
     let hex = name.strip_prefix("LOCKBOX_VAULT_PRIVATE_KEY_")?;
     if hex.contains("_GEN_") {

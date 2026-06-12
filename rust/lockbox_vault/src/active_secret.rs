@@ -206,7 +206,9 @@ mod tests {
             terminate_on_suspend: false,
         };
         let mut registry = ActiveSecretRegistry::new(config);
-        registry.register(1234, SecretActivityKind::Env).unwrap();
+        registry
+            .register(1234, SecretActivityKind::Variables)
+            .unwrap();
         registry.suspend_requested();
         assert!(!registry.is_empty());
     }

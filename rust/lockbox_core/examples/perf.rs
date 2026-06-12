@@ -1,5 +1,5 @@
 use lockbox_core::{
-    EnvName, ExtractPolicy, ListOptions, Lockbox, LockboxPath, LockboxProtection, SecretVec,
+    ExtractPolicy, ListOptions, Lockbox, LockboxPath, LockboxProtection, SecretVec, VariableName,
 };
 use std::io::{Read, Result as IoResult};
 use std::path::PathBuf;
@@ -11,8 +11,8 @@ fn p(path: impl AsRef<str>) -> LockboxPath {
     LockboxPath::new(path).unwrap()
 }
 
-fn env(name: impl AsRef<str>) -> EnvName {
-    EnvName::new(name).unwrap()
+fn variable(name: impl AsRef<str>) -> VariableName {
+    VariableName::new(name).unwrap()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -225,7 +225,7 @@ fn metadata_operations() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(256usize * 1024 * 1024);
-    let env_count = std::env::var("LOCKBOX_PERF_ENV_VARS")
+    let variable_count = std::env::var("LOCKBOX_PERF_VARIABLES")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(10_000usize);
@@ -238,8 +238,8 @@ fn metadata_operations() -> Result<(), Box<dyn std::error::Error>> {
         PatternReader::new(large_bytes, &pattern),
         false,
     )?;
-    for i in 0..env_count {
-        lockbox.set_env(&env(format!("LOCKBOX_ENV_{i:06}")), "value")?;
+    for i in 0..variable_count {
+        lockbox.set_variable(&variable(format!("LOCKBOX_VARIABLE_{i:06}")), "value")?;
     }
     lockbox.add_file(&p("/delete-me.txt"), b"delete", false)?;
     lockbox.commit()?;
@@ -249,8 +249,8 @@ fn metadata_operations() -> Result<(), Box<dyn std::error::Error>> {
     let rename = start.elapsed();
 
     let start = Instant::now();
-    let listed = lockbox.list_env()?.len();
-    let list_env = start.elapsed();
+    let listed = lockbox.list_variables()?.len();
+    let list_variables = start.elapsed();
 
     lockbox.delete(&p("/delete-me.txt"))?;
     let start = Instant::now();
@@ -271,7 +271,7 @@ fn metadata_operations() -> Result<(), Box<dyn std::error::Error>> {
         page_waste: bench.page_waste()?,
         add: rename,
         commit,
-        list: list_env,
+        list: list_variables,
         extract: compact,
         read_range: Duration::ZERO,
     });

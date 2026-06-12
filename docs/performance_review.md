@@ -34,16 +34,16 @@ lockbox expansion/extraction.
 - Free-slot lookup now uses ordered offset and size indexes in memory. The
   format persists that free-space state through a commit-root-referenced
   free-index page so reopening does not lose reusable regions.
-- Commit roots, free-space index checkpoints, TOC nodes, env tree nodes, and
+- Commit roots, free-space index checkpoints, TOC nodes, variable tree nodes, and
   symlink metadata now use 128 KiB metadata pages. File data still uses 8 MiB
   data pages.
 - Current symlinks are TOC entries that point at packed symlink metadata objects.
   The target is not stored in the TOC, and many symlink objects share each
   metadata page.
-- Env vars are packed into a commit-root-referenced env BTree instead of being
+- Variables are packed into a commit-root-referenced variable BTree instead of being
   stored as one tiny object per page or linked through page-embedded lists.
-  `list_env` now reads from the env root instead of scanning the whole lockbox.
-  Env tree writes and redactions are staged through the page cache.
+  `list_variables` now reads from the variable root instead of scanning the whole lockbox.
+  Variable tree writes and redactions are staged through the page cache.
 - Full expansion currently walks TOC entries serially. It should support a
   bounded worker pool for independent records.
 - The convenience extraction APIs still return owned `Vec<u8>` values. That is
@@ -56,7 +56,7 @@ lockbox expansion/extraction.
 The cache policy is set above the page cache, not inferred inside it:
 
 - `Interactive`: default for normal API use, existing-vault updates, deletes,
-  renames, env changes, and mixed read/write workloads. Dirty decoded pages stay
+  renames, variable changes, and mixed read/write workloads. Dirty decoded pages stay
   resident until commit flushes them.
 - `BulkImport`: used by the CLI when an `add` creates a new lockbox or imports
   a directory. Newly appended file-data pages are marked discard-after-flush and
@@ -70,7 +70,7 @@ The cache policy is set above the page cache, not inferred inside it:
   decoded compression-frame cache as `ReadMostly` for bulk restore/export
   flows.
 
-Only file-data pages use discard-after-flush in `BulkImport`. TOC pages, env
+Only file-data pages use discard-after-flush in `BulkImport`. TOC pages, variable
 tree pages, symlink metadata, free-index pages, key directories, redactions, and
 commit roots remain on the normal commit path. That keeps COW and redaction
 semantics simple while addressing the real memory spike in one-shot imports.
@@ -89,8 +89,8 @@ logical TOC grouping rules.
 
 - Expand Criterion coverage for root height increase/decrease at larger TOC
   sizes.
-- Add Criterion coverage for packed env updates, deletes, redaction, and cold
-  `list_env` loads from the env root.
+- Add Criterion coverage for packed variable updates, deletes, redaction, and cold
+  `list_variables` loads from the variable root.
 - Keep the existing quick smoke/perf example for GB-class local profiling and
   use Criterion for repeatable micro/structural benchmarks.
 

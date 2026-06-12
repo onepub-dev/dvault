@@ -1,5 +1,5 @@
 use lockbox_core::{
-    EnvName, ListOptions, Lockbox, LockboxPath, LockboxProtection, LockboxUnlock, SecretVec,
+    ListOptions, Lockbox, LockboxPath, LockboxProtection, LockboxUnlock, SecretVec, VariableName,
 };
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
@@ -10,8 +10,8 @@ fn p(path: impl AsRef<str>) -> LockboxPath {
     LockboxPath::new(path).unwrap()
 }
 
-fn env(name: impl AsRef<str>) -> EnvName {
-    EnvName::new(name).unwrap()
+fn variable(name: impl AsRef<str>) -> VariableName {
+    VariableName::new(name).unwrap()
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn create_fixture(path: &Path) {
         .add_file(&p("/small/repeated.bin"), &vec![b'x'; 128 * 1024], false)
         .unwrap();
     lockbox
-        .set_env(&env("INTEROP_MODE"), "cross-endian")
+        .set_variable(&variable("INTEROP_MODE"), "cross-endian")
         .unwrap();
     lockbox.commit().unwrap();
 }
@@ -106,7 +106,10 @@ fn verify_fixture(path: &Path) {
         randomish_bytes(1024 * 1024 - 17, 4096)
     );
     assert_eq!(
-        lockbox.get_env(&env("INTEROP_MODE")).unwrap().as_deref(),
+        lockbox
+            .get_variable(&variable("INTEROP_MODE"))
+            .unwrap()
+            .as_deref(),
         Some("cross-endian")
     );
 

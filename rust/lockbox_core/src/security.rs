@@ -1,4 +1,4 @@
-use crate::constants::{MAX_ENV_NAME_BYTES, MAX_ENV_VALUE_BYTES};
+use crate::constants::{MAX_VARIABLE_NAME_BYTES, MAX_VARIABLE_VALUE_BYTES};
 use crate::{Error, Result};
 
 pub(crate) fn validate_permissions(permissions: u32) -> Result<u32> {
@@ -11,24 +11,24 @@ pub(crate) fn validate_permissions(permissions: u32) -> Result<u32> {
     }
 }
 
-pub(crate) fn validate_env_name(name: &str) -> Result<String> {
-    if name.is_empty() || name.len() > MAX_ENV_NAME_BYTES {
+pub(crate) fn validate_variable_name(name: &str) -> Result<String> {
+    if name.is_empty() || name.len() > MAX_VARIABLE_NAME_BYTES {
         return Err(Error::InvalidPath(name.to_string()));
     }
     let canonical = if name.starts_with('/') {
-        validate_env_path(name)?;
+        validate_variable_path(name)?;
         name.to_string()
     } else {
-        validate_env_component(name, name)?;
+        validate_variable_component(name, name)?;
         format!("/{name}")
     };
-    if canonical.len() > MAX_ENV_NAME_BYTES {
+    if canonical.len() > MAX_VARIABLE_NAME_BYTES {
         return Err(Error::InvalidPath(name.to_string()));
     }
     Ok(canonical)
 }
 
-fn validate_env_path(path: &str) -> Result<()> {
+fn validate_variable_path(path: &str) -> Result<()> {
     if path.len() == 1
         || path.ends_with('/')
         || path.starts_with("//")
@@ -39,12 +39,12 @@ fn validate_env_path(path: &str) -> Result<()> {
         return Err(Error::InvalidPath(path.to_string()));
     }
     for component in path.split('/').skip(1) {
-        validate_env_component(component, path)?;
+        validate_variable_component(component, path)?;
     }
     Ok(())
 }
 
-fn validate_env_component(component: &str, original: &str) -> Result<()> {
+fn validate_variable_component(component: &str, original: &str) -> Result<()> {
     if component.is_empty()
         || component == "."
         || component == ".."
@@ -61,15 +61,15 @@ fn validate_env_component(component: &str, original: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn validate_env_value(value: &str) -> Result<String> {
-    validate_env_value_ref(value)?;
+pub(crate) fn validate_variable_value(value: &str) -> Result<String> {
+    validate_variable_value_ref(value)?;
     Ok(value.to_string())
 }
 
-pub(crate) fn validate_env_value_ref(value: &str) -> Result<()> {
-    if value.len() > MAX_ENV_VALUE_BYTES {
+pub(crate) fn validate_variable_value_ref(value: &str) -> Result<()> {
+    if value.len() > MAX_VARIABLE_VALUE_BYTES {
         return Err(Error::SecurityLimitExceeded(format!(
-            "environment variable value exceeds {MAX_ENV_VALUE_BYTES} bytes"
+            "variable value exceeds {MAX_VARIABLE_VALUE_BYTES} bytes"
         )));
     }
     if value.contains('\0')
@@ -78,7 +78,7 @@ pub(crate) fn validate_env_value_ref(value: &str) -> Result<()> {
         })
     {
         return Err(Error::InvalidInput(
-            "environment variable value contains unsupported control characters".to_string(),
+            "variable value contains unsupported control characters".to_string(),
         ));
     }
     Ok(())

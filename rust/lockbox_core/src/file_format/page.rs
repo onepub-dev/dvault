@@ -35,14 +35,14 @@ pub(crate) enum PageObjectKind {
     FileData = 4,
     PackedFileData = 5,
     Symlink = 6,
-    EnvSet = 7,
-    EnvDelete = 8,
+    VariableSet = 7,
+    VariableDelete = 8,
     KeyDirectory = 9,
     FreeIndexLeaf = 10,
     FreeIndexInternal = 11,
     Delete = 12,
-    EnvLeaf = 13,
-    EnvInternal = 14,
+    VariableLeaf = 13,
+    VariableInternal = 14,
     FormLeaf = 15,
     FormInternal = 16,
     CommitAuth = 17,
@@ -149,14 +149,14 @@ impl PageObjectKind {
             4 => Ok(Self::FileData),
             5 => Ok(Self::PackedFileData),
             6 => Ok(Self::Symlink),
-            7 => Ok(Self::EnvSet),
-            8 => Ok(Self::EnvDelete),
+            7 => Ok(Self::VariableSet),
+            8 => Ok(Self::VariableDelete),
             9 => Ok(Self::KeyDirectory),
             10 => Ok(Self::FreeIndexLeaf),
             11 => Ok(Self::FreeIndexInternal),
             12 => Ok(Self::Delete),
-            13 => Ok(Self::EnvLeaf),
-            14 => Ok(Self::EnvInternal),
+            13 => Ok(Self::VariableLeaf),
+            14 => Ok(Self::VariableInternal),
             15 => Ok(Self::FormLeaf),
             16 => Ok(Self::FormInternal),
             17 => Ok(Self::CommitAuth),
@@ -669,7 +669,9 @@ pub(crate) fn scan_page_records(bytes: &[u8], lockbox_id: LockboxId, key: &[u8])
                 corrupt_records += 1;
                 break;
             };
-            if decode_secure_env_page_inspection(page_bytes, lockbox_id, &content_key).is_some() {
+            if decode_secure_variable_page_inspection(page_bytes, lockbox_id, &content_key)
+                .is_some()
+            {
                 i += DEFAULT_METADATA_PAGE_BYTES;
                 continue;
             }
@@ -729,7 +731,7 @@ pub(crate) fn inspect_pages(
                 break;
             };
             if let Some(inspection) =
-                inspect_secure_env_page(page_bytes, i as u64, lockbox_id, &content_key)
+                inspect_secure_variable_page(page_bytes, i as u64, lockbox_id, &content_key)
             {
                 pages.push(inspection);
                 i += physical_page_size_from_page_slice(page_bytes)
@@ -774,14 +776,14 @@ pub(crate) fn inspect_pages(
     pages
 }
 
-fn inspect_secure_env_page(
+fn inspect_secure_variable_page(
     page_bytes: &[u8],
     offset: u64,
     lockbox_id: LockboxId,
     content_key: &[u8; 32],
 ) -> Option<PageInspection> {
     let (page_id, sequence, stored_body_len) = public_page_header_metadata(page_bytes)?;
-    let object = decode_secure_env_page_inspection(page_bytes, lockbox_id, content_key)?;
+    let object = decode_secure_variable_page_inspection(page_bytes, lockbox_id, content_key)?;
     Some(PageInspection {
         offset,
         page_id,
@@ -796,7 +798,7 @@ fn inspect_secure_env_page(
     })
 }
 
-fn decode_secure_env_page_inspection(
+fn decode_secure_variable_page_inspection(
     page_bytes: &[u8],
     lockbox_id: LockboxId,
     content_key: &[u8; 32],
@@ -806,8 +808,8 @@ fn decode_secure_env_page_inspection(
     let object = decoded.objects.first()?;
     if !matches!(
         object.kind,
-        PageObjectKind::EnvLeaf
-            | PageObjectKind::EnvInternal
+        PageObjectKind::VariableLeaf
+            | PageObjectKind::VariableInternal
             | PageObjectKind::FormLeaf
             | PageObjectKind::FormInternal
     ) {
@@ -861,8 +863,8 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Option<RecordKind> {
     match kind {
         PageObjectKind::PackedFileData | PageObjectKind::FileData => Some(RecordKind::FilePage),
         PageObjectKind::Symlink => Some(RecordKind::Symlink),
-        PageObjectKind::EnvSet => Some(RecordKind::Env),
-        PageObjectKind::EnvDelete => Some(RecordKind::EnvDelete),
+        PageObjectKind::VariableSet => Some(RecordKind::Variable),
+        PageObjectKind::VariableDelete => Some(RecordKind::VariableDelete),
         PageObjectKind::Delete => Some(RecordKind::Delete),
         PageObjectKind::TocLeaf | PageObjectKind::TocInternal => Some(RecordKind::TocNode),
         PageObjectKind::CommitRoot => Some(RecordKind::CommitRoot),
@@ -871,8 +873,8 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Option<RecordKind> {
             Some(RecordKind::FreeIndex)
         }
         PageObjectKind::KeyDirectory
-        | PageObjectKind::EnvLeaf
-        | PageObjectKind::EnvInternal
+        | PageObjectKind::VariableLeaf
+        | PageObjectKind::VariableInternal
         | PageObjectKind::FormLeaf
         | PageObjectKind::FormInternal => None,
     }
@@ -887,14 +889,14 @@ fn page_object_kind_name(kind: PageObjectKind) -> &'static str {
         PageObjectKind::FileData => "file-data",
         PageObjectKind::PackedFileData => "packed-file-data",
         PageObjectKind::Symlink => "symlink",
-        PageObjectKind::EnvSet => "env-set",
-        PageObjectKind::EnvDelete => "env-delete",
+        PageObjectKind::VariableSet => "variable-set",
+        PageObjectKind::VariableDelete => "variable-delete",
         PageObjectKind::KeyDirectory => "key-directory",
         PageObjectKind::FreeIndexLeaf => "free-index-leaf",
         PageObjectKind::FreeIndexInternal => "free-index-internal",
         PageObjectKind::Delete => "delete",
-        PageObjectKind::EnvLeaf => "env-leaf",
-        PageObjectKind::EnvInternal => "env-internal",
+        PageObjectKind::VariableLeaf => "variable-leaf",
+        PageObjectKind::VariableInternal => "variable-internal",
         PageObjectKind::FormLeaf => "form-leaf",
         PageObjectKind::FormInternal => "form-internal",
     }
@@ -1091,7 +1093,7 @@ mod tests {
     #[test]
     fn secure_payload_can_be_read_only_through_scoped_access() {
         let payload = SecureVec::try_from_slice(b"secret").unwrap();
-        let object = PageObject::new_secure(PageObjectKind::EnvLeaf, 10, payload);
+        let object = PageObject::new_secure(PageObjectKind::VariableLeaf, 10, payload);
 
         assert!(object.with_payload(|payload| payload == b"secret").unwrap());
     }

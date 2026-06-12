@@ -9,7 +9,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
-fn unlock_populates_cache_and_lock_clears_it() {
+fn open_populates_cache_and_close_clears_it() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir();
     let _ = fs::remove_dir_all(&dir);
@@ -29,23 +29,23 @@ fn unlock_populates_cache_and_lock_clears_it() {
         &vault_dir,
         &["create", vault.to_str().unwrap()],
     );
-    let unlock = run_output(
+    let open = run_output(
         bin,
         &agent_dir,
         &vault_dir,
-        &["unlock", vault.to_str().unwrap()],
+        &["open", vault.to_str().unwrap()],
     );
-    if String::from_utf8_lossy(&unlock.stderr).contains("lockbox session agent did not start") {
+    if String::from_utf8_lossy(&open.stderr).contains("lockbox session agent did not start") {
         eprintln!("skipping session agent cache assertions: lockbox session agent did not start");
         return;
     }
     assert!(
-        unlock.status.success(),
-        "command failed: {bin} unlock {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        open.status.success(),
+        "command failed: {bin} open {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         vault.display(),
-        unlock.status,
-        String::from_utf8_lossy(&unlock.stdout),
-        String::from_utf8_lossy(&unlock.stderr)
+        open.status,
+        String::from_utf8_lossy(&open.stdout),
+        String::from_utf8_lossy(&open.stderr)
     );
     let output = run_output(
         bin,
@@ -61,7 +61,7 @@ fn unlock_populates_cache_and_lock_clears_it() {
         String::from_utf8_lossy(&output.stderr)
     );
     let unlocked_list = String::from_utf8_lossy(&output.stdout);
-    assert!(unlocked_list.contains("unlocked\t"));
+    assert!(unlocked_list.contains("open\t"));
     assert!(unlocked_list.contains(vault.to_str().unwrap()));
 
     let output = run_output(bin, &agent_dir, &vault_dir, &["vault", "sessions"]);
@@ -74,7 +74,7 @@ fn unlock_populates_cache_and_lock_clears_it() {
     );
     let vault_unlocked = String::from_utf8_lossy(&output.stdout);
     assert!(vault_unlocked.contains("state"));
-    assert!(vault_unlocked.contains("unlocked"));
+    assert!(vault_unlocked.contains("open"));
     assert!(vault_unlocked.contains(vault.to_str().unwrap()));
 
     run(
@@ -111,7 +111,7 @@ fn unlock_populates_cache_and_lock_clears_it() {
         bin,
         &agent_dir,
         &vault_dir,
-        &["lock", vault.to_str().unwrap()],
+        &["close", vault.to_str().unwrap()],
     );
     let output = run_output(
         bin,
@@ -120,7 +120,7 @@ fn unlock_populates_cache_and_lock_clears_it() {
         &["list", vault.to_str().unwrap(), "/docs"],
     );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("lockbox is locked"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("lockbox is closed"));
     assert_agent_log_contains(&agent_dir, "forgot lockbox");
 
     let output = run_output(bin, &agent_dir, &vault_dir, &["vault", "sessions"]);

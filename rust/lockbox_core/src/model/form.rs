@@ -188,10 +188,10 @@ fn validate_identifier(value: &str, description: &str) -> Result<String> {
 }
 
 fn validate_text(value: &str, description: &str) -> Result<()> {
-    if value.len() > crate::constants::MAX_ENV_VALUE_BYTES {
+    if value.len() > crate::constants::MAX_VARIABLE_VALUE_BYTES {
         return Err(Error::SecurityLimitExceeded(format!(
             "{description} exceeds {} bytes",
-            crate::constants::MAX_ENV_VALUE_BYTES
+            crate::constants::MAX_VARIABLE_VALUE_BYTES
         )));
     }
     if value.contains('\0')

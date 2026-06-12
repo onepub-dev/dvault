@@ -6,7 +6,6 @@ use crate::commit_auth::{commit_auth_digest, commit_auth_message, decode_commit_
 use crate::commit_root::decode_commit_root;
 use crate::compression_frame_manifest::CompressionFrameSlice;
 use crate::constants::HEADER_LEN;
-use crate::env_btree::{EnvLeaf, EnvTreeNode, EnvValue};
 use crate::fast_hash::FastBuildHasher;
 use crate::file_chunk::PendingFileChunk;
 use crate::file_format::{
@@ -32,14 +31,14 @@ use crate::secret_vec::SecretVec;
 use crate::signing::{verify_commit_signatures, OwnerSigningKeyPair};
 use crate::storage::{Storage, StorageBackend};
 use crate::toc_entry::TocEntry;
+use crate::variable_btree::{VariableLeaf, VariableTreeNode, VariableValue};
 use crate::{
-    CacheStats, EnvName, Error, FormDefinition, FormRecord, LockboxOptions, RecoveryReport, Result,
-    WorkerPolicy, WorkloadProfile,
+    CacheStats, Error, FormDefinition, FormRecord, LockboxOptions, RecoveryReport, Result,
+    VariableName, WorkerPolicy, WorkloadProfile,
 };
 use zeroize::{Zeroize, Zeroizing};
 
 mod commit;
-mod env;
 mod extraction;
 mod files;
 mod forms;
@@ -48,12 +47,13 @@ mod listing;
 mod mutation;
 mod recovery;
 mod symlinks;
+mod variables;
 
-pub use env::EnvValueRef;
 #[cfg(feature = "vault-bridge")]
 pub use key_management::UnlockedContentKey;
 pub use key_management::{LockboxProtection, LockboxUnlock};
 pub use recovery::RecoveryScanner;
+pub use variables::VariableValueRef;
 
 /// Read-only diagnostics for an opened lockbox.
 ///
@@ -132,7 +132,7 @@ pub struct Lockbox {
     commit_auth_offset: u64,
     commit_auth_digest: [u8; 32],
     toc_root_offset: u64,
-    env_root_offset: u64,
+    variable_root_offset: u64,
     form_root_offset: u64,
     free_index_offset: u64,
     key_directory_offset: u64,
@@ -147,10 +147,10 @@ pub struct Lockbox {
     toc_root: Option<TocTreeNode>,
     toc_leaves: Vec<TocLeaf>,
     dirty_toc_paths: BTreeSet<LockboxPath>,
-    env_vars: RefCell<Option<BTreeMap<EnvName, EnvValue>>>,
-    env_root: Option<EnvTreeNode>,
-    env_leaves: Vec<EnvLeaf>,
-    dirty_env: bool,
+    variables: RefCell<Option<BTreeMap<VariableName, VariableValue>>>,
+    variable_root: Option<VariableTreeNode>,
+    variable_leaves: Vec<VariableLeaf>,
+    dirty_variables: bool,
     form_definitions: RefCell<Option<BTreeMap<String, FormDefinition>>>,
     form_records: RefCell<Option<BTreeMap<LockboxPath, FormRecord>>>,
     form_root: Option<FormTreeNode>,
@@ -182,7 +182,7 @@ impl Lockbox {
             commit_auth_offset: self.commit_auth_offset,
             commit_auth_digest: self.commit_auth_digest,
             toc_root_offset: self.toc_root_offset,
-            env_root_offset: self.env_root_offset,
+            variable_root_offset: self.variable_root_offset,
             form_root_offset: self.form_root_offset,
             free_index_offset: self.free_index_offset,
             key_directory_offset: self.key_directory_offset,
@@ -201,10 +201,10 @@ impl Lockbox {
             toc_root: self.toc_root.clone(),
             toc_leaves: self.toc_leaves.clone(),
             dirty_toc_paths: self.dirty_toc_paths.clone(),
-            env_vars: RefCell::new(self.env_vars.borrow().clone()),
-            env_root: self.env_root.clone(),
-            env_leaves: self.env_leaves.clone(),
-            dirty_env: self.dirty_env,
+            variables: RefCell::new(self.variables.borrow().clone()),
+            variable_root: self.variable_root.clone(),
+            variable_leaves: self.variable_leaves.clone(),
+            dirty_variables: self.dirty_variables,
             form_definitions: RefCell::new(self.form_definitions.borrow().clone()),
             form_records: RefCell::new(self.form_records.borrow().clone()),
             form_root: self.form_root.clone(),
@@ -272,7 +272,7 @@ impl Lockbox {
             commit_auth_offset: 0,
             commit_auth_digest: [0; 32],
             toc_root_offset: 0,
-            env_root_offset: 0,
+            variable_root_offset: 0,
             form_root_offset: 0,
             free_index_offset: 0,
             key_directory_offset: 0,
@@ -289,10 +289,10 @@ impl Lockbox {
             toc_root: None,
             toc_leaves: Vec::new(),
             dirty_toc_paths: BTreeSet::new(),
-            env_vars: RefCell::new(Some(BTreeMap::new())),
-            env_root: None,
-            env_leaves: Vec::new(),
-            dirty_env: false,
+            variables: RefCell::new(Some(BTreeMap::new())),
+            variable_root: None,
+            variable_leaves: Vec::new(),
+            dirty_variables: false,
             form_definitions: RefCell::new(Some(BTreeMap::new())),
             form_records: RefCell::new(Some(BTreeMap::new())),
             form_root: None,
@@ -381,7 +381,7 @@ impl Lockbox {
             commit_auth_offset: 0,
             commit_auth_digest: [0; 32],
             toc_root_offset: 0,
-            env_root_offset: 0,
+            variable_root_offset: 0,
             form_root_offset: 0,
             free_index_offset: 0,
             key_directory_offset: header_key_directory_offset,
@@ -396,10 +396,10 @@ impl Lockbox {
             toc_root: None,
             toc_leaves: Vec::new(),
             dirty_toc_paths: BTreeSet::new(),
-            env_vars: RefCell::new(None),
-            env_root: None,
-            env_leaves: Vec::new(),
-            dirty_env: false,
+            variables: RefCell::new(None),
+            variable_root: None,
+            variable_leaves: Vec::new(),
+            dirty_variables: false,
             form_definitions: RefCell::new(None),
             form_records: RefCell::new(None),
             form_root: None,
@@ -436,7 +436,7 @@ impl Lockbox {
             lockbox.key_directory_mirror_offsets = commit_root.key_directory_mirror_offsets;
             lockbox.key_directory_generation = commit_root.key_directory_generation;
             lockbox.free_index_offset = commit_root.free_index_root_offset;
-            lockbox.env_root_offset = commit_root.env_root_offset;
+            lockbox.variable_root_offset = commit_root.variable_root_offset;
             lockbox.form_root_offset = commit_root.form_root_offset;
             toc_root_offset = commit_root.toc_root_offset;
         } else if header_root_offset > 0 {
@@ -459,7 +459,7 @@ impl Lockbox {
             lockbox.key_directory_mirror_offsets = commit_root.key_directory_mirror_offsets;
             lockbox.key_directory_generation = commit_root.key_directory_generation;
             lockbox.free_index_offset = commit_root.free_index_root_offset;
-            lockbox.env_root_offset = commit_root.env_root_offset;
+            lockbox.variable_root_offset = commit_root.variable_root_offset;
             lockbox.form_root_offset = commit_root.form_root_offset;
             toc_root_offset = commit_root.toc_root_offset;
         } else if let Some((offset, commit_root)) = lockbox.find_latest_valid_commit_root()? {
@@ -469,7 +469,7 @@ impl Lockbox {
             lockbox.key_directory_mirror_offsets = commit_root.key_directory_mirror_offsets;
             lockbox.key_directory_generation = commit_root.key_directory_generation;
             lockbox.free_index_offset = commit_root.free_index_root_offset;
-            lockbox.env_root_offset = commit_root.env_root_offset;
+            lockbox.variable_root_offset = commit_root.variable_root_offset;
             lockbox.form_root_offset = commit_root.form_root_offset;
             toc_root_offset = commit_root.toc_root_offset;
         }
@@ -1326,8 +1326,8 @@ fn corrupt_recovery_report() -> RecoveryReport {
         partial_files: 0,
         corrupt_records: 1,
         toc_recovered: false,
-        env_recovered: false,
-        env_count: 0,
+        variables_recovered: false,
+        variable_count: 0,
         forms_recovered: false,
         form_definition_count: 0,
         form_record_count: 0,
@@ -1338,8 +1338,8 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Result<RecordKind> {
     match kind {
         PageObjectKind::PackedFileData | PageObjectKind::FileData => Ok(RecordKind::FilePage),
         PageObjectKind::Symlink => Ok(RecordKind::Symlink),
-        PageObjectKind::EnvSet => Ok(RecordKind::Env),
-        PageObjectKind::EnvDelete => Ok(RecordKind::EnvDelete),
+        PageObjectKind::VariableSet => Ok(RecordKind::Variable),
+        PageObjectKind::VariableDelete => Ok(RecordKind::VariableDelete),
         PageObjectKind::Delete => Ok(RecordKind::Delete),
         PageObjectKind::TocLeaf | PageObjectKind::TocInternal => Ok(RecordKind::TocNode),
         PageObjectKind::CommitRoot => Ok(RecordKind::CommitRoot),
@@ -1348,8 +1348,8 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Result<RecordKind> {
             Ok(RecordKind::FreeIndex)
         }
         PageObjectKind::KeyDirectory
-        | PageObjectKind::EnvLeaf
-        | PageObjectKind::EnvInternal
+        | PageObjectKind::VariableLeaf
+        | PageObjectKind::VariableInternal
         | PageObjectKind::FormLeaf
         | PageObjectKind::FormInternal => Err(Error::CorruptRecord),
     }

@@ -549,10 +549,10 @@ impl Lockbox {
             .filter(|entry| !entry.deleted)
             .cloned()
             .collect::<Vec<_>>();
-        let env = self.clone_all_env_values()?;
+        let variables = self.clone_all_variable_values()?;
         let forms = self.clone_all_form_state()?;
         if let Some(path) = self.storage.path().map(Path::to_path_buf) {
-            return self.compact_file_backed(path, entries, env, forms);
+            return self.compact_file_backed(path, entries, variables, forms);
         }
 
         let key = self.key.try_clone()?;
@@ -561,7 +561,7 @@ impl Lockbox {
             self.lockbox_id,
             self.compaction_options(),
         );
-        self.populate_compacted(&mut compacted, entries, env, forms)?;
+        self.populate_compacted(&mut compacted, entries, variables, forms)?;
         compacted.commit()?;
         *self = compacted;
         Ok(())
@@ -571,7 +571,10 @@ impl Lockbox {
         &mut self,
         path: PathBuf,
         entries: Vec<crate::toc_entry::TocEntry>,
-        env: std::collections::BTreeMap<crate::EnvName, crate::env_btree::EnvValue>,
+        variables: std::collections::BTreeMap<
+            crate::VariableName,
+            crate::variable_btree::VariableValue,
+        >,
         forms: (
             std::collections::BTreeMap<String, crate::form::FormDefinition>,
             std::collections::BTreeMap<crate::LockboxPath, crate::form::FormRecord>,
@@ -589,7 +592,7 @@ impl Lockbox {
                 self.lockbox_id,
                 options,
             )?;
-            self.populate_compacted(&mut compacted, entries, env, forms)?;
+            self.populate_compacted(&mut compacted, entries, variables, forms)?;
             compacted.commit()?;
             drop(compacted);
             replace_file_with_compacted(&temp_path, &path)?;
@@ -607,7 +610,10 @@ impl Lockbox {
         &self,
         compacted: &mut Lockbox,
         entries: Vec<crate::toc_entry::TocEntry>,
-        env: std::collections::BTreeMap<crate::EnvName, crate::env_btree::EnvValue>,
+        variables: std::collections::BTreeMap<
+            crate::VariableName,
+            crate::variable_btree::VariableValue,
+        >,
         forms: (
             std::collections::BTreeMap<String, crate::form::FormDefinition>,
             std::collections::BTreeMap<crate::LockboxPath, crate::form::FormRecord>,
@@ -617,8 +623,8 @@ impl Lockbox {
         compacted.key_directory_generation = self.key_directory_generation;
         compacted.dirty_key_directory = !compacted.key_slots.is_empty();
 
-        for (name, value) in env {
-            compacted.set_env_value(name, value)?;
+        for (name, value) in variables {
+            compacted.set_variable_value(name, value)?;
         }
         for (key, definition) in forms.0 {
             compacted.set_form_definition_value(key, definition)?;

@@ -92,10 +92,10 @@ export LOCKBOX_VAULT_DIR="$WORK_DIR/vault"
 
 "$LOCKBOX_BIN" vault init >/dev/null
 "$LOCKBOX_BIN" create "$WORK_DIR/test.lbox" >/dev/null
-"$LOCKBOX_BIN" unlock "$WORK_DIR/test.lbox" >/dev/null
+"$LOCKBOX_BIN" open "$WORK_DIR/test.lbox" >/dev/null
 
 before="$("$LOCKBOX_BIN" vault sessions --format tsv)"
-if ! grep -q '^unlocked' <<<"$before"; then
+if ! grep -q '^open' <<<"$before"; then
   echo "expected lockbox to be cached before sleep; sessions output:" >&2
   echo "$before" >&2
   exit 1

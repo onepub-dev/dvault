@@ -33,7 +33,7 @@ pub struct CachedLockbox {
 pub enum SecretActivityKind {
     Unlock,
     Open,
-    Env,
+    Variables,
     Form,
     Recovery,
     Vault,
@@ -42,9 +42,9 @@ pub enum SecretActivityKind {
 impl SecretActivityKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Unlock => "unlock",
+            Self::Unlock => "open",
             Self::Open => "open",
-            Self::Env => "env",
+            Self::Variables => "variables",
             Self::Form => "form",
             Self::Recovery => "recovery",
             Self::Vault => "vault",
@@ -55,7 +55,7 @@ impl SecretActivityKind {
         match self {
             Self::Unlock => 1,
             Self::Open => 2,
-            Self::Env => 3,
+            Self::Variables => 3,
             Self::Form => 4,
             Self::Recovery => 5,
             Self::Vault => 6,
@@ -588,7 +588,7 @@ fn kind_from_wire(value: u8) -> io::Result<SecretActivityKind> {
     match value {
         1 => Ok(SecretActivityKind::Unlock),
         2 => Ok(SecretActivityKind::Open),
-        3 => Ok(SecretActivityKind::Env),
+        3 => Ok(SecretActivityKind::Variables),
         4 => Ok(SecretActivityKind::Form),
         5 => Ok(SecretActivityKind::Recovery),
         6 => Ok(SecretActivityKind::Vault),

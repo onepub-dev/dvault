@@ -1,6 +1,6 @@
 # CI Secret Storage Comparison
 
-Lockbox env vars are useful when a team wants a portable encrypted bundle that
+Lockbox variables are useful when a team wants a portable encrypted bundle that
 travels with build inputs, test fixtures, or deployment artifacts. They are not
 a full replacement for an online secret-management service.
 
@@ -12,7 +12,7 @@ Good uses:
   encrypted artifact.
 - Share the same encrypted bundle across local development, CI, and air-gapped
   environments.
-- Keep paths, env names, and values private inside the lockbox until a workflow
+- Keep paths, variable names, and values private inside the lockbox until a workflow
   unlocks it.
 - Use password sharing plus public-key recipients for a small number of trusted
   operators or automation identities.
@@ -49,8 +49,8 @@ more self-contained, but does not provide organization-level vault governance.
 
 ## Design Implications
 
-- Keep env vars lazy-loaded and private: listing files must not reveal env
-  names, and env values must never appear in visualization output.
+- Keep variables lazy-loaded and private: listing files must not reveal variable names or values
+  names, and variable values must never appear in visualization output.
 - Provide shell-friendly export, but make workflows explicitly opt into using
   those values.
 - Do not pretend Lockbox replaces dynamic secret engines. Document Vault,

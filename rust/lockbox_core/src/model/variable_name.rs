@@ -2,83 +2,83 @@ use std::borrow::Borrow;
 use std::fmt;
 use std::ops::Deref;
 
-use crate::security::validate_env_name;
+use crate::security::validate_variable_name;
 use crate::{Error, Result};
 
-/// Validated environment variable name stored inside a lockbox.
+/// Validated variable name stored inside a lockbox.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EnvName(String);
+pub struct VariableName(String);
 
-impl EnvName {
-    /// Validate and canonicalize an environment variable name.
+impl VariableName {
+    /// Validate and canonicalize a variable name.
     ///
     /// Plain names such as `API_KEY` are canonicalized to `/API_KEY`. Absolute
-    /// names such as `/production/API_KEY` are treated as grouped env labels.
+    /// names such as `/production/API_KEY` are treated as grouped variable labels.
     ///
     /// Returns `Error::InvalidPath` if the name is empty, too long, has unsafe
     /// path structure, or contains components outside `[A-Za-z0-9_]`.
     pub fn new(name: impl AsRef<str>) -> Result<Self> {
-        Ok(Self(validate_env_name(name.as_ref())?))
+        Ok(Self(validate_variable_name(name.as_ref())?))
     }
 
-    /// Return the validated environment variable name.
+    /// Return the validated variable name.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Return true when this name matches a validated env-name pattern.
-    pub fn matches_pattern(&self, pattern: &EnvNamePattern) -> bool {
+    /// Return true when this name matches a validated variable-name pattern.
+    pub fn matches_pattern(&self, pattern: &VariableNamePattern) -> bool {
         pattern.matches(self)
     }
 }
 
-/// Validated env-name filter.
+/// Validated variable-name filter.
 ///
-/// Plain names such as `API_KEY` match only that root-level env var. Absolute
+/// Plain names such as `API_KEY` match only that root-level variable. Absolute
 /// paths such as `/production` match that path and its children. Glob patterns
-/// such as `/production/**` or `**/API_KEY` match canonical env paths.
+/// such as `/production/**` or `**/API_KEY` match canonical variable paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnvNamePattern {
-    mode: EnvNamePatternMode,
+pub struct VariableNamePattern {
+    mode: VariableNamePatternMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum EnvNamePatternMode {
+enum VariableNamePatternMode {
     Exact(String),
     Prefix(String),
     Glob(String),
 }
 
-impl EnvNamePattern {
-    /// Validate and canonicalize an env-name filter.
+impl VariableNamePattern {
+    /// Validate and canonicalize a variable-name filter.
     pub fn new(pattern: impl AsRef<str>) -> Result<Self> {
         let pattern = pattern.as_ref();
         if contains_glob(pattern) {
             return Ok(Self {
-                mode: EnvNamePatternMode::Glob(validate_env_glob(pattern)?),
+                mode: VariableNamePatternMode::Glob(validate_variable_glob(pattern)?),
             });
         }
-        let name = EnvName::new(pattern)?;
+        let name = VariableName::new(pattern)?;
         let mode = if pattern.starts_with('/') {
-            EnvNamePatternMode::Prefix(name.as_str().to_string())
+            VariableNamePatternMode::Prefix(name.as_str().to_string())
         } else {
-            EnvNamePatternMode::Exact(name.as_str().to_string())
+            VariableNamePatternMode::Exact(name.as_str().to_string())
         };
         Ok(Self { mode })
     }
 
-    /// Return true when the supplied env name matches this pattern.
-    pub fn matches(&self, name: &EnvName) -> bool {
+    /// Return true when the supplied variable name matches this pattern.
+    pub fn matches(&self, name: &VariableName) -> bool {
         match &self.mode {
-            EnvNamePatternMode::Exact(pattern) => name.as_str() == pattern,
-            EnvNamePatternMode::Prefix(pattern) => {
+            VariableNamePatternMode::Exact(pattern) => name.as_str() == pattern,
+            VariableNamePatternMode::Prefix(pattern) => {
                 name.as_str() == pattern
                     || name
                         .as_str()
                         .strip_prefix(pattern)
                         .is_some_and(|rest| rest.starts_with('/'))
             }
-            EnvNamePatternMode::Glob(pattern) => {
+            VariableNamePatternMode::Glob(pattern) => {
                 let name = name.as_str().strip_prefix('/').unwrap_or(name.as_str());
                 glob_matches(pattern, name)
             }
@@ -86,25 +86,25 @@ impl EnvNamePattern {
     }
 }
 
-impl AsRef<str> for EnvName {
+impl AsRef<str> for VariableName {
     fn as_ref(&self) -> &str {
         &self.0
     }
 }
 
-impl Borrow<str> for EnvName {
+impl Borrow<str> for VariableName {
     fn borrow(&self) -> &str {
         &self.0
     }
 }
 
-impl fmt::Display for EnvName {
+impl fmt::Display for VariableName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl Deref for EnvName {
+impl Deref for VariableName {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -112,7 +112,7 @@ impl Deref for EnvName {
     }
 }
 
-impl TryFrom<&str> for EnvName {
+impl TryFrom<&str> for VariableName {
     type Error = Error;
 
     fn try_from(value: &str) -> Result<Self> {
@@ -120,7 +120,7 @@ impl TryFrom<&str> for EnvName {
     }
 }
 
-impl TryFrom<String> for EnvName {
+impl TryFrom<String> for VariableName {
     type Error = Error;
 
     fn try_from(value: String) -> Result<Self> {
@@ -132,7 +132,7 @@ fn contains_glob(pattern: &str) -> bool {
     pattern.contains('*') || pattern.contains('?')
 }
 
-fn validate_env_glob(pattern: &str) -> Result<String> {
+fn validate_variable_glob(pattern: &str) -> Result<String> {
     if pattern.is_empty()
         || pattern == "/"
         || pattern.ends_with('/')

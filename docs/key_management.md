@@ -12,7 +12,7 @@ private store on their own computer.
 The intended sharing model is narrow and practical:
 
 - A user normally has one long-lived public/private recipient keypair.
-- A lockbox can be unlocked with the user's private key.
+- A lockbox can be opened with the user's private key.
 - A lockbox can also be shared with a one-time password.
 - A lockbox may contain both access methods at the same time.
 - Additional recipients of the lockbox can be added with their public key.
@@ -41,7 +41,7 @@ The user creates a lockbox and unlocks it with their private key:
 recipient private key -> unwrap content key -> open lockbox
 ```
 
-The same recipient keypair can unlock many lockboxes. The user does not need a
+The same recipient keypair can open many lockboxes. The user does not need a
 new keypair per lockbox.
 
 ### Password Sharing
@@ -73,7 +73,7 @@ know a shared password.
 
 ## Key Slots
 
-A key slot is metadata that can unlock the content key.
+A key slot is metadata that can open the content key.
 
 Supported slot types:
 
@@ -97,7 +97,7 @@ Recipient slots must also avoid stable recipient identifiers. The local vault
 may use names such as `alice`, `prod-team`, or an email address to help the
 local user manage trusted public keys, but those names are local-only. Adding a
 trusted recipient to a lockbox resolves the local name to a public key and
-writes only the slot material needed for unlock. The shared lockbox must not
+writes only the slot material needed for open. The shared lockbox must not
 receive the vault alias.
 
 ML-KEM recipient slots store encapsulation ciphertext and the encrypted content
@@ -113,10 +113,10 @@ Key slots are stored in clear-text key-directory metadata pages inside the
 lockbox. The fixed header stores the byte offset of the current primary key
 directory page. When key slots change, the current directory is written three
 times through the page cache: a primary copy and two mirrors. The commit root
-records the mirror offsets and key-directory generation. Ordinary file, env,
+records the mirror offsets and key-directory generation. Ordinary file, variable,
 symlink, and TOC commits keep referencing the existing key-directory pages.
 Because the key directory is a clear-text page class, password and recipient
-unlock should read current key-directory pages through the page-cache
+open should read current key-directory pages through the page-cache
 read/decode boundary. Raw byte scanning is reserved for damaged-header or
 missing-root recovery.
 
@@ -173,9 +173,9 @@ let lockbox = Lockbox::open_file(path, LockboxUnlock::RecipientKeyPair(my_privat
 Labels or fingerprints can be added later as optional hints, but they are not
 needed for correctness.
 
-## Unlock Cache
+## Open Cache
 
-The CLI uses an agent model for sudo-like unlock caching. The core library does
+The CLI uses an agent model for sudo-like open caching. The core library does
 not cache passwords or keys.
 
 ```text
@@ -189,7 +189,7 @@ lockbox list secrets.lbox
   -> ask the agent for that content key
   -> extend the TTL on successful use
 
-lockbox lock secrets.lbox
+lockbox close secrets.lbox
   -> remove that content key from the agent
 ```
 
@@ -218,13 +218,13 @@ weaker interop path because the host runtime may retain extra copies outside
 Rust's control.
 
 Passwords supplied through process environment variables may also exist in
-OS/process environment storage outside the wrapper, so env-based passwords
+OS/process environment storage outside the wrapper, so process-variable passwords
 remain a testing and automation escape hatch rather than the preferred
 interactive path. Rust code that supports those variables must use
 `SecretString::try_from_env` rather than first materializing the value as a normal
 `String`.
 
-Core key handling follows the same rule. Long-lived content keys and unlocked
+Core key handling follows the same rule. Long-lived content keys and opened
 content-key return values are stored in a secret wrapper that zeroizes memory on
 drop and redacts debug output. Temporary derived content/wrapping keys are also
 zeroized after use where the Rust APIs allow it. This is hardening against
@@ -270,7 +270,7 @@ platform vault directory
        `-- unlocks the vault content key
 
     encrypted vault contents
-    |-- secure env pages
+    |-- secure variable pages
     |   `-- LOCKBOX_VAULT_PRIVATE_KEY_<HEX_NAME>
     |       `-- hex encoded ML-KEM private seed
     |
@@ -292,8 +292,8 @@ uses a fixed internal record layout:
 
 ```text
 local-vault.lbox
-  secret env LOCKBOX_VAULT_PRIVATE_KEY_<HEX_NAME>
-      Hex encoded ML-KEM private seed stored in secure env pages.
+  secret variable LOCKBOX_VAULT_PRIVATE_KEY_<HEX_NAME>
+      Hex encoded ML-KEM private seed stored in secure variable pages.
       <HEX_NAME> is the upper-case hex encoding of the user-visible key name.
 
   /trusted_recipients/<name>.pub
@@ -303,7 +303,7 @@ local-vault.lbox
       Encrypted key-directory backup for the referenced lockbox UUID.
 ```
 
-The private-key records intentionally use the secure env-page path rather than
+The private-key records intentionally use the secure variable-page path rather than
 ordinary file records. Loading a vault private key therefore asks the page cache
 for a secure page and materializes the seed into `SecretVec`, not `Vec<u8>`.
 Trusted recipient keys and key-directory backups are not private-key seed
@@ -324,7 +324,7 @@ automation. Trusted public keys and key-directory backups are records inside
 the vault lockbox.
 
 When loaded, the long-lived ML-KEM private seed is held in `SecretVec`.
-Unlock/export operations derive the ML-KEM decapsulation key only for the
+Open/export operations derive the ML-KEM decapsulation key only for the
 duration of the operation. Export remains explicit plaintext output and is not
 protected after it is written to a caller-owned buffer or file.
 
@@ -358,7 +358,7 @@ Current/target commands:
 lockbox create secrets.lbox
 lockbox open secrets.lbox
 lockbox list secrets.lbox
-lockbox lock secrets.lbox
+lockbox close secrets.lbox
 
 lockbox list-keys secrets.lbox
 lockbox add-recipient secrets.lbox recipient.pub

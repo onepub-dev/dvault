@@ -1529,7 +1529,7 @@ Conclusion:
 
 Description: measured the disk-backed path after moving dirty page writes to
 commit time, renaming page terminology, adding visualization support, and
-adding delete/env redaction that zeroes the original page data before freed
+adding delete/variable redaction that zeroes the original page data before freed
 pages are reused. This run used the file backend rather than the memory backend.
 
 Validation before profiling:
@@ -1619,7 +1619,7 @@ Conclusion:
 - The dirty page cache now has the intended transaction shape: modified pages
   are staged in memory, COW happens at commit, and pages are written once when
   commit flushes the dirty set.
-- Redaction adds real work to commits because deleted/replaced file and env data
+- Redaction adds real work to commits because deleted/replaced file and variable data
   is zeroed before the old physical page is returned to the free index. That is
   the right production behavior, but it raises commit cost compared with the
   earlier less secure path.
@@ -1738,7 +1738,7 @@ Conclusion:
 Description: added explicit workload profiles and wired CLI-created initial
 imports to `BulkImport`. In that profile, append-only file-data pages are
 flushed and dropped from the decoded-page cache as they are written. Metadata,
-redaction, TOC, env, free-index, key-directory, and commit-root writes keep the
+redaction, TOC, variable, free-index, key-directory, and commit-root writes keep the
 normal commit-time cache policy.
 
 Verification:
@@ -1765,7 +1765,7 @@ Criterion results:
 | toc_structure/leaf_split_append_5000 | 30.96ms | no change |
 | toc_structure/leaf_merge_delete_5000 | 40.14ms | no change |
 | metadata_operations/rename_16m_file_commit | 5.69ms | no change |
-| metadata_operations/list_env_1000 | 575.4us | within noise |
+| metadata_operations/list_variables_1000 | 575.4us | within noise |
 | metadata_operations/compact_16m_file_after_delete | 79.13ms | no change |
 
 100 MiB directory comparison used 4,096 files of 25,600 bytes each:
@@ -1787,7 +1787,7 @@ non-tail file-data pages are not left mostly empty.
 ## 2026-05-15 - Secure String Store Benchmark and Protection Batching
 
 Description: added Criterion coverage for the page-pooled secure string store
-after introducing secret env vars. The benchmark separates secure string
+after introducing secret variables. The benchmark separates secure string
 creation, byte-wise append, slice append, and repeated reads with either one
 guard per secret or one shared access guard. The first profile showed avoidable
 page-protection churn around canary checks, data writes, zeroization, and free.

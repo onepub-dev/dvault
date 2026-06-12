@@ -1,6 +1,6 @@
 # Lockbox Session Agent
 
-The Lockbox session agent caches unlocked lockbox content keys in-memory for the
+The Lockbox session agent caches opened lockbox content keys in-memory for the
 duration of an interactive session. It is a local, per-user process that avoids
 re-prompting for passphrases while reducing exposure of decrypted keys on disk.
 
@@ -64,9 +64,9 @@ The same transport also supports control messages to track command activity:
 
 `SecretActivityKind` values currently include:
 
-- `unlock`
 - `open`
-- `env`
+- `open`
+- `variables`
 - `form`
 - `recovery`
 - `vault`
@@ -91,8 +91,8 @@ those processes if suspend is requested.
 - TTL is validated as positive.
 - Inactive cache entries are pruned on accept loop and when servicing requests.
 - Cache-hit extends expiry by another TTL period.
-- `lockbox vault sessions lock-all` clears all cached entries from the CLI side.
-- `lockbox vault sessions lock <lockbox>` clears one path from the CLI side.
+- `lockbox vault sessions close-all` clears all cached entries from the CLI side.
+- `lockbox vault sessions close <lockbox>` clears one path from the CLI side.
 
 ## Platform notes
 
@@ -148,15 +148,15 @@ Without it, platform logging is used with a file fallback:
 
 The user-facing session controls live under `lockbox vault sessions`:
 
-- `lockbox vault sessions` — list currently unlocked sessions.
-- `lockbox vault sessions lock <lockbox>` — lock one lockbox.
-- `lockbox vault sessions lock-all` — lock everything.
+- `lockbox vault sessions` — list currently opened sessions.
+- `lockbox vault sessions close <lockbox>` — close one lockbox.
+- `lockbox vault sessions close-all` — close everything.
 - `lockbox vault sessions stop` — stop the agent process.
 
-Session-related metadata is also exposed under `lockbox vault sessions auto-unlock`
+Session-related metadata is also exposed under `lockbox vault sessions auto-open`
 for password-helper integration (`status`, `enable`, `disable`, `forget`).
 
-`lockbox doctor` includes session-agent diagnostics and can help when auto-unlock
+`lockbox doctor` includes session-agent diagnostics and can help when auto-open
 or transport behavior looks wrong.
 
 ## Security notes
@@ -179,4 +179,4 @@ Alternative names:
 - Lockbox Key Relay
 - Lockbox Session Guard
 - reVault Cache Sentinel
-- unlock Cache Sentinel
+- open Cache Sentinel

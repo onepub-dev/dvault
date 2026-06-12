@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use lockbox_core::{
-    EnvName, ExtractPolicy, FormFieldDefinition, FormFieldKind, ListOptions, Lockbox, LockboxPath,
-    LockboxProtection, SecretString, SecretVec,
+    ExtractPolicy, FormFieldDefinition, FormFieldKind, ListOptions, Lockbox, LockboxPath,
+    LockboxProtection, SecretString, SecretVec, VariableName,
 };
 use lockbox_secure::read_access as secure_read_access;
 use std::fs;
@@ -16,8 +16,8 @@ fn p(path: impl AsRef<str>) -> LockboxPath {
     LockboxPath::new(path).unwrap()
 }
 
-fn env(name: impl AsRef<str>) -> EnvName {
-    EnvName::new(name).unwrap()
+fn variable(name: impl AsRef<str>) -> VariableName {
+    VariableName::new(name).unwrap()
 }
 
 fn bench_small_files(c: &mut Criterion) {
@@ -293,20 +293,20 @@ fn bench_metadata_operations(c: &mut Criterion) {
         );
     });
 
-    group.bench_function("list_env_1000", |b| {
+    group.bench_function("list_variables_1000", |b| {
         b.iter_batched(
             || {
                 let mut lockbox = new_lockbox();
                 for i in 0..1000 {
                     lockbox
-                        .set_env(&env(format!("LOCKBOX_ENV_{i:04}")), "value")
+                        .set_variable(&variable(format!("LOCKBOX_VARIABLE_{i:04}")), "value")
                         .unwrap();
                 }
                 lockbox.commit().unwrap();
                 lockbox
             },
             |lockbox| {
-                let names = lockbox.list_env().unwrap();
+                let names = lockbox.list_variables().unwrap();
                 black_box(names.len());
             },
             BatchSize::SmallInput,

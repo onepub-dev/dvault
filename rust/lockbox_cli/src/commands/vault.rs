@@ -116,7 +116,7 @@ fn auto_unlock(args: &[String]) -> CliResult<()> {
             Ok(())
         }
         _ => Err(Error::InvalidInput(format!(
-            "unknown vault sessions auto-unlock command: {command}"
+            "unknown vault sessions auto-open command: {command}"
         ))
         .into()),
     }
@@ -187,13 +187,13 @@ fn init(args: &[String]) -> CliResult<()> {
                 Ok(_) => {}
                 Err(Error::InvalidKey) => {
                     return Err(cli_error(
-                        "vault unlock failed: check the vault pass phrase. If the pass phrase is correct, the local vault file may be damaged",
+                        "vault open failed: check the vault pass phrase. If the pass phrase is correct, the local vault file may be damaged",
                     ));
                 }
                 Err(err) => return Err(err.into()),
             };
             remember_default_vault_password(&password)?;
-            println!("Vault unlocked successfully.");
+            println!("Vault opened successfully.");
             return Ok(());
         }
         println!("No changes made. Use `lockbox vault init --verify` to validate it.");
@@ -925,15 +925,15 @@ fn identity_generation_status(status: IdentityGenerationStatus) -> &'static str 
 
 fn sessions(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
-        Some("lock") => {
+        Some("close") => {
             let lockbox_path = require_arg(args, 1, "lockbox")?;
             local_vault().lock_lockbox(lockbox_path)?;
-            println!("Lockbox session locked: {lockbox_path}");
+            println!("Lockbox session closed: {lockbox_path}");
             return Ok(());
         }
-        Some("lock-all") => {
+        Some("close-all") => {
             local_vault().lock_all()?;
-            println!("All lockbox sessions locked.");
+            println!("All lockbox sessions closed.");
             return Ok(());
         }
         Some("stop") => {
@@ -941,7 +941,7 @@ fn sessions(args: &[String]) -> CliResult<()> {
             println!("Session agent stopped.");
             return Ok(());
         }
-        Some("auto-unlock") => return auto_unlock(&args[1..]),
+        Some("auto-open") => return auto_unlock(&args[1..]),
         _ => {}
     }
     let (_, format) = output_format_from_args(args)?;
@@ -950,7 +950,7 @@ fn sessions(args: &[String]) -> CliResult<()> {
         .into_iter()
         .map(|lockbox| {
             vec![
-                "unlocked".to_string(),
+                "open".to_string(),
                 lockbox.path.unwrap_or_default(),
                 lockbox.id,
             ]
@@ -1019,7 +1019,7 @@ fn export_key(args: &[String]) -> CliResult<()> {
 fn confirm_private_key_removal(name: &str) -> CliResult<bool> {
     eprintln!("Remove vault identity '{name}'?");
     eprintln!(
-        "Lockboxes that only this private key can unlock may become inaccessible from this vault."
+        "Lockboxes that only this private key can open may become inaccessible from this vault."
     );
     eprint!("Type 'yes' to remove it: ");
     io::stderr().flush()?;

@@ -3,7 +3,9 @@ use std::{
     io::{Read, Write},
 };
 
-use lockbox_core::{EnvName, EnvNamePattern, EnvSensitivity, EnvValueRef, Error, SecretString};
+use lockbox_core::{
+    Error, SecretString, VariableName, VariableNamePattern, VariableSensitivity, VariableValueRef,
+};
 
 use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
 use super::help::usage;
@@ -11,26 +13,26 @@ use super::output::{output_format_from_args, print_records};
 use crate::secret_prompt::prompt_secret;
 
 pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
-    let subcommand = require_arg(args, 0, "env command")?;
+    let subcommand = require_arg(args, 0, "variables command")?;
     let lockbox_path = require_arg(args, 1, "lockbox")?;
     match subcommand {
-        "set" => set_env(lockbox_path, &args[2..], access)?,
-        "get" => get_env(lockbox_path, &args[2..], access)?,
+        "set" => set_variable(lockbox_path, &args[2..], access)?,
+        "get" => get_variable(lockbox_path, &args[2..], access)?,
         "list" => {
             let (args, format) = output_format_from_args(&args[2..])?;
             let pattern = match args.as_slice() {
                 [] => None,
-                [pattern] => Some(EnvNamePattern::new(pattern)?),
+                [pattern] => Some(VariableNamePattern::new(pattern)?),
                 _ => {
                     return Err(Error::InvalidInput(
-                        "env list accepts at most one path or glob pattern".to_string(),
+                        "variables list accepts at most one path or glob pattern".to_string(),
                     )
                     .into());
                 }
             };
             let lb = open_existing(lockbox_path, access)?;
             let mut rows = Vec::new();
-            for (name, sensitivity) in lb.list_env()? {
+            for (name, sensitivity) in lb.list_variables()? {
                 if pattern
                     .as_ref()
                     .is_some_and(|pattern| !name.matches_pattern(pattern))
@@ -45,22 +47,22 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
             print_records(&["name", "sensitivity"], rows, format)?;
         }
         "export" => {
-            let request = EnvExportRequest::parse(&args[2..])?;
+            let request = VariableExportRequest::parse(&args[2..])?;
             let lb = open_existing(lockbox_path, access)?;
-            lb.visit_env(|name, value| match value {
-                EnvValueRef::Normal(value) => {
+            lb.visit_variables(|name, value| match value {
+                VariableValueRef::Normal(value) => {
                     if let Some(name) = request.export_name(name.as_str()) {
                         println!("{}", request.format.format_assignment(name, value));
                     }
                     Ok(())
                 }
-                EnvValueRef::Secret(_) => Ok(()),
+                VariableValueRef::Secret(_) => Ok(()),
             })?;
         }
         "rm" => {
-            let name = EnvName::new(require_arg(args, 2, "name")?)?;
+            let name = VariableName::new(require_arg(args, 2, "name")?)?;
             let mut lb = open_existing(lockbox_path, access)?;
-            lb.delete_env(&name)?;
+            lb.delete_variable(&name)?;
             lb.commit()?;
         }
         _ => usage(false),
@@ -68,79 +70,82 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
     Ok(())
 }
 
-fn set_env(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()> {
-    let request = EnvSetRequest::parse(args)?;
+fn set_variable(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()> {
+    let request = VariableSetRequest::parse(args)?;
     let mut lb = open_or_create(lockbox_path, access)?;
-    let existing = lb.env_sensitivity(&request.name)?;
+    let existing = lb.variable_sensitivity(&request.name)?;
     let effective_sensitivity = existing.unwrap_or(if request.secret {
-        EnvSensitivity::Secret
+        VariableSensitivity::Secret
     } else {
-        EnvSensitivity::Normal
+        VariableSensitivity::Normal
     });
 
     if let Some(existing) = existing {
-        if request.secret && existing == EnvSensitivity::Normal {
+        if request.secret && existing == VariableSensitivity::Normal {
             return Err(Error::InvalidOperation(
-                "environment variable is not secret; delete and recreate it".to_string(),
+                "variable is not secret; delete and recreate it".to_string(),
             )
             .into());
         }
-        if !request.secret && existing == EnvSensitivity::Secret && request.positional.is_some() {
+        if !request.secret
+            && existing == VariableSensitivity::Secret
+            && request.positional.is_some()
+        {
             return Err(Error::InvalidInput(
-                "secret environment variables require an explicit value source".to_string(),
+                "secret variables require an explicit value source".to_string(),
             )
             .into());
         }
     }
 
     match effective_sensitivity {
-        EnvSensitivity::Normal => {
+        VariableSensitivity::Normal => {
             let value = request.read_normal_value()?;
-            lb.set_env(&request.name, &value)?;
+            lb.set_variable(&request.name, &value)?;
         }
-        EnvSensitivity::Secret => {
+        VariableSensitivity::Secret => {
             if request.positional.is_some() {
                 return Err(Error::InvalidInput(
-                    "secret environment variables cannot use positional values".to_string(),
+                    "secret variables cannot use positional values".to_string(),
                 )
                 .into());
             }
             let value = request.read_secret_value()?;
-            lb.set_secret_env(&request.name, &value)?;
+            lb.set_secret_variable(&request.name, &value)?;
         }
     }
     lb.commit()?;
     Ok(())
 }
 
-fn get_env(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()> {
-    let request = EnvGetRequest::parse(args)?;
-    let name = EnvName::new(&request.name)?;
+fn get_variable(lockbox_path: &str, args: &[String], access: &Access) -> CliResult<()> {
+    let request = VariableGetRequest::parse(args)?;
+    let name = VariableName::new(&request.name)?;
     let lb = open_existing(lockbox_path, access)?;
     if request.secret {
-        if let Some(write_result) = lb.with_secret_env(&name, |value| {
+        if let Some(write_result) = lb.with_secret_variable(&name, |value| {
             value.with_bytes(|value| request.write_value_bytes(value))
         })? {
             write_result??;
         } else {
-            return Err(Error::NotFound(format!("env {name}")).into());
+            return Err(Error::NotFound(format!("variable {name}")).into());
         }
-    } else if let Some(value) = lb.get_env(&name)? {
+    } else if let Some(value) = lb.get_variable(&name)? {
         request.write_value(&value)?;
     } else {
-        return Err(Error::NotFound(format!("env {name}")).into());
+        return Err(Error::NotFound(format!("variable {name}")).into());
     }
     Ok(())
 }
 
-struct EnvGetRequest {
+struct VariableGetRequest {
     secret: bool,
     name: String,
     output: Option<String>,
     overwrite: bool,
 }
 
-impl EnvGetRequest {
+impl VariableGetRequest {
     fn parse(args: &[String]) -> CliResult<Self> {
         let mut secret = false;
         let mut name = None;
@@ -163,15 +168,16 @@ impl EnvGetRequest {
                 "--overwrite" => overwrite = true,
                 value if name.is_none() => name = Some(value.to_string()),
                 _ => {
-                    return Err(
-                        Error::InvalidInput("unexpected env get argument".to_string()).into(),
-                    );
+                    return Err(Error::InvalidInput(
+                        "unexpected variables get argument".to_string(),
+                    )
+                    .into());
                 }
             }
             index += 1;
         }
         let Some(name) = name else {
-            return Err(Error::InvalidInput("missing env name".to_string()).into());
+            return Err(Error::InvalidInput("missing variable name".to_string()).into());
         };
         if overwrite && output.is_none() {
             return Err(Error::InvalidInput("--overwrite requires --output".to_string()).into());
@@ -245,14 +251,14 @@ fn set_private_output_permissions(_file: &fs::File) -> CliResult<()> {
     Ok(())
 }
 
-struct EnvSetRequest {
-    name: EnvName,
+struct VariableSetRequest {
+    name: VariableName,
     secret: bool,
     positional: Option<String>,
     source: Option<ValueSource>,
 }
 
-impl EnvSetRequest {
+impl VariableSetRequest {
     fn parse(args: &[String]) -> CliResult<Self> {
         let mut name = None;
         let mut positional = None;
@@ -303,22 +309,23 @@ impl EnvSetRequest {
                         ),
                     )?;
                 }
-                value if name.is_none() => name = Some(EnvName::new(value)?),
+                value if name.is_none() => name = Some(VariableName::new(value)?),
                 value if positional.is_none() => positional = Some(value.to_string()),
                 _ => {
-                    return Err(
-                        Error::InvalidInput("unexpected env set argument".to_string()).into(),
-                    );
+                    return Err(Error::InvalidInput(
+                        "unexpected variables set argument".to_string(),
+                    )
+                    .into());
                 }
             }
             index += 1;
         }
         let Some(name) = name else {
-            return Err(Error::InvalidInput("missing env name".to_string()).into());
+            return Err(Error::InvalidInput("missing variable name".to_string()).into());
         };
         if source.is_some() == positional.is_some() {
             return Err(Error::InvalidInput(
-                "env set requires exactly one value source".to_string(),
+                "variables set requires exactly one value source".to_string(),
             )
             .into());
         }
@@ -363,7 +370,7 @@ impl EnvSetRequest {
             ValueSource::Value(value) => {
                 let _ = value;
                 Err(Error::InvalidInput(
-                    "--value is not accepted for secret env values; use --stdin, --file, --interactive, or --from-env"
+                    "--value is not accepted for secret variable values; use --stdin, --file, --interactive, or --from-env"
                         .to_string(),
                 )
                 .into())
@@ -409,38 +416,40 @@ enum ValueSource {
     FromEnv(String),
 }
 
-enum EnvExportFormat {
+enum VariableExportFormat {
     Posix,
     PowerShell,
     Cmd,
     Json,
 }
 
-struct EnvExportRequest {
+struct VariableExportRequest {
     path: String,
-    format: EnvExportFormat,
+    format: VariableExportFormat,
 }
 
-impl EnvExportRequest {
+impl VariableExportRequest {
     fn parse(args: &[String]) -> CliResult<Self> {
         let mut path = "/".to_string();
         let mut saw_path = false;
-        let mut format = EnvExportFormat::Posix;
+        let mut format = VariableExportFormat::Posix;
         let mut index = 0;
         while index < args.len() {
             match args[index].as_str() {
                 "--format" => {
                     index += 1;
-                    format = EnvExportFormat::parse_value(args.get(index).map(String::as_str))?;
+                    format =
+                        VariableExportFormat::parse_value(args.get(index).map(String::as_str))?;
                 }
                 value if !saw_path => {
                     path = validate_export_path(value)?;
                     saw_path = true;
                 }
                 _ => {
-                    return Err(
-                        Error::InvalidInput("unexpected env export argument".to_string()).into(),
-                    );
+                    return Err(Error::InvalidInput(
+                        "unexpected variables export argument".to_string(),
+                    )
+                    .into());
                 }
             }
             index += 1;
@@ -465,16 +474,17 @@ impl EnvExportRequest {
     }
 }
 
-impl EnvExportFormat {
+impl VariableExportFormat {
     fn parse_value(value: Option<&str>) -> CliResult<Self> {
         match value {
             Some("posix") => Ok(Self::Posix),
             Some("powershell") => Ok(Self::PowerShell),
             Some("cmd") => Ok(Self::Cmd),
             Some("json") => Ok(Self::Json),
-            Some(value) => {
-                Err(Error::InvalidInput(format!("unsupported env export format: {value}")).into())
-            }
+            Some(value) => Err(Error::InvalidInput(format!(
+                "unsupported variables export format: {value}"
+            ))
+            .into()),
             None => Err(Error::InvalidInput("missing --format argument".to_string()).into()),
         }
     }
@@ -497,24 +507,25 @@ fn validate_export_path(path: &str) -> CliResult<String> {
     if path == "/" {
         return Ok(path.to_string());
     }
-    let name = EnvName::new(path)?;
+    let name = VariableName::new(path)?;
     Ok(name.as_str().to_string())
 }
 
 fn set_source(target: &mut Option<ValueSource>, source: ValueSource) -> CliResult<()> {
     if target.is_some() {
-        return Err(
-            Error::InvalidInput("env set accepts exactly one value source".to_string()).into(),
-        );
+        return Err(Error::InvalidInput(
+            "variables set accepts exactly one value source".to_string(),
+        )
+        .into());
     }
     *target = Some(source);
     Ok(())
 }
 
-fn sensitivity_name(sensitivity: EnvSensitivity) -> &'static str {
+fn sensitivity_name(sensitivity: VariableSensitivity) -> &'static str {
     match sensitivity {
-        EnvSensitivity::Normal => "normal",
-        EnvSensitivity::Secret => "secret",
+        VariableSensitivity::Normal => "normal",
+        VariableSensitivity::Secret => "secret",
     }
 }
 

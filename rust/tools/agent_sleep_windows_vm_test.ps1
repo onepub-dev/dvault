@@ -69,12 +69,12 @@ Run-Step "vault init" { & $LockboxBin vault init | Out-Null }
 
 Run-Step "create" { & $LockboxBin create "$WorkDir\test.lbox" | Out-Null }
 
-Run-Step "unlock" { & $LockboxBin unlock "$WorkDir\test.lbox" | Out-Null }
+Run-Step "open" { & $LockboxBin open "$WorkDir\test.lbox" | Out-Null }
 
 Write-Host "stage: sessions before"
 $before = & $LockboxBin vault sessions --format tsv
 if ($LASTEXITCODE -ne 0) { throw "vault sessions failed before sleep" }
-Assert-Contains $before "unlocked" "expected lockbox to be cached before sleep"
+Assert-Contains $before "open" "expected lockbox to be cached before sleep"
 Write-Host "stage-ok: sessions before"
 
 $log = Get-Content -Raw $env:LOCKBOX_SESSION_AGENT_LOG

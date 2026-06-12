@@ -2,8 +2,8 @@
 pub(crate) enum RecordKind {
     Delete = 2,
     Symlink = 4,
-    Env = 5,
-    EnvDelete = 6,
+    Variable = 5,
+    VariableDelete = 6,
     FilePage = 7,
     TocNode = 8,
     CommitRoot = 9,

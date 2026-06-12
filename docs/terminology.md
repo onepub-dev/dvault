@@ -28,7 +28,7 @@ the lockbox file format and operations on an opened lockbox.
 `lockbox_vault::VaultDirectory` is the native single-file vault store. It keeps
 user-local private keys, trusted recipient public keys, and local key-directory
 backups inside `local-vault.lbox`, protected by the normal password-based
-lockbox mechanism. The unlock agent remains in-memory and separate from this
+lockbox mechanism. The open agent remains in-memory and separate from this
 persistent vault file.
 
 ## Lockbox
@@ -38,7 +38,7 @@ encrypted data, encrypted metadata, key slots, the TOC, recovery data, and the
 free-space index.
 
 A lockbox is designed to be copied, uploaded, downloaded, emailed, backed up, or
-served by a web service. It should contain enough unlock metadata for intended
+served by a web service. It should contain enough open metadata for intended
 recipients to open it using a password slot, public-key recipient slot, or other
 supported access method.
 

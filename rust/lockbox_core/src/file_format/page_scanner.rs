@@ -158,16 +158,16 @@ fn record_kind_from_page_object(kind: PageObjectKind) -> Result<RecordKind> {
     Ok(match kind {
         PageObjectKind::PackedFileData | PageObjectKind::FileData => RecordKind::FilePage,
         PageObjectKind::Symlink => RecordKind::Symlink,
-        PageObjectKind::EnvSet => RecordKind::Env,
-        PageObjectKind::EnvDelete => RecordKind::EnvDelete,
+        PageObjectKind::VariableSet => RecordKind::Variable,
+        PageObjectKind::VariableDelete => RecordKind::VariableDelete,
         PageObjectKind::Delete => RecordKind::Delete,
         PageObjectKind::TocLeaf | PageObjectKind::TocInternal => RecordKind::TocNode,
         PageObjectKind::CommitRoot => RecordKind::CommitRoot,
         PageObjectKind::CommitAuth => RecordKind::CommitAuth,
         PageObjectKind::FreeIndexLeaf | PageObjectKind::FreeIndexInternal => RecordKind::FreeIndex,
         PageObjectKind::KeyDirectory
-        | PageObjectKind::EnvLeaf
-        | PageObjectKind::EnvInternal
+        | PageObjectKind::VariableLeaf
+        | PageObjectKind::VariableInternal
         | PageObjectKind::FormLeaf
         | PageObjectKind::FormInternal => return Err(Error::CorruptRecord),
     })

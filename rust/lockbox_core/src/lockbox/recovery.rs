@@ -5,7 +5,6 @@ use super::Lockbox;
 use crate::commit_auth::{commit_auth_message, decode_commit_auth};
 use crate::constants::DEFAULT_MAX_FILE_BYTES;
 use crate::crypto::strong_checksum;
-use crate::env_btree::{decode_env_node_secure, EnvNode, EnvValue};
 use crate::file_format::{
     decode_compression_frame_segment_payload_view, decode_index_records, decode_symlink_payload,
     decode_toc_node, read_header,
@@ -18,9 +17,10 @@ use crate::page_scanner::PageScanner;
 use crate::record::{DecodedRecord, RecordKind};
 use crate::signing::verify_commit_signatures;
 use crate::toc_entry::TocEntry;
+use crate::variable_btree::{decode_variable_node_secure, VariableNode, VariableValue};
 use crate::{
-    EnvName, Error, FormDefinition, FormRecord, FormTypeId, LockboxEntry, LockboxPath,
-    RecoveryReport, Result,
+    Error, FormDefinition, FormRecord, FormTypeId, LockboxEntry, LockboxPath, RecoveryReport,
+    Result, VariableName,
 };
 use zeroize::Zeroizing;
 
@@ -41,8 +41,8 @@ impl RecoveryScanner {
                 partial_files: 0,
                 corrupt_records: 1,
                 toc_recovered: false,
-                env_recovered: false,
-                env_count: 0,
+                variables_recovered: false,
+                variable_count: 0,
                 forms_recovered: false,
                 form_definition_count: 0,
                 form_record_count: 0,
@@ -139,8 +139,8 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
         partial_files,
         corrupt_records,
         toc_recovered,
-        env_recovered: metadata.env.is_some(),
-        env_count: metadata.env.as_ref().map_or(0, BTreeMap::len),
+        variables_recovered: metadata.variables.is_some(),
+        variable_count: metadata.variables.as_ref().map_or(0, BTreeMap::len),
         forms_recovered: metadata.forms.is_some(),
         form_definition_count: metadata
             .forms
@@ -208,9 +208,9 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
             }
         }
     }
-    if let Some(env) = metadata.env {
-        for (name, value) in env {
-            recovered.set_env_value(name, value)?;
+    if let Some(variables) = metadata.variables {
+        for (name, value) in variables {
+            recovered.set_variable_value(name, value)?;
         }
     }
     if let Some(forms) = metadata.forms {
@@ -255,7 +255,7 @@ fn header_commit_root_for_recovery(
 
 #[derive(Default)]
 struct RecoveredMetadata {
-    env: Option<BTreeMap<EnvName, EnvValue>>,
+    variables: Option<BTreeMap<VariableName, VariableValue>>,
     forms: Option<RecoveredForms>,
 }
 
@@ -269,27 +269,27 @@ fn recover_metadata_from_commit_root(
     commit_root: &crate::commit_root::CommitRoot,
 ) -> RecoveredMetadata {
     RecoveredMetadata {
-        env: recover_env_from_root(scanner, commit_root.env_root_offset).ok(),
+        variables: recover_variables_from_root(scanner, commit_root.variable_root_offset).ok(),
         forms: recover_forms_from_root(scanner, commit_root.form_root_offset).ok(),
     }
 }
 
-fn recover_env_from_root(
+fn recover_variables_from_root(
     scanner: &PageScanner<'_>,
     root_offset: u64,
-) -> Result<BTreeMap<EnvName, EnvValue>> {
+) -> Result<BTreeMap<VariableName, VariableValue>> {
     if root_offset == 0 {
         return Ok(BTreeMap::new());
     }
-    let mut env = BTreeMap::new();
-    decode_env_node_into(scanner, root_offset, &mut env, 0)?;
-    Ok(env)
+    let mut variables = BTreeMap::new();
+    decode_variable_node_into(scanner, root_offset, &mut variables, 0)?;
+    Ok(variables)
 }
 
-fn decode_env_node_into(
+fn decode_variable_node_into(
     scanner: &PageScanner<'_>,
     offset: u64,
-    env: &mut BTreeMap<EnvName, EnvValue>,
+    variables: &mut BTreeMap<VariableName, VariableValue>,
     depth: usize,
 ) -> Result<()> {
     if depth > 8 {
@@ -297,17 +297,20 @@ fn decode_env_node_into(
     }
     let payload = scanner.secure_object_payload_at(
         offset,
-        &[PageObjectKind::EnvLeaf, PageObjectKind::EnvInternal],
+        &[
+            PageObjectKind::VariableLeaf,
+            PageObjectKind::VariableInternal,
+        ],
     )?;
-    match decode_env_node_secure(&payload)? {
-        EnvNode::Leaf(entries) => {
+    match decode_variable_node_secure(&payload)? {
+        VariableNode::Leaf(entries) => {
             for entry in entries {
-                env.insert(EnvName::new(entry.name)?, entry.value);
+                variables.insert(VariableName::new(entry.name)?, entry.value);
             }
         }
-        EnvNode::Internal(children) => {
+        VariableNode::Internal(children) => {
             for child in children {
-                decode_env_node_into(scanner, child.offset, env, depth + 1)?;
+                decode_variable_node_into(scanner, child.offset, variables, depth + 1)?;
             }
         }
     }

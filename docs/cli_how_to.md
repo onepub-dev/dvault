@@ -22,20 +22,20 @@ are rejected as unsafe archive entries.
 
 ## Add Files
 
-Unlock a lockbox before normal operations:
+Open a lockbox before normal operations:
 
 ```bash
 lockbox open secrets.lbox
 ```
 
-The unlock is cached in a per-user in-memory agent for a short sliding TTL.
-Clear the cached unlock explicitly when done:
+The open is cached in a per-user in-memory agent for a short sliding TTL.
+Clear the cached open explicitly when done:
 
 ```bash
-lockbox lock secrets.lbox
+lockbox close secrets.lbox
 ```
 
-Create a lockbox and cache its unlock:
+Create a lockbox and cache open access:
 
 ```bash
 lockbox create secrets.lbox
@@ -98,37 +98,37 @@ Stored path:
 /secrets/prod.env
 ```
 
-## Environment Variables
+## Variables
 
-Lockbox can store environment variables in encrypted env pages. They are not
-file entries, do not appear in `ls`, and should only be loaded when env commands
+Lockbox can store environment variables in encrypted variable pages. They are not
+file entries, do not appear in `ls`, and should only be loaded when variables commands
 or APIs request them.
 
 Set a variable:
 
 ```bash
-lockbox env set secrets.lbox DATABASE_URL 'postgres://localhost/app'
-lockbox env set secrets.lbox DATABASE_URL --value 'postgres://localhost/app'
+lockbox variables set secrets.lbox DATABASE_URL 'postgres://localhost/app'
+lockbox variables set secrets.lbox DATABASE_URL --value 'postgres://localhost/app'
 ```
 
 Set a secret variable with an explicit value source:
 
 ```bash
-lockbox env set secrets.lbox --secret API_TOKEN --interactive
-lockbox env set secrets.lbox --secret API_TOKEN --file ./api-token.txt
-lockbox env set secrets.lbox --secret API_TOKEN --stdin
-lockbox env set secrets.lbox --secret API_TOKEN --from-env API_TOKEN
-lockbox env set secrets.lbox --secret API_TOKEN --value "$API_TOKEN"
+lockbox variables set secrets.lbox --secret API_TOKEN --interactive
+lockbox variables set secrets.lbox --secret API_TOKEN --file ./api-token.txt
+lockbox variables set secrets.lbox --secret API_TOKEN --stdin
+lockbox variables set secrets.lbox --secret API_TOKEN --from-env API_TOKEN
+lockbox variables set secrets.lbox --secret API_TOKEN --value "$API_TOKEN"
 ```
 
 Short forms are also supported:
 
 ```bash
-lockbox env set secrets.lbox -s API_TOKEN -i
-lockbox env set secrets.lbox -s API_TOKEN -f ./api-token.txt
-lockbox env set secrets.lbox -s API_TOKEN -t
-lockbox env set secrets.lbox -s API_TOKEN -e API_TOKEN
-lockbox env set secrets.lbox -s API_TOKEN -v "$API_TOKEN"
+lockbox variables set secrets.lbox -s API_TOKEN -i
+lockbox variables set secrets.lbox -s API_TOKEN -f ./api-token.txt
+lockbox variables set secrets.lbox -s API_TOKEN -t
+lockbox variables set secrets.lbox -s API_TOKEN -e API_TOKEN
+lockbox variables set secrets.lbox -s API_TOKEN -v "$API_TOKEN"
 ```
 
 Sensitivity is declared when a variable is created. Updating the value preserves
@@ -138,26 +138,26 @@ way around, delete it and recreate it.
 Get a variable:
 
 ```bash
-lockbox env get secrets.lbox DATABASE_URL
-lockbox env get secrets.lbox --secret API_TOKEN
+lockbox variables get secrets.lbox DATABASE_URL
+lockbox variables get secrets.lbox --secret API_TOKEN
 ```
 
 List variable names:
 
 ```bash
-lockbox env list secrets.lbox
+lockbox variables list secrets.lbox
 ```
 
 Export variables for shell use:
 
 ```bash
-lockbox env export secrets.lbox
+lockbox variables export secrets.lbox
 ```
 
 Remove a variable:
 
 ```bash
-lockbox env rm secrets.lbox DATABASE_URL
+lockbox variables rm secrets.lbox DATABASE_URL
 ```
 
 Environment variable names should use portable shell-style names:
@@ -188,7 +188,7 @@ The command prints public lockbox identity, summary counts for files, symlinks,
 environment variables, key slots, logical file bytes, per-page metadata, page
 object kinds, and a recovery-scan summary. It does not print file paths, file
 contents, environment variable names, or environment variable values. Use
-`lockbox list` and `lockbox env list` for those details.
+`lockbox list` and `lockbox variables list` for those details.
 
 ## List Files
 
@@ -376,7 +376,7 @@ lockbox recover damaged.lbox --output recovered.lbox --overwrite
 
 The recovered lockbox is a new valid lockbox with the same content key. It
 contains only path-bearing entries whose payloads can be fully read: complete
-files, symlinks whose targets can be decoded, plus env values and form metadata
+files, symlinks whose targets can be decoded, plus variable values and form metadata
 when the latest commit root is recoverable. Partial files are reported by count
 and are skipped rather than written as shortened files.
 
@@ -475,7 +475,7 @@ Create a lockbox for one of your vault keys:
 lockbox create --recipient default secrets.lbox
 ```
 
-Add a recipient public key or trusted recipient name to an unlocked lockbox:
+Add a recipient public key or trusted recipient name to an opened lockbox:
 
 ```bash
 lockbox add-recipient secrets.lbox alice.pub
@@ -498,7 +498,7 @@ Removing a key is a compaction operation. The CLI rewrites the current lockbox s
 so stale key-directory history is not left behind as an easy way for the removed
 credential to keep opening the lockbox.
 
-Unlock with a private key:
+Open with a private key:
 
 ```bash
 lockbox open-key secrets.lbox default
@@ -514,7 +514,7 @@ lockbox open-key secrets.lbox
 The CLI uses vault-managed private keys by name. External private key files
 should be imported into the vault before use rather than loaded directly.
 
-Commands that create, unlock, or change lockbox key slots mirror the current
+Commands that create, open, or change lockbox key slots mirror the current
 key directory into the local vault as a recovery aid. The lockbox remains the
 portable source of truth; the local mirror is user-local convenience state.
 When the lockbox header is intact but embedded key-directory copies are damaged,

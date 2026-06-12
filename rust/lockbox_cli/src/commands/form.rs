@@ -264,7 +264,7 @@ fn set(args: &[String], access: &Access) -> CliResult<()> {
                 set_source(
                     &mut source,
                     FieldValueSource::FromEnv(
-                        require_arg(args, index, "--from-env value")?.to_string(),
+                        require_arg(args, index, "--from-variable value")?.to_string(),
                     ),
                 )?;
             }

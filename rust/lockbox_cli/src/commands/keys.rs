@@ -57,13 +57,13 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
             mirror_key_directory(&lb, &lockbox_path)?;
         }
         Access::CacheOnly => {
-            return Err(Error::InvalidInput("create requires an unlock method".to_string()).into());
+            return Err(Error::InvalidInput("create requires an open method".to_string()).into());
         }
     }
     Ok(())
 }
 
-pub(crate) fn unlock(args: &[String]) -> CliResult<()> {
+pub(crate) fn open(args: &[String]) -> CliResult<()> {
     let options = OpenOptions::parse(args)?;
     let password = options.read_password()?;
     let lb = if let Some(ttl_seconds) = options.ttl_seconds {
@@ -76,22 +76,22 @@ pub(crate) fn unlock(args: &[String]) -> CliResult<()> {
         local_vault().unlock_lockbox_with_password(&options.lockbox_path, &password)?
     };
     mirror_key_directory(&lb, &options.lockbox_path)?;
-    println!("Lockbox unlocked: {}", options.lockbox_path);
+    println!("Lockbox opened: {}", options.lockbox_path);
     Ok(())
 }
 
-pub(crate) fn lock(args: &[String]) -> CliResult<()> {
+pub(crate) fn close(args: &[String]) -> CliResult<()> {
     if args.first().map(String::as_str) == Some("--all") {
         local_vault().lock_all()?;
-        println!("All lockboxes locked.");
+        println!("All lockboxes closed.");
     } else {
         let lockbox_path = require_arg(args, 0, "lockbox")?;
         let was_open = lockbox_is_open(lockbox_path);
         local_vault().lock_lockbox(lockbox_path)?;
         if was_open {
-            println!("Lockbox locked: {lockbox_path}");
+            println!("Lockbox closed: {lockbox_path}");
         } else {
-            println!("Lockbox was already locked: {lockbox_path}");
+            println!("Lockbox was already closed: {lockbox_path}");
         }
     }
     Ok(())
@@ -122,7 +122,7 @@ pub(crate) fn keygen(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
-pub(crate) fn unlock_key(args: &[String]) -> CliResult<()> {
+pub(crate) fn open_key(args: &[String]) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     let keypair = load_private_key_from_arg(args.get(1).map(String::as_str))?;
     let lb =
@@ -493,7 +493,7 @@ struct OpenOptions {
 
 enum PasswordSource {
     Prompt,
-    Env(String),
+    Variables(String),
     File(String),
     Stdin,
 }
@@ -520,11 +520,11 @@ impl OpenOptions {
                     index += 1;
                     let Some(value) = args.get(index) else {
                         return Err(Error::InvalidInput(
-                            "missing --password-env value".to_string(),
+                            "missing --password-variable value".to_string(),
                         )
                         .into());
                     };
-                    password_source = PasswordSource::Env(value.clone());
+                    password_source = PasswordSource::Variables(value.clone());
                 }
                 "--password-file" => {
                     ensure_prompt_password_source(&password_source)?;
@@ -551,7 +551,7 @@ impl OpenOptions {
             .ok_or_else(|| Error::InvalidInput("missing lockbox".to_string()))?;
         if positional.len() > 1 {
             return Err(Error::InvalidInput(format!(
-                "unexpected unlock argument: {}",
+                "unexpected open argument: {}",
                 positional[1]
             ))
             .into());
@@ -569,10 +569,9 @@ impl OpenOptions {
     fn read_password(&self) -> CliResult<lockbox_vault::SecretString> {
         match &self.password_source {
             PasswordSource::Prompt => read_password("Password: "),
-            PasswordSource::Env(name) => {
-                let value = env::var(name).map_err(|_| {
-                    Error::InvalidInput(format!("environment variable is not set: {name}"))
-                })?;
+            PasswordSource::Variables(name) => {
+                let value = env::var(name)
+                    .map_err(|_| Error::InvalidInput(format!("variable is not set: {name}")))?;
                 lockbox_vault::SecretString::try_from_bytes(value.into_bytes()).map_err(Into::into)
             }
             PasswordSource::File(path) => secret_from_bytes(
@@ -593,7 +592,7 @@ fn ensure_prompt_password_source(source: &PasswordSource) -> CliResult<()> {
         Ok(())
     } else {
         Err(
-            Error::InvalidInput("choose only one password source for lockbox unlock".to_string())
+            Error::InvalidInput("choose only one password source for lockbox open".to_string())
                 .into(),
         )
     }
@@ -607,7 +606,7 @@ fn secret_from_bytes(mut bytes: Vec<u8>) -> CliResult<lockbox_vault::SecretStrin
 }
 
 fn default_session_duration() -> CliResult<Option<u64>> {
-    if let Ok(value) = env::var("LOCKBOX_UNLOCK_DURATION") {
+    if let Ok(value) = env::var("LOCKBOX_OPEN_DURATION") {
         return Ok(Some(parse_duration(&value)?));
     }
     let Some(path) = session_config_path() else {

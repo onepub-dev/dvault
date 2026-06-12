@@ -14,5 +14,5 @@ pub(crate) const DEFAULT_MAX_PAGE_BODY_BYTES: usize = DEFAULT_DATA_PAGE_BYTES - 
 pub(crate) const DEFAULT_MAX_PAGE_LOGICAL_BYTES: usize = DEFAULT_MAX_PAGE_BODY_BYTES * 8;
 pub(crate) const DEFAULT_FILE_PERMISSIONS: u32 = 0o600;
 pub(crate) const DEFAULT_SYMLINK_PERMISSIONS: u32 = 0o777;
-pub(crate) const MAX_ENV_NAME_BYTES: usize = 256;
-pub(crate) const MAX_ENV_VALUE_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_VARIABLE_NAME_BYTES: usize = 256;
+pub(crate) const MAX_VARIABLE_VALUE_BYTES: usize = 1024 * 1024;

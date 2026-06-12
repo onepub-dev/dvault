@@ -6,8 +6,8 @@ system sleep.
 
 The invariant under test is:
 
-1. unlock a lockbox so the session agent caches its content key;
-2. verify `vault sessions` reports the lockbox as `unlocked`;
+1. open a lockbox so the session agent caches its content key;
+2. verify `vault sessions` reports the lockbox as `open`;
 3. put the guest operating system into sleep from inside the guest;
 4. resume the guest;
 5. verify `vault sessions --format tsv` reports `empty`;

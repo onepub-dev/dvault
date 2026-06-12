@@ -1,12 +1,12 @@
 mod context;
 mod doctor;
-mod env;
 mod files;
 mod form;
 mod help;
 mod keys;
 mod output;
 mod recovery;
+mod variables;
 mod vault;
 mod visualize;
 
@@ -52,10 +52,10 @@ pub(crate) fn run() -> CliResult<()> {
     match command {
         "create" => keys::create(&create_args(command_matches), &access)?,
         "doctor" => doctor::run(&one_optional_arg(command_matches, "lockbox"))?,
-        "unlock" => keys::unlock(&unlock_args(command_matches))?,
-        "lock" => keys::lock(&lock_args(command_matches))?,
+        "open" => keys::open(&open_args(command_matches))?,
+        "close" => keys::close(&close_args(command_matches))?,
         "keygen" => keys::keygen(&two_args(command_matches, "private-key", "public-key"))?,
-        "unlock-key" => keys::unlock_key(&unlock_key_args(command_matches))?,
+        "open-key" => keys::open_key(&open_key_args(command_matches))?,
         "access" => keys::access(&access_args(command_matches)?, &access)?,
         "vault" => vault::run(&vault_args(command_matches)?)?,
         "add" => files::add(
@@ -74,7 +74,7 @@ pub(crate) fn run() -> CliResult<()> {
             &three_args(command_matches, "lockbox", "from", "to"),
             &access,
         )?,
-        "env" => env::run(&env_args(command_matches)?, &access)?,
+        "variables" => variables::run(&variables_args(command_matches)?, &access)?,
         "form" => form::run(&form_args(command_matches)?, &access)?,
         "recover" => recovery::run(&recover_args(command_matches)?, &access)?,
         "visualize" => visualize::run(&one_arg(command_matches, "lockbox"), &access)?,
@@ -86,14 +86,14 @@ pub(crate) fn run() -> CliResult<()> {
 
 fn command_secret_activity(command: &str) -> Option<SecretActivityKind> {
     match command {
-        "unlock" => Some(SecretActivityKind::Unlock),
+        "open" => Some(SecretActivityKind::Unlock),
         "add" | "extract" | "cat" | "list" | "rm" | "rename" | "visualize" => {
             Some(SecretActivityKind::Open)
         }
-        "env" => Some(SecretActivityKind::Env),
+        "variables" => Some(SecretActivityKind::Variables),
         "form" => Some(SecretActivityKind::Form),
         "recover" => Some(SecretActivityKind::Recovery),
-        "access" | "unlock-key" => Some(SecretActivityKind::Vault),
+        "access" | "open-key" => Some(SecretActivityKind::Vault),
         _ => None,
     }
 }
@@ -154,7 +154,7 @@ fn create_args(matches: &ArgMatches) -> Vec<String> {
     args
 }
 
-fn lock_args(matches: &ArgMatches) -> Vec<String> {
+fn close_args(matches: &ArgMatches) -> Vec<String> {
     if matches.get_flag("all") {
         vec!["--all".to_string()]
     } else {
@@ -162,7 +162,7 @@ fn lock_args(matches: &ArgMatches) -> Vec<String> {
     }
 }
 
-fn unlock_args(matches: &ArgMatches) -> Vec<String> {
+fn open_args(matches: &ArgMatches) -> Vec<String> {
     let mut args = one_arg(matches, "lockbox");
     push_option(&mut args, matches, "duration", "--duration");
     push_option(&mut args, matches, "password-env", "--password-env");
@@ -191,7 +191,7 @@ fn add_args(matches: &ArgMatches) -> Vec<String> {
     args
 }
 
-fn unlock_key_args(matches: &ArgMatches) -> Vec<String> {
+fn open_key_args(matches: &ArgMatches) -> Vec<String> {
     let mut args = one_arg(matches, "lockbox");
     if let Some(key) = matches.get_one::<String>("vault-key") {
         args.push(key.clone());
@@ -236,10 +236,10 @@ fn remove_args(matches: &ArgMatches) -> Vec<String> {
     args
 }
 
-fn env_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+fn variables_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let (command, sub) = matches
         .subcommand()
-        .ok_or_else(|| Error::InvalidInput("missing env command".to_string()))?;
+        .ok_or_else(|| Error::InvalidInput("missing variables command".to_string()))?;
     let mut args = vec![command.to_string(), value(sub, "lockbox")];
     match command {
         "set" => {
@@ -269,7 +269,9 @@ fn env_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_optional(&mut args, sub, "path");
         }
         "rm" | "remove" => args.push(value(sub, "name")),
-        _ => return Err(Error::InvalidInput(format!("unknown env command: {command}")).into()),
+        _ => {
+            return Err(Error::InvalidInput(format!("unknown variables command: {command}")).into())
+        }
     }
     Ok(args)
 }
@@ -390,9 +392,9 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             if let Some((session_command, session_sub)) = sub.subcommand() {
                 args.push(session_command.to_string());
                 match session_command {
-                    "lock" => args.push(value(session_sub, "lockbox")),
-                    "lock-all" | "stop" => {}
-                    "auto-unlock" => {
+                    "close" => args.push(value(session_sub, "lockbox")),
+                    "close-all" | "stop" => {}
+                    "auto-open" => {
                         let (auto_command, auto_sub) =
                             session_sub.subcommand().unwrap_or(("status", session_sub));
                         args.push(auto_command.to_string());

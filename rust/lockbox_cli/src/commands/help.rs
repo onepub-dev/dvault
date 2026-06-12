@@ -33,7 +33,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .global(true)
                 .value_name("RAW_CONTENT_KEY")
                 .hide(!verbose)
-                .help("Developer override: unlock with a raw content key supplied out of band."),
+                .help("Developer override: open with a raw content key supplied out of band."),
         )
         .subcommands([
             archive_command("create", "Create a new encrypted lockbox.")
@@ -49,25 +49,25 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Create the lockbox for one of your identities or a saved contact."),
                 )
                 .arg(required("lockbox", "Lockbox path.")),
-            archive_command("unlock", "Unlock a lockbox for later commands.")
+            archive_command("open", "Open a lockbox for later commands.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox unlock secrets.lbox\n  lockbox unlock --duration 30m secrets.lbox\n  LOCKBOX_PASSWORD=secret lockbox unlock secrets.lbox\n  printf '%s\\n' \"$LOCKBOX_PASSWORD\" | lockbox unlock --password-stdin secrets.lbox",
-                    "Context:\n  Unlock prompts for the lockbox password, stores temporary unlock access in the session agent, and lets later commands read or modify the lockbox without prompting again. Use --duration when the session should expire sooner than the default.",
+                    "Examples:\n  lockbox open secrets.lbox\n  lockbox open --duration 30m secrets.lbox\n  LOCKBOX_PASSWORD=secret lockbox open secrets.lbox\n  printf '%s\\n' \"$LOCKBOX_PASSWORD\" | lockbox open --password-stdin secrets.lbox",
+                    "Context:\n  Open prompts for the lockbox password, stores temporary open access in the session agent, and lets later commands read or modify the lockbox without prompting again. Use --duration when the session should expire sooner than the default.",
                 ))
                 .arg(
                     Arg::new("duration")
                         .short('d')
                         .long("duration")
                         .value_name("DURATION")
-                        .help("Keep the lockbox unlocked for this session duration, such as 30s, 30m, 2h, or 1d."),
+                        .help("Keep the lockbox open for this session duration, such as 30s, 30m, 2h, or 1d."),
                 )
                 .arg(
                     Arg::new("password-env")
                         .long("password-env")
                         .value_name("NAME")
                         .conflicts_with_all(["password-file", "password-stdin"])
-                        .help("Read the lockbox password from this environment variable."),
+                        .help("Read the lockbox password from this variable."),
                 )
                 .arg(
                     Arg::new("password-file")
@@ -84,18 +84,18 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Read the lockbox password from stdin."),
                 )
                 .arg(required("lockbox", "Lockbox path.")),
-            archive_command("lock", "Forget cached unlock access.")
+            archive_command("close", "Forget cached open access.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox lock secrets.lbox\n  lockbox lock --all",
-                    "Context:\n  Lock removes cached unlock access from the session agent. It does not change encrypted lockbox contents; it only makes later commands require unlock access again.",
+                    "Examples:\n  lockbox close secrets.lbox\n  lockbox close --all",
+                    "Context:\n  Close removes cached open access from the session agent. It does not change encrypted lockbox contents; it only makes later commands require open access again.",
                 ))
                 .arg(
                     Arg::new("all")
                         .long("all")
                         .action(ArgAction::SetTrue)
                         .conflicts_with("lockbox")
-                        .help("Forget cached unlock access for all lockboxes."),
+                        .help("Forget cached open access for all lockboxes."),
                 )
                 .arg(
                     optional("lockbox", "Lockbox path.")
@@ -143,7 +143,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox doctor\n  lockbox doctor secrets.lbox",
-                    "Context:\n  With no lockbox path, doctor reports local configuration and runtime state, including vault path, auto-unlock support, and whether the session agent is reachable. With a lockbox path, doctor inspects public lockbox metadata without unlocking and adds deeper checks when the lockbox is already unlocked.",
+                    "Context:\n  With no lockbox path, doctor reports local configuration and runtime state, including vault path, auto-open support, and whether the session agent is reachable. With a lockbox path, doctor inspects public lockbox metadata without opening and adds deeper checks when the lockbox is already open.",
                 ))
                 .arg(optional(
                     "lockbox",
@@ -153,7 +153,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox add secrets.lbox ./notes.txt\n  lockbox add --recursive secrets.lbox ./project /project\n  lockbox add -r secrets.lbox ./large-dir /archive",
-                    "Context:\n  Add imports a host file into an unlocked lockbox. Pass --recursive when the source is a directory. If no destination path is supplied, files keep their filename at the lockbox root and recursive directory imports go under the root. Use --jobs in verbose mode to tune large imports.",
+                    "Context:\n  Add imports a host file into an open lockbox. Pass --recursive when the source is a directory. If no destination path is supplied, files keep their filename at the lockbox root and recursive directory imports go under the root. Use --jobs in verbose mode to tune large imports.",
                 ))
                 .arg(
                     Arg::new("recursive")
@@ -263,7 +263,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("from", "Existing path inside the lockbox."))
                 .arg(required("to", "New path inside the lockbox.")),
-            env_command(verbose),
+            variables_command(verbose),
             form_command(verbose),
             access_command(verbose),
             vault_command(verbose),
@@ -273,7 +273,7 @@ pub(crate) fn command(verbose: bool) -> Command {
             developer_command("keygen", "Generate raw keypair files.")
                 .arg(required("private-key", "Private key output path."))
                 .arg(required("public-key", "Public key output path.")),
-            developer_command("unlock-key", "Unlock using a vault private key.")
+            developer_command("open-key", "Open using a vault private key.")
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(optional("vault-key", "Vault private key name.")),
         ]);
@@ -298,8 +298,8 @@ Available commands:
 
 Archives
   create          Create a new encrypted lockbox.
-  unlock          Unlock a lockbox for later commands.
-  lock            Forget cached unlock access.
+  open            Open a lockbox for later commands.
+  close           Forget cached open access.
   recover         Recover readable entries from a damaged lockbox.
   doctor          Show local vault and session agent diagnostics.
 
@@ -311,12 +311,12 @@ Files
   rm              Remove a stored entry.
   rename          Rename a stored entry.
 
-Environment
-  env             Store, retrieve, list, export, or remove environment values.
+Variables
+  variables       Store, retrieve, list, export, or remove variable values.
   form            Manage typed multi-field form records.
 
 Sharing
-  access          Manage who can unlock a lockbox.
+  access          Manage who can open a lockbox.
 
 Vault
   vault           Manage identities and contacts."
@@ -326,27 +326,27 @@ Vault
         eprintln!(
             "
 Advanced global options:
-    --key <raw-content-key>    Developer override: unlock with a raw content key supplied out of band.
+    --key <raw-content-key>    Developer override: open with a raw content key supplied out of band.
 
 Advanced command options:
   lockbox add --jobs auto|1|N <lockbox> <source> <lockbox-path>
 
 Developer and compatibility commands:
   keygen          Generate raw keypair files.
-  unlock-key      Unlock using a vault private key.
+  open-key        Open using a vault private key.
   visualize       Print internal lockbox structure.
 
-Environment variables:
+Process variables:
   LOCKBOX_KEY=<raw-content-key> lockbox <command> ...
-    LOCKBOX_PASSWORD=<password> lockbox unlock <lockbox>
-  LOCKBOX_UNLOCK_DURATION=30m lockbox unlock <lockbox>
+    LOCKBOX_PASSWORD=<password> lockbox open <lockbox>
+  LOCKBOX_OPEN_DURATION=30m lockbox open <lockbox>
   LOCKBOX_VAULT_PASSWORD=<password> lockbox vault <command>
   LOCKBOX_PLATFORM_SECRET_STORE=auto|disabled lockbox vault <command>
   LOCKBOX_SESSION_AGENT_DIR=<dir> lockbox <command> ...
   LOCKBOX_VAULT_DIR=<dir> lockbox <command> ...
 
 Raw content keys are for developer recovery and local testing. reVault does not
-print or export them; normal commands should unlock through the vault session."
+print or export them; normal commands should open through the vault session."
         );
     }
 
@@ -378,25 +378,25 @@ fn base_command(name: &'static str, about: &'static str) -> Command {
         .disable_help_subcommand(true)
 }
 
-fn env_command(verbose: bool) -> Command {
+fn variables_command(verbose: bool) -> Command {
     base_command(
-        "env",
-        "Store, retrieve, list, export, or remove environment values.",
+        "variables",
+        "Store, retrieve, list, export, or remove variable values.",
     )
     .after_help(verbose_help(
         verbose,
-        "Examples:\n  lockbox env set secrets.lbox APP_MODE production\n  lockbox env get secrets.lbox APP_MODE\n  lockbox env export secrets.lbox",
-        "Context:\n  Environment values are named data stored inside a lockbox. Normal values are printed by `env get` and included by `env export`. Secret values are encrypted the same way, but are redacted from `env export` and require `env get --secret` to print.",
+        "Examples:\n  lockbox variables set secrets.lbox APP_MODE production\n  lockbox variables get secrets.lbox APP_MODE\n  lockbox variables export secrets.lbox",
+        "Context:\n  Variables are named data stored inside a lockbox. Normal values are printed by `variables get` and included by `variables export`. Secret values are encrypted the same way, but are redacted from `variables export` and require `variables get --secret` to print.",
     ))
     .subcommand_required(true)
     .arg_required_else_help(true)
     .subcommand(
         Command::new("set")
-            .about("Store an environment value.")
+            .about("Store a variable value.")
             .after_help(verbose_help(
                 verbose,
-                "Examples:\n  lockbox env set secrets.lbox APP_MODE production\n  lockbox env set --secret secrets.lbox API_TOKEN --interactive\n  printf '%s' \"$TOKEN\" | lockbox env set --secret --stdin secrets.lbox API_TOKEN",
-                "Context:\n  Env set writes one named value into a lockbox. Use --secret for values that should not be exported in bulk, such as tokens and passwords. Choose one value source: argument, prompt, stdin, file, or process environment.",
+                "Examples:\n  lockbox variables set secrets.lbox APP_MODE production\n  lockbox variables set --secret secrets.lbox API_TOKEN --interactive\n  printf '%s' \"$TOKEN\" | lockbox variables set --secret --stdin secrets.lbox API_TOKEN",
+                "Context:\n  Variables set writes one named value into a lockbox. Use --secret for values that should not be exported in bulk, such as tokens and passwords. Choose one value source: argument, prompt, stdin, file, or process environment.",
             ))
             .arg(required("lockbox", "Lockbox path."))
             .arg(
@@ -406,7 +406,7 @@ fn env_command(verbose: bool) -> Command {
                     .action(ArgAction::SetTrue)
                     .help("Store the value as secret."),
             )
-            .arg(required("name", "Environment variable name."))
+            .arg(required("name", "Variable name."))
             .arg(
                 Arg::new("positional-value")
                     .value_name("VALUE")
@@ -446,16 +446,16 @@ fn env_command(verbose: bool) -> Command {
                     .short('e')
                     .long("from-env")
                     .value_name("NAME")
-                    .help("Read the value from a process environment variable."),
+                    .help("Read the value from a process variable."),
             ),
     )
     .subcommand(
         Command::new("get")
-            .about("Print one stored environment value by name.")
+            .about("Print one stored variable value by name.")
             .after_help(verbose_help(
                 verbose,
-                "Examples:\n  lockbox env get secrets.lbox APP_MODE\n  lockbox env get --secret secrets.lbox API_TOKEN\n  lockbox env get --secret --output api-token.txt secrets.lbox API_TOKEN",
-                "Context:\n  Env get reads one named value from a lockbox. Secret values require --secret so accidental terminal output is an explicit user choice. Use --output when the exact bytes should go to a file.",
+                "Examples:\n  lockbox variables get secrets.lbox APP_MODE\n  lockbox variables get --secret secrets.lbox API_TOKEN\n  lockbox variables get --secret --output api-token.txt secrets.lbox API_TOKEN",
+                "Context:\n  Variables get reads one named value from a lockbox. Secret values require --secret so accidental terminal output is an explicit user choice. Use --output when the exact bytes should go to a file.",
             ))
             .arg(required("lockbox", "Lockbox path."))
             .arg(
@@ -478,28 +478,28 @@ fn env_command(verbose: bool) -> Command {
                     .action(ArgAction::SetTrue)
                     .help("Replace the output file if it already exists."),
             )
-            .arg(required("name", "Environment variable name.")),
+            .arg(required("name", "Variable name.")),
     )
     .subcommand(
         Command::new("list")
-            .about("List environment values.")
+            .about("List variable values.")
             .visible_alias("ls")
             .after_help(verbose_help(
                 verbose,
-                "Examples:\n  lockbox env list secrets.lbox\n  lockbox env list secrets.lbox /production\n  lockbox env list secrets.lbox '**/API_KEY'\n  lockbox env list --format json secrets.lbox",
-                "Context:\n  Env list shows value names and whether each value is normal or secret. It does not print stored values. Pass a path such as /production to list that group, or a glob such as **/API_KEY to match names across groups.",
+                "Examples:\n  lockbox variables list secrets.lbox\n  lockbox variables list secrets.lbox /production\n  lockbox variables list secrets.lbox '**/API_KEY'\n  lockbox variables list --format json secrets.lbox",
+                "Context:\n  Variables list shows value names and whether each value is normal or secret. It does not print stored values. Pass a path such as /production to list that group, or a glob such as **/API_KEY to match names across groups.",
             ))
             .arg(output_format_arg())
             .arg(required("lockbox", "Lockbox path."))
-            .arg(optional("pattern", "Optional env path or glob pattern.")),
+            .arg(optional("pattern", "Optional variable path or glob pattern.")),
     )
     .subcommand(
         Command::new("export")
-            .about("Print all non-secret environment values in an importable format.")
+            .about("Print all non-secret variable values in an importable format.")
             .after_help(verbose_help(
                 verbose,
-                "Examples:\n  eval \"$(lockbox env export secrets.lbox)\"\n  lockbox env export secrets.lbox /production\n  lockbox env export --format posix secrets.lbox > env.sh\n  lockbox env export --format powershell secrets.lbox | Invoke-Expression\n\nFormats:\n  posix       NAME='value' lines for sh, bash, and zsh. Default.\n  powershell  $env:NAME = 'value' lines for PowerShell.\n  cmd         set \"NAME=value\" lines for cmd.exe.\n  json        One JSON object per line with name and value fields.\n\n`env export` writes to stdout. Use shell redirection to write it to a file.",
-                "Context:\n  Env export is intended for shell startup, CI setup, or scripting. It only includes non-secret values; use explicit `env get --secret` for secret values so they are never exported in bulk by accident. When exporting a path such as /production, only direct child names are emitted, so /production/API_KEY becomes API_KEY and nested values are skipped.",
+                "Examples:\n  eval \"$(lockbox variables export secrets.lbox)\"\n  lockbox variables export secrets.lbox /production\n  lockbox variables export --format posix secrets.lbox > variables.sh\n  lockbox variables export --format powershell secrets.lbox | Invoke-Expression\n\nFormats:\n  posix       NAME='value' lines for sh, bash, and zsh. Default.\n  powershell  $env:NAME = 'value' lines for PowerShell.\n  cmd         set \"NAME=value\" lines for cmd.exe.\n  json        One JSON object per line with name and value fields.\n\n`variables export` writes to stdout. Use shell redirection to write it to a file.",
+                "Context:\n  Variables export is intended for shell startup, CI setup, or scripting. It only includes non-secret values; use explicit `variables get --secret` for secret values so they are never exported in bulk by accident. When exporting a path such as /production, only direct child names are emitted, so /production/API_KEY becomes API_KEY and nested values are skipped.",
             ))
             .arg(
                 Arg::new("format")
@@ -509,19 +509,19 @@ fn env_command(verbose: bool) -> Command {
                     .help("Output format."),
             )
             .arg(required("lockbox", "Lockbox path."))
-            .arg(optional("path", "Optional env path to export.")),
+            .arg(optional("path", "Optional variable path to export.")),
     )
     .subcommand(
         Command::new("rm")
-            .about("Remove an environment value.")
+            .about("Remove a variable value.")
             .visible_alias("remove")
             .after_help(verbose_help(
                 verbose,
-                "Examples:\n  lockbox env rm secrets.lbox APP_MODE\n  lockbox env remove secrets.lbox API_TOKEN",
-                "Context:\n  Env rm removes one named value from a lockbox. It affects only the lockbox record, not the current process environment.",
+                "Examples:\n  lockbox variables rm secrets.lbox APP_MODE\n  lockbox variables remove secrets.lbox API_TOKEN",
+                "Context:\n  Variables rm removes one named value from a lockbox. It affects only the lockbox record, not the current process environment.",
             ))
             .arg(required("lockbox", "Lockbox path."))
-            .arg(required("name", "Environment variable name.")),
+            .arg(required("name", "Variable name.")),
     )
 }
 
@@ -688,7 +688,7 @@ fn form_command(verbose: bool) -> Command {
                         .short('e')
                         .value_name("NAME")
                         .conflicts_with_all(["value", "explicit-value", "stdin", "file", "interactive"])
-                        .help("Read the field value from an environment variable."),
+                        .help("Read the field value from an variable."),
                 )
                 .arg(
                     Arg::new("interactive")
@@ -752,21 +752,21 @@ fn form_command(verbose: bool) -> Command {
 }
 
 fn access_command(verbose: bool) -> Command {
-    sharing_command("access", "Manage who can unlock a lockbox.")
+    sharing_command("access", "Manage who can open a lockbox.")
         .after_help(verbose_help(
             verbose,
             "Examples:\n  lockbox access list secrets.lbox\n  lockbox access add secrets.lbox alice\n  lockbox access remove secrets.lbox 2",
-            "Context:\n  Access entries are stored on a lockbox and describe which identities or contacts may unlock it. Use this command when sharing a lockbox or rotating/removing access.",
+            "Context:\n  Access entries are stored on a lockbox and describe which identities or contacts may open it. Use this command when sharing a lockbox or rotating/removing access.",
         ))
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
             Command::new("add")
-                .about("Allow an identity or contact to unlock a lockbox.")
+                .about("Allow an identity or contact to open a lockbox.")
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox access add secrets.lbox alice\n  lockbox access add secrets.lbox identity:alice\n  lockbox access add secrets.lbox contact:alice\n  lockbox access add secrets.lbox alice ./alice.pub",
-                    "Context:\n  Access add grants unlock access by adding an identity or contact to the lockbox. A bare name can refer to one of your saved identities or saved contacts. If both use the same name, use identity:name or contact:name. For a public key file, provide the contact name first so the lockbox can record who the access entry belongs to.",
+                    "Context:\n  Access add grants open access by adding an identity or contact to the lockbox. A bare name can refer to one of your saved identities or saved contacts. If both use the same name, use identity:name or contact:name. For a public key file, provide the contact name first so the lockbox can record who the access entry belongs to.",
                 ))
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required(
@@ -780,7 +780,7 @@ fn access_command(verbose: bool) -> Command {
         )
         .subcommand(
             Command::new("list")
-                .about("List who can unlock a lockbox.")
+                .about("List who can open a lockbox.")
                 .visible_alias("ls")
                 .after_help(verbose_help(
                     verbose,
@@ -797,7 +797,7 @@ fn access_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox access remove secrets.lbox 2\n  lockbox access rm secrets.lbox 2",
-                    "Context:\n  Access remove deletes one unlock slot from the lockbox. reVault prevents removing the last usable access entry because that could make the lockbox inaccessible.",
+                    "Context:\n  Access remove deletes one open slot from the lockbox. reVault prevents removing the last usable access entry because that could make the lockbox inaccessible.",
                 ))
                 .arg(required("lockbox", "Lockbox path."))
                 .arg(required("slot-id", "Access slot id.")),
@@ -843,7 +843,7 @@ fn vault_command(verbose: bool) -> Command {
         .arg_required_else_help(true)
         .subcommand(
             Command::new("init")
-                .about("Create or unlock the local vault.")
+                .about("Create or open the local vault.")
                 .after_help(verbose_help(
                     verbose,
                     "If the vault already exists, init reports the path and makes no changes. Use --verify to validate the pass phrase, or --overwrite only when replacing the vault and losing records stored only there.",
@@ -854,7 +854,7 @@ fn vault_command(verbose: bool) -> Command {
                         .long("verify")
                         .conflicts_with("overwrite")
                         .action(ArgAction::SetTrue)
-                        .help("Ask for the vault pass phrase and verify the existing vault unlocks."),
+                        .help("Ask for the vault pass phrase and verify the existing vault opens."),
                 )
                 .arg(
                     Arg::new("overwrite")
@@ -898,88 +898,88 @@ fn vault_command(verbose: bool) -> Command {
         )
         .subcommand(
             Command::new("sessions")
-                .about("Manage unlocked lockbox sessions.")
+                .about("Manage open lockbox sessions.")
                 .disable_help_subcommand(true)
                 .arg_required_else_help(false)
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault sessions\n  lockbox vault sessions lock secrets.lbox\n  lockbox vault sessions auto-unlock status",
-                    "Context:\n  Sessions are temporary unlock records cached by the session agent. With no subcommand, sessions lists lockboxes currently cached as unlocked.",
+                    "Examples:\n  lockbox vault sessions\n  lockbox vault sessions close secrets.lbox\n  lockbox vault sessions auto-open status",
+                    "Context:\n  Sessions are temporary open records cached by the session agent. With no subcommand, sessions lists lockboxes currently cached as open.",
                 ))
                 .arg(output_format_arg())
                 .subcommand(
-                    Command::new("lock")
-                        .about("Lock one unlocked lockbox session.")
+                    Command::new("close")
+                        .about("Close one open lockbox session.")
                         .after_help(verbose_help(
                             verbose,
-                            "Examples:\n  lockbox vault sessions lock secrets.lbox",
-                            "Context:\n  Session lock removes cached unlock access for one lockbox. Use it when you are finished working with a lockbox but do not want to stop every session.",
+                            "Examples:\n  lockbox vault sessions close secrets.lbox",
+                            "Context:\n  Session close removes cached open access for one lockbox. Use it when you are finished working with a lockbox but do not want to stop every session.",
                         ))
                         .arg(required("lockbox", "Lockbox path.")),
                 )
                 .subcommand(
-                    Command::new("lock-all")
-                        .about("Lock every unlocked lockbox session.")
+                    Command::new("close-all")
+                        .about("Close every open lockbox session.")
                         .after_help(verbose_help(
                             verbose,
-                            "Examples:\n  lockbox vault sessions lock-all",
-                            "Context:\n  Lock-all clears every cached lockbox unlock session while leaving the session agent available for future unlocks.",
+                            "Examples:\n  lockbox vault sessions close-all",
+                            "Context:\n  Close-all clears every cached lockbox open session while leaving the session agent available for future opens.",
                         )),
                 )
                 .subcommand(
                     Command::new("stop")
-                        .about("Lock every unlocked session and stop the session agent.")
+                        .about("Close every open session and stop the session agent.")
                         .after_help(verbose_help(
                             verbose,
                             "Examples:\n  lockbox vault sessions stop",
-                            "Context:\n  Stop clears cached unlock sessions and shuts down the session agent process. Later commands can start it again when needed.",
+                            "Context:\n  Stop clears cached open sessions and shuts down the session agent process. Later commands can start it again when needed.",
                         )),
                 )
                 .subcommand(
-                    Command::new("auto-unlock")
-                        .about("Store the vault pass phrase in the operating system secret store so reVault can unlock the local vault automatically after your OS login session is unlocked.")
+                    Command::new("auto-open")
+                        .about("Store the vault pass phrase in the operating system secret store so reVault can open the local vault automatically after your OS login session is unlocked.")
                         .disable_help_subcommand(true)
                         .arg_required_else_help(false)
                         .after_help(verbose_help(
                             verbose,
-                            "Examples:\n  lockbox vault sessions auto-unlock status\n  lockbox vault sessions auto-unlock enable\n  lockbox vault sessions auto-unlock forget",
-                            "Context:\n  Auto-unlock stores the vault pass phrase in the operating system secret store. After your OS login session unlocks that store, reVault can unlock the local vault without prompting for the vault pass phrase.",
+                            "Examples:\n  lockbox vault sessions auto-open status\n  lockbox vault sessions auto-open enable\n  lockbox vault sessions auto-open forget",
+                            "Context:\n  Auto-open stores the vault pass phrase in the operating system secret store. After your OS login session unlocks that store, reVault can open the local vault without prompting for the vault pass phrase.",
                         ))
                         .subcommand(
                             Command::new("status")
-                                .about("Show whether auto-unlock is supported and enabled.")
+                                .about("Show whether auto-open is supported and enabled.")
                                 .after_help(verbose_help(
                                     verbose,
-                                    "Examples:\n  lockbox vault sessions auto-unlock status\n  lockbox vault sessions auto-unlock status --format json",
-                                    "Context:\n  Status reports whether the current platform supports auto-unlock, which backend is selected, and whether reVault is configured to use it.",
+                                    "Examples:\n  lockbox vault sessions auto-open status\n  lockbox vault sessions auto-open status --format json",
+                                    "Context:\n  Status reports whether the current platform supports auto-open, which backend is selected, and whether reVault is configured to use it.",
                                 ))
                                 .arg(output_format_arg()),
                         )
                         .subcommand(
                             Command::new("enable")
-                                .about("Allow reVault to store the vault pass phrase for auto-unlock.")
+                                .about("Allow reVault to store the vault pass phrase for auto-open.")
                                 .after_help(verbose_help(
                                     verbose,
-                                    "Examples:\n  lockbox vault sessions auto-unlock enable",
-                                    "Context:\n  Enable allows reVault to save the vault pass phrase in the operating system secret store so future commands can unlock the vault automatically after OS login.",
+                                    "Examples:\n  lockbox vault sessions auto-open enable",
+                                    "Context:\n  Enable allows reVault to save the vault pass phrase in the operating system secret store so future commands can open the vault automatically after OS login.",
                                 )),
                         )
                         .subcommand(
                             Command::new("disable")
-                                .about("Stop using auto-unlock.")
+                                .about("Stop using auto-open.")
                                 .after_help(verbose_help(
                                     verbose,
-                                    "Examples:\n  lockbox vault sessions auto-unlock disable",
-                                    "Context:\n  Disable leaves any stored secret untouched but tells reVault not to use auto-unlock. Use forget when you want to delete the stored vault pass phrase.",
+                                    "Examples:\n  lockbox vault sessions auto-open disable",
+                                    "Context:\n  Disable leaves any stored secret untouched but tells reVault not to use auto-open. Use forget when you want to delete the stored vault pass phrase.",
                                 )),
                         )
                         .subcommand(
                             Command::new("forget")
-                                .about("Delete the stored vault pass phrase used for auto-unlock.")
+                                .about("Delete the stored vault pass phrase used for auto-open.")
                                 .after_help(verbose_help(
                                     verbose,
-                                    "Examples:\n  lockbox vault sessions auto-unlock forget",
-                                    "Context:\n  Forget removes the vault pass phrase from the operating system secret store. Future vault unlocks will prompt again unless auto-unlock is enabled and the pass phrase is stored again.",
+                                    "Examples:\n  lockbox vault sessions auto-open forget",
+                                    "Context:\n  Forget removes the vault pass phrase from the operating system secret store. Future vault opens will prompt again unless auto-open is enabled and the pass phrase is stored again.",
                                 )),
                         ),
                 ),
@@ -997,7 +997,7 @@ fn vault_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox vault contact list\n  lockbox vault contact add alice ./alice.pub\n  lockbox vault contact remove alice",
-                    "Context:\n  Contacts are saved public keys for other people or systems. A contact can be added to a lockbox access list, but cannot unlock a lockbox by itself; unlocking requires the matching private identity.",
+                    "Context:\n  Contacts are saved public keys for other people or systems. A contact can be added to a lockbox access list, but cannot open a lockbox by itself; opening requires the matching private identity.",
                 ))
                 .subcommand_required(true)
                 .arg_required_else_help(true)
@@ -1172,7 +1172,7 @@ fn vault_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox vault lockbox list\n  lockbox vault lockbox forget ./old-project.lbox",
-                    "Context:\n  The vault remembers lockboxes it has created, unlocked, or modified so bulk maintenance commands can find them later. Forget removes only the vault reference; it does not delete the lockbox file.",
+                    "Context:\n  The vault remembers lockboxes it has created, opened, or modified so bulk maintenance commands can find them later. Forget removes only the vault reference; it does not delete the lockbox file.",
                 ))
                 .subcommand_required(true)
                 .arg_required_else_help(true)
@@ -1216,12 +1216,12 @@ fn share_topology_arg() -> Arg {
 
 fn vault_identity_command(verbose: bool) -> Command {
     Command::new("identity")
-        .about("Manage your lockbox unlock identities.")
+        .about("Manage your lockbox open identities.")
         .disable_help_subcommand(true)
         .after_help(verbose_help(
             verbose,
             "Examples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity export laptop ./laptop.pub",
-            "Context:\n  An identity has a public key and a private key. Share the public key so someone else can grant you access to a lockbox; keep the private key secret because it unlocks lockboxes granted to that identity. To save someone else's public key, use `lockbox vault contact add`.",
+            "Context:\n  An identity has a public key and a private key. Share the public key so someone else can grant you access to a lockbox; keep the private key secret because it opens lockboxes granted to that identity. To save someone else's public key, use `lockbox vault contact add`.",
         ))
         .subcommand_required(true)
         .arg_required_else_help(true)
@@ -1232,7 +1232,7 @@ fn vault_identity_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox vault identity list\n  lockbox vault identity list --format json",
-                    "Context:\n  Identity list shows the private unlock identities stored in your vault. These are the identities reVault can use when unlocking lockboxes granted to you.",
+                    "Context:\n  Identity list shows the private open identities stored in your vault. These are the identities reVault can use when opening lockboxes granted to you.",
                 ))
                 .arg(output_format_arg()),
         )
@@ -1286,7 +1286,7 @@ fn vault_identity_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox vault identity import laptop ./laptop.private\n  lockbox vault identity import laptop ./laptop.private ./laptop.pub",
-                    "Context:\n  Identity import restores or moves private unlock material into this vault. Use it when bringing an existing identity onto this installation or recovering from a backup.",
+                    "Context:\n  Identity import restores or moves private open material into this vault. Use it when bringing an existing identity onto this installation or recovering from a backup.",
                 ))
                 .arg(required("name", "Identity name."))
                 .arg(required("private-key", "Private key path."))
@@ -1298,7 +1298,7 @@ fn vault_identity_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox vault identity export ./default.pub\n  lockbox vault identity export laptop ./laptop.pub",
-                    "Context:\n  Identity export writes the public key for one of your identities. Share this file with someone who needs to grant you access to a lockbox. The public key does not unlock lockboxes by itself.",
+                    "Context:\n  Identity export writes the public key for one of your identities. Share this file with someone who needs to grant you access to a lockbox. The public key does not open lockboxes by itself.",
                 ))
                 .arg(format_arg(verbose))
                 .arg(
@@ -1315,7 +1315,7 @@ fn vault_identity_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox vault identity export-private ./default.private\n  lockbox vault identity export-private laptop ./laptop.private",
-                    "Context:\n  Identity export-private writes private unlock material to a file. Treat the output as highly sensitive; anyone with the private key can unlock lockboxes granted to that identity.",
+                    "Context:\n  Identity export-private writes private open material to a file. Treat the output as highly sensitive; anyone with the private key can open lockboxes granted to that identity.",
                 ))
                 .arg(format_arg(verbose))
                 .arg(

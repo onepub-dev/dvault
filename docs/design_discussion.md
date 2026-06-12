@@ -52,7 +52,7 @@ user by signing a challenge; it does not directly release a decryption key. The
 WebAuthn PRF extension changes that for supported authenticators by returning a
 deterministic per-credential secret during an authentication ceremony.
 
-Recommendation: passkey support is feasible, but it should be a new unlock
+Recommendation: passkey support is feasible, but it should be a new open
 slot type, not a replacement for passwords or recipient slots.
 
 Candidate design:
@@ -113,7 +113,7 @@ OS keyrings can improve secret storage for local agent material, but they do
 not replace the lockbox format.
 
 Recommendation: support OS keyrings as an optional backend for cached content
-keys or local vault unlock helpers, not as the only place where lockbox access
+keys or local vault open helpers, not as the only place where lockbox access
 is recoverable.
 
 Tradeoffs:
@@ -123,7 +123,7 @@ Tradeoffs:
 - OS keyrings are not portable and can be hard to use in headless automation,
   containers, and remote shells.
 - Attributes/metadata may be searchable or less protected than the secret
-  value itself; never store sensitive path names or env names as keyring
+  value itself; never store sensitive path names or variable names as keyring
   attributes.
 - A compromised logged-in user session can often request the same keyring item
   unless platform access controls require user presence.
@@ -134,7 +134,7 @@ Likely design:
 - Add `ContentKeyStore` implementations for platform keyrings.
 - Keep the current agent as the default minimal backend on unsupported or
   headless platforms.
-- Store only content keys or vault-unlock helper keys, not raw passwords.
+- Store only content keys or vault-open helper keys, not raw passwords.
 
 ## Profiling, zlib, and Unsafe Code
 
@@ -200,7 +200,7 @@ Remaining caution:
   process.
 
 The local vault password path is now better: passwords are owned as
-`SecretString`, prompt input appends directly into `SecretString`, and env-var
+`SecretString`, prompt input appends directly into `SecretString`, and variable-sourced
 passwords use `SecretString::try_from_env` rather than first allocating a Rust
 `String`.
 
@@ -232,7 +232,7 @@ Remaining risks to test or harden:
 - Compaction should preflight disk headroom.
 - Key-directory scan should cap the number of candidate directories evaluated
   from malformed input.
-- Password unlock may run Argon2 for every password slot. The key-directory
+- Password open may run Argon2 for every password slot. The key-directory
   maximum bounds this indirectly, but we should add an explicit key-slot count
   cap and a malformed-vault test.
 
@@ -241,7 +241,7 @@ Additional tests to add:
 - Lockbox with many bogus page magic sequences must not cause unbounded
   recovery CPU or memory.
 - Key directory with many wrong password slots must stay under a configured
-  unlock work limit.
+  open work limit.
 - Extraction to disk with many files must fail preflight without partial output
   when limits are exceeded.
 - Compaction should fail early when a disk-space preflight hook reports

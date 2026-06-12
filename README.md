@@ -5,14 +5,14 @@ container. The Rust implementation provides:
 
 - `lockbox`, a CLI for everyday use.
 - `lockbox_core`, the portable storage library.
-- `lockbox_vault`, the native vault and unlock-cache layer for desktop/server
+- `lockbox_vault`, the native vault and open-cache layer for desktop/server
   tools.
 
 Terminology is explicit:
 
 - A **lockbox** is the portable `.lbox` container.
 - A **vault** is the user's local private store. It may contain private keys,
-  trusted recipient keys, key-directory backups, and local unlock-cache state.
+  trusted recipient keys, key-directory backups, and local open-cache state.
 
 See [docs/terminology.md](docs/terminology.md) for the canonical definitions.
 
@@ -29,17 +29,17 @@ Create a lockbox:
 lockbox create secrets.lbox
 ```
 
-Unlock it for normal commands:
+Open it for normal commands:
 
 ```bash
 lockbox open secrets.lbox
 ```
 
-The unlock is cached in a per-user in-memory agent for a short sliding TTL. Lock
+The open is cached in a per-user in-memory agent for a short sliding TTL. Lock
 it when you are done:
 
 ```bash
-lockbox lock secrets.lbox
+lockbox close secrets.lbox
 ```
 
 Add files:
@@ -96,32 +96,32 @@ output as a secret:
 lockbox vault identity export-private --format lockbox-pem default ./default-private.pem
 ```
 
-Private vault keys are stored inside the local vault as secret env records, not
+Private vault keys are stored inside the local vault as secret variable records, not
 as normal files in the vault lockbox. See
 [docs/key_management.md](docs/key_management.md) for the key and vault model.
 
-## Environment Variables
+## Variables
 
-Environment variables are encrypted metadata, not files. They do not appear in
-file listings and are loaded only when env commands or APIs request them.
+Variables are encrypted metadata, not files. They do not appear in
+file listings and are loaded only when variables commands or APIs request them.
 
-Plain env vars are for values that are useful configuration but not high-value
+Plain variables are for values that are useful configuration but not high-value
 secrets:
 
 ```bash
-lockbox env set secrets.lbox DATABASE_URL --value 'postgres://localhost/app'
-lockbox env get secrets.lbox DATABASE_URL
+lockbox variables set secrets.lbox DATABASE_URL --value 'postgres://localhost/app'
+lockbox variables get secrets.lbox DATABASE_URL
 ```
 
-Secret env vars are for passwords, API tokens, signing keys, and similar
-material. They use secure-memory handling in the env path and must be provided
+Secret variables are for passwords, API tokens, signing keys, and similar
+material. They use secure-memory handling in the variable path and must be provided
 through an explicit source:
 
 ```bash
-lockbox env set secrets.lbox --secret API_TOKEN --interactive
-lockbox env set secrets.lbox --secret API_TOKEN --file ./api-token.txt
-lockbox env set secrets.lbox --secret API_TOKEN --stdin
-lockbox env set secrets.lbox --secret API_TOKEN --from-env API_TOKEN
+lockbox variables set secrets.lbox --secret API_TOKEN --interactive
+lockbox variables set secrets.lbox --secret API_TOKEN --file ./api-token.txt
+lockbox variables set secrets.lbox --secret API_TOKEN --stdin
+lockbox variables set secrets.lbox --secret API_TOKEN --from-env API_TOKEN
 ```
 
 Avoid passing secrets as command-line arguments. Shell history and process
@@ -138,14 +138,14 @@ Use these defaults unless you have a specific reason not to:
 
 - Use `lockbox open` and the local agent instead of repeatedly passing
   passwords or private keys.
-- Use secret env vars for credentials and tokens.
-- Do not store secrets as normal files when env semantics are appropriate.
+- Use secret variables for credentials and tokens.
+- Do not store secrets as normal files when variable semantics are appropriate.
 - Do not pass secret values on the command line.
 - Keep private key exports offline, short-lived, and permission-restricted.
 - Prefer recipient keys over shared passwords for team access.
-- Run `lockbox lock secrets.lbox` when an unlock should no longer be cached.
+- Run `lockbox close secrets.lbox` when an open should no longer be cached.
 - Use `lockbox visualize secrets.lbox` for diagnostics; it intentionally avoids
-  printing file paths, file contents, env names, or env values.
+  printing file paths, file contents, variable names, or variable values.
 
 Lockbox protects data inside the container. It cannot protect a secret after you
 write it to a normal terminal, shell history, clipboard, exported file, build
@@ -156,7 +156,7 @@ log, or process environment controlled by other tooling.
 Use `lockbox_core` when you need the portable storage engine:
 
 ```rust
-use lockbox_core::{EnvName, Lockbox, LockboxPath, LockboxProtection, LockboxUnlock, SecretVec};
+use lockbox_core::{VariableName, Lockbox, LockboxPath, LockboxProtection, LockboxUnlock, SecretVec};
 use std::path::Path;
 
 let key = SecretVec::try_from_slice(b"correct horse battery staple")?;
@@ -167,7 +167,7 @@ let mut lockbox = Lockbox::create_file(
 
 lockbox.add_file(&LockboxPath::new("/docs/a.txt")?, b"alpha", false)?;
 lockbox.add_file(&LockboxPath::new("/docs/b.txt")?, b"bravo", false)?;
-lockbox.set_env(&EnvName::new("DATABASE_URL")?, "postgres://localhost/app")?;
+lockbox.set_variable(&VariableName::new("DATABASE_URL")?, "postgres://localhost/app")?;
 lockbox.commit()?;
 
 let reopened = Lockbox::open_file(
@@ -175,11 +175,11 @@ let reopened = Lockbox::open_file(
     LockboxUnlock::ContentKey(key),
 )?;
 let file = reopened.get_file(&LockboxPath::new("/docs/a.txt")?)?;
-let env = reopened.get_env(&EnvName::new("DATABASE_URL")?)?;
+let value = reopened.get_variable(&VariableName::new("DATABASE_URL")?)?;
 ```
 
 Use `lockbox_vault` for native applications that want the local vault and
-unlock-cache behavior:
+open-cache behavior:
 
 ```rust
 use lockbox_vault::{local_vault, SecretString};
@@ -201,8 +201,8 @@ vault.lock_lockbox("secrets.lbox")?;
 
 - [CLI how-to](docs/cli_how_to.md): command examples.
 - [Key management](docs/key_management.md): vaults, keys, recipients, and
-  unlock caching.
-- [Lockbox Session Agent](docs/lockbox_session_agent.md): local unlock cache
+  open caching.
+- [Lockbox Session Agent](docs/lockbox_session_agent.md): local open cache
   lifecycle, protocol, and security model.
 - [Security audit](docs/security_audit.md): security analysis and release
   blockers.

@@ -21,7 +21,7 @@ Exact on-disk structures are in [file_formats.md](file_formats.md).
 for Linux, macOS, Windows, Android, iOS, WASI, and browser-style
 `wasm32-unknown-unknown` builds.
 
-`lockbox_vault` owns native local-vault behavior, unlock-cache agent transport,
+`lockbox_vault` owns native local-vault behavior, open-cache agent transport,
 private key storage, trusted recipient storage, and key-directory backups.
 Mobile and WASM applications should use platform-specific vault integration
 instead of embedding the native agent.
@@ -30,14 +30,14 @@ instead of embedding the native agent.
 
 Lockbox v2 uses a small cleartext header plus fixed-size pages. Most page
 bodies are encrypted and authenticated. Key-directory pages are cleartext
-page-cache pages because unlock metadata must be read before the content key is
+page-cache pages because open metadata must be read before the content key is
 available.
 
 ```text
 [ Header ]
 [ Page: commit root, encrypted body ]
 [ Page: TOC metadata + file content, encrypted body ]
-[ Page: env metadata, encrypted body ]
+[ Page: variable metadata, encrypted body ]
 [ Page: key directory, cleartext checksummed body ]
 ...
 ```
@@ -52,7 +52,7 @@ stored body length
 SHA-256 public header checksum
 ```
 
-Paths, file names, file contents, env names, env values, permissions, symlink
+Paths, file names, file contents, variable names, variable values, permissions, symlink
 targets, and TOC entries are inside fixed-size encrypted pages. Metadata
 pages are currently 128 KiB and file-data pages are 8 MiB. Normal storage
 writes operate on whole physical pages.
@@ -97,7 +97,7 @@ metadata, host reads, frame preparation, and page writes.
 ## TOC And Recovery
 
 Normal open uses the header's latest authenticated commit root. The commit root
-points at the current TOC root, env root, and persisted free-space index.
+points at the current TOC root, variable root, and persisted free-space index.
 
 Recovery does not trust the fixed header or TOC. It scans fixed-size
 pages, verifies checksums, authenticates encrypted pages, and rebuilds the best
@@ -113,7 +113,7 @@ let clean = RecoveryScanner::salvage_bytes(damaged_bytes, key)?;
 ## Page Cache
 
 The core library uses one decoded-page cache for pages read from the lockbox.
-TOC nodes, file pages, symlinks, env objects, free-index objects, key
+TOC nodes, file pages, symlinks, variable objects, free-index objects, key
 directories, and commit roots share one weighted LRU budget keyed by page
 offset. Metadata pages weigh less than file-data pages.
 

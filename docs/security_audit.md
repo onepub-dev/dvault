@@ -23,7 +23,7 @@ cryptographic review.
   generated per slot so recipient slots do not intentionally correlate
   membership across lockboxes.
 - Key directories are capped at 1 MiB.
-- Unlock caching stores unwrapped content keys only in a per-user agent process,
+- Open caching stores unwrapped content keys only in a per-user agent process,
   not on disk.
 - Core and agent key buffers zeroize on drop and try to lock memory.
 - TOC decode rejects unsorted or duplicate leaf paths, unsorted or duplicate
@@ -31,13 +31,13 @@ cryptographic review.
   extraction trusts TOC metadata.
 - Current commits now publish an authenticated commit-root object inside a
   fixed-size encrypted page. The commit root points at the current TOC root,
-  the current env root, and the persisted free-space index.
+  the current variable root, and the persisted free-space index.
 - The committed TOC stores only current entries; deletes redact the referenced payload or
   metadata object and are not represented as tombstones or recovery history.
-- The committed env namespace stores only current entries. Env values are active secrets, so
-  updates and deletes stage sanitized replacements for old env tree pages
+- The committed variable namespace stores only current entries. Variable values are active secrets, so
+  updates and deletes stage sanitized replacements for old variable tree pages
   through the page cache before a newly added recipient can decrypt stale
-  values. Linked env-page logs, tombstone histories, and legacy env scans are
+  values. Linked variable-page logs, tombstone histories, and legacy variable scans are
   not accepted by the current pre-release format.
 
 ## Risks And Required Follow-Up
@@ -57,10 +57,10 @@ cryptographic review.
   `SecretString::try_from_env`, not via a normal `String`.
 - The core still exposes content-key APIs for callers that deliberately manage
   their own high-entropy lockbox key. Normal bindings should guide callers
-  toward password or recipient unlock APIs.
+  toward password or recipient open APIs.
 - The current storage path now uses fixed-size page-cache managed pages. Format
   review should treat `docs/file_formats.md` as the current contract. Normal writes,
-  including compaction rewrites, pass through the page cache. Unlock reads of
+  including compaction rewrites, pass through the page cache. Open reads of
   current key-directory pages also go through the page-cache page read/decode
   boundary because key directories are clear-text pages. Direct raw storage
   reads are limited to fixed-header reads, recovery scans, and low-level format

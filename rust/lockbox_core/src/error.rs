@@ -73,7 +73,7 @@ impl Error {
                 "Unlock the lockbox with a password, recipient keypair, or content key, or configure the local vault before retrying."
             }
             Error::Configuration(_) => {
-                "Set the required environment variable or pass an explicit path/value."
+                "Set the required variable or pass an explicit path/value."
             }
             Error::UnsupportedHostPath(_) => {
                 "Use a regular file or directory with valid UTF-8 path components, or add unsupported filesystem objects explicitly."
@@ -187,16 +187,16 @@ mod tests {
             Error::CorruptVaultRecord("bad private key record".to_string()).to_string();
         assert!(corrupt_vault_record.contains("corrupt vault record: bad private key record"));
 
-        let invalid_input = Error::InvalidInput("bad env value".to_string()).to_string();
-        assert!(invalid_input.contains("invalid input: bad env value"));
+        let invalid_input = Error::InvalidInput("bad variable value".to_string()).to_string();
+        assert!(invalid_input.contains("invalid input: bad variable value"));
 
         let invalid_key_material =
             Error::InvalidKeyMaterial("bad public key".to_string()).to_string();
         assert!(invalid_key_material.contains("invalid key material: bad public key"));
 
         let invalid_operation =
-            Error::InvalidOperation("environment variable is secret".to_string()).to_string();
-        assert!(invalid_operation.contains("invalid operation: environment variable is secret"));
+            Error::InvalidOperation("variable is secret".to_string()).to_string();
+        assert!(invalid_operation.contains("invalid operation: variable is secret"));
 
         let vault = Error::VaultUnavailable("no cached key".to_string()).to_string();
         assert!(vault.contains("vault unavailable: no cached key"));
