@@ -1104,6 +1104,8 @@ fn remove_requires_confirmation_and_reports_count() {
     let lockbox = dir.join("remove.lbox");
     let source = dir.join("remove.txt");
     fs::write(&source, "delete me").unwrap();
+    let root_source = dir.join("perf.data");
+    fs::write(&root_source, "root delete").unwrap();
 
     run(
         bin,
@@ -1137,6 +1139,19 @@ fn remove_requires_confirmation_and_reports_count() {
     assert_success(&removed);
     assert!(String::from_utf8_lossy(&removed.stdout).contains("Removed 1 file"));
     assert!(String::from_utf8_lossy(&removed.stdout).contains("/docs/remove.txt"));
+
+    run(
+        bin,
+        &[
+            "add",
+            lockbox.to_str().unwrap(),
+            root_source.to_str().unwrap(),
+        ],
+    );
+    let root_removed =
+        run_output_with_stdin(bin, &["rm", lockbox.to_str().unwrap(), "perf.data"], "y\n");
+    assert_success(&root_removed);
+    assert!(String::from_utf8_lossy(&root_removed.stdout).contains("/perf.data"));
 
     let listing = run_output(bin, &["list", lockbox.to_str().unwrap()]);
     assert_success(&listing);

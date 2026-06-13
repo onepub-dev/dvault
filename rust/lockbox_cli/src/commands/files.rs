@@ -256,7 +256,11 @@ pub(crate) fn remove(args: &[String], access: &Access) -> CliResult<()> {
         .cloned()
         .collect::<Vec<_>>();
     let lockbox_path = require_arg(&args, 0, "lockbox")?;
-    let path = LockboxPath::new(require_arg(&args, 1, "lockbox path")?)?;
+    let path = LockboxPath::new(root_relative_lockbox_path(require_arg(
+        &args,
+        1,
+        "lockbox path",
+    )?))?;
     let mut lb = open_existing(lockbox_path, access)?;
     let Some(entry) = lb.stat(&path) else {
         return Err(Error::NotFound(path.to_string()).into());
@@ -269,6 +273,14 @@ pub(crate) fn remove(args: &[String], access: &Access) -> CliResult<()> {
     lb.commit()?;
     println!("Removed 1 {}: {}", kind_name(&entry.kind), entry.path);
     Ok(())
+}
+
+fn root_relative_lockbox_path(path: &str) -> String {
+    if path.starts_with('/') || path.contains('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    }
 }
 
 pub(crate) fn rename(args: &[String], access: &Access) -> CliResult<()> {
