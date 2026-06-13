@@ -1769,6 +1769,10 @@ fn create_defaults_lbox_extension_and_reports_before_prompting() {
     )
     .output()
     .unwrap();
+    if is_session_agent_unavailable(&listing) {
+        eprintln!("skipping create extension listing assertion: session agent unavailable");
+        return;
+    }
     assert_success(&listing);
     assert_eq!(String::from_utf8_lossy(&listing.stdout).trim(), "empty");
 
@@ -2134,6 +2138,30 @@ fn vault_init_rejects_blank_pass_phrase() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("vault pass phrase must be at least 15 characters"));
     assert!(!vault_root.join("local-vault.lbox").exists());
+}
+
+#[test]
+fn vault_publish_without_identity_email_is_actionable() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("publish-missing-email");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    let publish =
+        run_output_without_content_key(bin, &["vault", "publish"], &vault_root, &agent_root);
+    assert!(!publish.status.success());
+    let stderr = String::from_utf8_lossy(&publish.stderr);
+    assert!(stderr.contains(
+        "You may not publish a public key for an Identity that does not have an email address."
+    ));
+    assert!(stderr.contains("The identity `default` has no email address."));
+    assert!(stderr.contains("Run `lockbox vault identity email default <email>`."));
+    assert!(stderr.contains("Then run this command again."));
+    assert!(!stderr.contains("invalid input"));
+    assert!(!stderr.contains("Check the supplied value"));
 }
 
 #[test]

@@ -303,8 +303,8 @@ fn share_publish(args: &[String]) -> CliResult<()> {
         .into());
     }
     let email = vault.identity_email(identity)?.ok_or_else(|| {
-        Error::InvalidInput(format!(
-            "identity {identity} has no email address; run `lockbox vault identity email {identity} <email>`"
+        cli_error(format!(
+            "You may not publish a public key for an Identity that does not have an email address.\nThe identity `{identity}` has no email address.\nRun `lockbox vault identity email {identity} <email>`.\nThen run this command again."
         ))
     })?;
     let email = normalize_contact_email(&email)
