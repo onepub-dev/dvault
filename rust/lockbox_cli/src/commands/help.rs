@@ -441,7 +441,7 @@ fn variables_command(verbose: bool) -> Command {
             .after_help(verbose_help(
                 verbose,
                 "Examples:\n  lockbox variables set secrets.lbox APP_MODE production\n  lockbox variables set --secret secrets.lbox API_TOKEN --interactive\n  printf '%s' \"$TOKEN\" | lockbox variables set --secret --stdin secrets.lbox API_TOKEN",
-                "Context:\n  Variables set writes one named value into a lockbox. Use --secret for values that should not be exported in bulk, such as tokens and passwords. Choose one value source: argument, prompt, stdin, file, or process environment.",
+                "Context:\n  Variables set writes one named value into a lockbox. Use --secret for values that should not be exported in bulk, such as tokens and passwords. Choose one value source: argument, prompt, stdin, file, or process environment. Secret values cannot use --value; use --stdin, --file, --interactive, or --from-env.",
             ))
             .arg(
                 Arg::new("secret")
@@ -476,7 +476,7 @@ fn variables_command(verbose: bool) -> Command {
                     .short('v')
                     .long("value")
                     .value_name("VALUE")
-                    .help("Read the value from this argument."),
+                    .help("Read a normal value from this argument; not accepted with --secret."),
             )
             .arg(
                 Arg::new("file")

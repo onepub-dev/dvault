@@ -70,6 +70,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_success(&env_help);
     let env_help = String::from_utf8_lossy(&env_help.stdout);
     assert!(env_help.contains("-v, --value <VALUE>"));
+    assert!(env_help.contains("not accepted with --secret"));
     assert!(!env_help.contains("Context:"));
 
     let env_help = run_output(bin, &["variables", "--help"]);
@@ -165,6 +166,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let env_set_verbose_help = String::from_utf8_lossy(&env_set_verbose_help.stdout);
     assert!(env_set_verbose_help.contains("Context:"));
     assert!(env_set_verbose_help.contains("Choose one value source"));
+    assert!(env_set_verbose_help.contains("Secret values cannot use --value"));
 
     let env_get_help = run_output(bin, &["variables", "get", "--help"]);
     assert_success(&env_get_help);
