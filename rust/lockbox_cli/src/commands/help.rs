@@ -1,4 +1,4 @@
-use clap::{Arg, ArgAction, Command};
+use clap::{Arg, ArgAction, ArgGroup, Command};
 
 const ABOUT: &str =
     "Create encrypted file archives, store secrets safely, and share access with public keys.";
@@ -1338,7 +1338,7 @@ fn vault_identity_command(verbose: bool) -> Command {
         .disable_help_subcommand(true)
         .after_help(verbose_help(
             verbose,
-            "Examples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity publish laptop\n  lockbox vault identity export laptop ./laptop.pub",
+            "Examples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity publish laptop\n  lockbox vault identity export laptop --public ./laptop.pub",
             "Context:\n  An identity has a public key and a private key. Publish or export the public key so someone else can grant you access to a lockbox; keep the private key secret because it opens lockboxes granted to that identity. To save someone else's public key, use `lockbox vault contact receive` or `lockbox vault contact import`.",
         ))
         .subcommand_required(true)
@@ -1359,8 +1359,8 @@ fn vault_identity_command(verbose: bool) -> Command {
                 .about("Create one of your identities.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault identity create\n  lockbox vault identity create laptop\n  lockbox vault identity export laptop ./laptop.pub",
-                    "Context:\n  Identity create generates a new identity in your vault. With no name, reVault creates the `default` identity. To share the identity, create it first and then run `lockbox vault identity export` to write its public key.",
+                    "Examples:\n  lockbox vault identity create\n  lockbox vault identity create laptop\n  lockbox vault identity export laptop --public ./laptop.pub",
+                    "Context:\n  Identity create generates a new identity in your vault. With no name, reVault creates the `default` identity. To share the identity, create it first and then run `lockbox vault identity export --public` to write its public key.",
                 ))
                 .arg(
                     Arg::new("overwrite")
@@ -1424,48 +1424,59 @@ fn vault_identity_command(verbose: bool) -> Command {
         )
         .subcommand(
             Command::new("import")
-                .about("Import a private key into the local vault.")
+                .about("Import a private key into the vault and create a new identity.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault identity import laptop ./laptop.private\n  lockbox vault identity import laptop ./laptop.private ./laptop.pub",
-                    "Context:\n  Identity import restores or moves private open material into this vault. Use it when bringing an existing identity onto this installation or recovering from a backup.",
+                    "Examples:\n  lockbox vault identity import laptop --public ./laptop.pub --private ./laptop.private",
+                    "Context:\n  Identity import restores or moves private open material into this vault. Both the public and private key files are required, and reVault rejects the import if they do not match.",
                 ))
                 .arg(required("name", "Identity name."))
-                .arg(required("private-key", "Private key path."))
-                .arg(optional("public-key-output", "Public key output path.")),
-        )
-        .subcommand(
-            Command::new("export")
-                .about("Export an identity public key.")
-                .after_help(verbose_help(
-                    verbose,
-                    "Examples:\n  lockbox vault identity export ./default.pub\n  lockbox vault identity export laptop ./laptop.pub",
-                    "Context:\n  Identity export writes the public key for one of your identities and prints its fingerprint. Share the file with someone who needs to grant you access to a lockbox, then give them the fingerprint over a second channel. The public key does not open lockboxes by itself.",
-                ))
-                .arg(format_arg(verbose))
                 .arg(
-                    Arg::new("args")
-                        .value_names(["name", "public-key-output"])
-                        .num_args(1..=2)
+                    Arg::new("public")
+                        .long("public")
+                        .value_name("PUBLIC_KEY")
                         .required(true)
-                        .help("Optional identity name followed by the public key output path."),
+                        .help("Public key input path."),
+                )
+                .arg(
+                    Arg::new("private")
+                        .long("private")
+                        .value_name("PRIVATE_KEY")
+                        .required(true)
+                        .help("Private key input path."),
                 ),
         )
         .subcommand(
-            Command::new("export-private")
-                .about("Export an identity private key.")
+            Command::new("export")
+                .about("Export identity key files.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault identity export-private ./default.private\n  lockbox vault identity export-private laptop ./laptop.private",
-                    "Context:\n  Identity export-private writes private open material to a file. Treat the output as highly sensitive; anyone with the private key can open lockboxes granted to that identity.",
+                    "Examples:\n  lockbox vault identity export --public ./default.pub\n  lockbox vault identity export laptop --public ./laptop.pub --private ./laptop.private",
+                    "Context:\n  Identity export writes one or both key files for an identity. Share the public key with someone who needs to grant you access to a lockbox, then give them the fingerprint over a second channel. Treat private-key output as highly sensitive; anyone with the private key can open lockboxes granted to that identity.",
                 ))
                 .arg(format_arg(verbose))
                 .arg(
-                    Arg::new("args")
-                        .value_names(["name", "private-key-output"])
-                        .num_args(1..=2)
-                        .required(true)
-                        .help("Optional identity name followed by the private key output path."),
+                    Arg::new("public")
+                        .long("public")
+                        .value_name("PUBLIC_KEY")
+                        .help("Public key output path."),
+                )
+                .arg(
+                    Arg::new("private")
+                        .long("private")
+                        .value_name("PRIVATE_KEY")
+                        .help("Private key output path."),
+                )
+                .group(
+                    ArgGroup::new("export-output")
+                        .args(["public", "private"])
+                        .multiple(true)
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("name")
+                        .required(false)
+                        .help("Identity name. Defaults to default."),
                 ),
         )
         .subcommand(

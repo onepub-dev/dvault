@@ -223,9 +223,8 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_identity_create_help = String::from_utf8_lossy(&vault_identity_create_help.stdout);
     assert!(vault_identity_create_help.contains("Create one of your identities."));
     assert!(!vault_identity_create_help.contains("creates the `default` identity"));
-    assert!(
-        vault_identity_create_help.contains("lockbox vault identity export laptop ./laptop.pub")
-    );
+    assert!(vault_identity_create_help
+        .contains("lockbox vault identity export laptop --public ./laptop.pub"));
 
     let identity_publish_help = run_output(bin, &["vault", "identity", "publish", "--help"]);
     assert_success(&identity_publish_help);
@@ -271,7 +270,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(vault_identity_help.contains("list"));
     assert!(vault_identity_help.contains("create"));
     assert!(vault_identity_help.contains("export"));
-    assert!(vault_identity_help.contains("export-private"));
+    assert!(!vault_identity_help.contains("export-private"));
     assert!(!vault_identity_help.contains("export-public"));
     assert!(!vault_identity_help.contains("  help"));
 
@@ -1005,6 +1004,7 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
             "identity",
             "export",
             "alias",
+            "--public",
             public_key.to_str().unwrap(),
         ],
         &vault_root,
@@ -1017,6 +1017,7 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
             "identity",
             "export",
             "alias",
+            "--public",
             exported_public_key.to_str().unwrap(),
         ],
         &vault_root,
@@ -1731,6 +1732,7 @@ fn cli_env_rename_and_visualize_flow() {
             "identity",
             "export",
             "default",
+            "--public",
             vault_public.to_str().unwrap(),
         ],
     );
@@ -1770,6 +1772,7 @@ fn cli_env_rename_and_visualize_flow() {
             "identity",
             "export",
             "default",
+            "--public",
             public_export.to_str().unwrap(),
         ],
     );
@@ -1787,6 +1790,7 @@ fn cli_env_rename_and_visualize_flow() {
             "--format",
             "jwk",
             "default",
+            "--public",
             public_jwk.to_str().unwrap(),
         ],
     );
@@ -2148,6 +2152,7 @@ fn access_subcommand_aliases_manage_lockbox_access() {
             "identity",
             "export",
             "sharee",
+            "--public",
             public_key.to_str().unwrap(),
         ],
         &vault_root,
@@ -2168,6 +2173,7 @@ fn access_subcommand_aliases_manage_lockbox_access() {
             "identity",
             "export",
             "sharee2",
+            "--public",
             second_public_key.to_str().unwrap(),
         ],
         &vault_root,
@@ -2892,7 +2898,7 @@ fn vault_identity_create_names_default_and_rejects_public_key_output() {
     let output = String::from_utf8_lossy(&output.stdout);
     assert!(output.contains("Using default identity name: default"));
     assert!(output.contains("Created vault identity: default"));
-    assert!(output.contains("lockbox vault identity export default <public-key-output>"));
+    assert!(output.contains("lockbox vault identity export default --public <public-key-output>"));
 
     let named = run_output_without_content_key(
         bin,
@@ -2903,7 +2909,7 @@ fn vault_identity_create_names_default_and_rejects_public_key_output() {
     assert_success(&named);
     let named = String::from_utf8_lossy(&named.stdout);
     assert!(named.contains("Created vault identity: named"));
-    assert!(named.contains("lockbox vault identity export named <public-key-output>"));
+    assert!(named.contains("lockbox vault identity export named --public <public-key-output>"));
 
     let refused_public_output = run_output_without_content_key(
         bin,
@@ -3014,8 +3020,9 @@ fn vault_identity_rotate_history_and_access_refresh_flow() {
         &[
             "vault",
             "identity",
-            "export-private",
+            "export",
             "default",
+            "--private",
             current_private.to_str().unwrap(),
         ],
         &vault_root,
@@ -3080,13 +3087,13 @@ fn vault_identity_export_reports_missing_output_for_named_identity() {
 
     let output = run_output_without_content_key(
         bin,
-        &["vault", "identity", "export-private", "take-two"],
+        &["vault", "identity", "export", "take-two"],
         &vault_root,
         &agent_root,
     );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("missing private key output path for identity take-two"));
+        .contains("the following required arguments were not provided"));
 }
 
 #[test]
@@ -4180,6 +4187,7 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
             "identity",
             "export",
             "default",
+            "--public",
             public_default.to_str().unwrap(),
         ],
         &vault_root,
@@ -4194,11 +4202,11 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
     ];
     for (name, format, expected) in private_exports {
         let path = dir.join(format!("private-{name}.key"));
-        let mut args = vec!["vault", "identity", "export-private"];
+        let mut args = vec!["vault", "identity", "export"];
         if let Some(format) = format {
             args.extend(["--format", format]);
         }
-        args.extend(["default", path.to_str().unwrap()]);
+        args.extend(["default", "--private", path.to_str().unwrap()]);
         run_in(bin, &args, &vault_root, &agent_root);
 
         let text = String::from_utf8_lossy(&fs::read(&path).unwrap()).to_string();
@@ -4213,6 +4221,9 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
                 "identity",
                 "import",
                 &format!("imported-{name}"),
+                "--public",
+                public_default.to_str().unwrap(),
+                "--private",
                 path.to_str().unwrap(),
             ],
             &vault_root,
@@ -4232,7 +4243,7 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
         if let Some(format) = format {
             args.extend(["--format", format]);
         }
-        args.extend(["default", path.to_str().unwrap()]);
+        args.extend(["default", "--public", path.to_str().unwrap()]);
         let export = run_output_in(bin, &args, &vault_root, &agent_root);
         assert_success(&export);
         let export = String::from_utf8_lossy(&export.stdout);
@@ -4264,6 +4275,28 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
         );
     }
 
+    let combined_public = dir.join("combined.pub");
+    let combined_private = dir.join("combined.private");
+    let combined = run_output_in(
+        bin,
+        &[
+            "vault",
+            "identity",
+            "export",
+            "default",
+            "--public",
+            combined_public.to_str().unwrap(),
+            "--private",
+            combined_private.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&combined);
+    assert!(combined_public.exists());
+    assert!(combined_private.exists());
+    assert!(String::from_utf8_lossy(&combined.stdout).contains("public_key_fingerprint="));
+
     let invalid_private = dir.join("invalid-private.key");
     fs::write(&invalid_private, "not a key").unwrap();
     let output = run_output_in(
@@ -4273,6 +4306,9 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
             "identity",
             "import",
             "invalid",
+            "--public",
+            public_default.to_str().unwrap(),
+            "--private",
             invalid_private.to_str().unwrap(),
         ],
         &vault_root,

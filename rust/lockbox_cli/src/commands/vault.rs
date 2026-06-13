@@ -100,7 +100,6 @@ fn identity_command(args: &[String]) -> CliResult<()> {
         "history" => identity_history(&args[1..]),
         "import" => import_key(&args[1..]),
         "export" => export_public(&args[1..]),
-        "export-private" => export_key(&args[1..]),
         "remove" | "rm" => remove_key(&args[1..]),
         "rotate" => rotate_key(&args[1..]),
         "publish" => share_publish(&args[1..]),
@@ -394,7 +393,7 @@ fn keygen(args: &[String]) -> CliResult<()> {
     }
     println!("Created vault identity: {name}");
     println!(
-        "Export its public key with: lockbox vault identity export {name} <public-key-output>"
+        "Export its public key with: lockbox vault identity export {name} --public <public-key-output>"
     );
     Ok(())
 }
@@ -932,21 +931,19 @@ fn hex_digit(byte: u8) -> CliResult<u8> {
 }
 
 fn import_key(args: &[String]) -> CliResult<()> {
-    let name = require_arg(args, 0, "identity name")?;
-    let private_path = require_arg(args, 1, "private key path")?;
-    let public_path = args.get(2).map(String::as_str);
+    let options = parse_identity_import_args(args)?;
     let vault = default_vault()?;
-    if vault.private_key_exists(name)? {
-        return Err(Error::AlreadyExists(format!("vault identity {name}")).into());
+    if vault.private_key_exists(&options.name)? {
+        return Err(Error::AlreadyExists(format!("vault identity {}", options.name)).into());
     }
-    let keypair = import_private_key_file(private_path)?;
-    vault.store_private_key(name, &keypair)?;
-    if let Some(path) = public_path {
-        fs::write(
-            path,
-            export_public_key(&keypair.public_key(), KeyFormat::LockboxPem)?,
-        )?;
+    let keypair = import_private_key_file(&options.private_path)?;
+    let public_key = import_public_key(&fs::read(&options.public_path)?)?;
+    if keypair.public_key() != public_key {
+        return Err(
+            Error::InvalidInput("public key does not match private key".to_string()).into(),
+        );
     }
+    vault.store_private_key(&options.name, &keypair)?;
     Ok(())
 }
 
@@ -1222,47 +1219,19 @@ fn ensure_default_private_key(vault: &VaultDirectory) -> CliResult<bool> {
 
 fn export_public(args: &[String]) -> CliResult<()> {
     let (args, format) = parse_format(args)?;
+    let options = parse_identity_export_args(&args)?;
     let vault = default_vault()?;
-    let (name, destination) = match args.as_slice() {
-        [destination] => {
-            if vault.private_key_exists(destination)? {
-                return Err(Error::InvalidInput(format!(
-                    "missing public key output path for identity {destination}"
-                ))
-                .into());
-            }
-            (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str())
-        }
-        [name, destination, ..] => (name.as_str(), destination.as_str()),
-        [] => return Err(Error::InvalidInput("missing public key path".to_string()).into()),
-    };
-    let keypair = vault.load_private_key(name)?;
-    let public_key = keypair.public_key();
-    let fingerprint = public_key_fingerprint(&public_key);
-    fs::write(destination, export_public_key(&public_key, format)?)?;
-    println!("identity={name}");
-    println!("public_key_fingerprint={}", format_hex_pairs(&fingerprint));
-    Ok(())
-}
-
-fn export_key(args: &[String]) -> CliResult<()> {
-    let (args, format) = parse_format(args)?;
-    let vault = default_vault()?;
-    let (name, destination) = match args.as_slice() {
-        [destination] => {
-            if vault.private_key_exists(destination)? {
-                return Err(Error::InvalidInput(format!(
-                    "missing private key output path for identity {destination}"
-                ))
-                .into());
-            }
-            (VaultDirectory::DEFAULT_KEY_NAME, destination.as_str())
-        }
-        [name, destination, ..] => (name.as_str(), destination.as_str()),
-        [] => return Err(Error::InvalidInput("missing private key path".to_string()).into()),
-    };
-    let keypair = vault.load_private_key(name)?;
-    write_private_key(destination, &export_private_key(&keypair, format)?)?;
+    let keypair = vault.load_private_key(&options.name)?;
+    if let Some(destination) = options.private_path.as_deref() {
+        write_private_key(destination, &export_private_key(&keypair, format)?)?;
+    }
+    if let Some(destination) = options.public_path.as_deref() {
+        let public_key = keypair.public_key();
+        let fingerprint = public_key_fingerprint(&public_key);
+        fs::write(destination, export_public_key(&public_key, format)?)?;
+        println!("identity={}", options.name);
+        println!("public_key_fingerprint={}", format_hex_pairs(&fingerprint));
+    }
     Ok(())
 }
 
@@ -1276,6 +1245,102 @@ fn confirm_private_key_removal(name: &str) -> CliResult<bool> {
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
     Ok(answer.trim() == "yes")
+}
+
+struct IdentityImportArgs {
+    name: String,
+    public_path: String,
+    private_path: String,
+}
+
+struct IdentityExportArgs {
+    name: String,
+    public_path: Option<String>,
+    private_path: Option<String>,
+}
+
+fn parse_identity_import_args(args: &[String]) -> CliResult<IdentityImportArgs> {
+    let mut public_path = None;
+    let mut private_path = None;
+    let mut positionals = Vec::new();
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--public" => {
+                public_path = Some(require_arg(args, index + 1, "--public path")?.to_string());
+                index += 2;
+            }
+            "--private" => {
+                private_path = Some(require_arg(args, index + 1, "--private path")?.to_string());
+                index += 2;
+            }
+            value => {
+                positionals.push(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    if positionals.len() > 1 {
+        return Err(Error::InvalidInput(
+            "identity import accepts exactly one identity name".to_string(),
+        )
+        .into());
+    }
+    let name = positionals
+        .pop()
+        .ok_or_else(|| Error::InvalidInput("missing identity name".to_string()))?;
+    let public_path =
+        public_path.ok_or_else(|| Error::InvalidInput("missing --public path".to_string()))?;
+    let private_path =
+        private_path.ok_or_else(|| Error::InvalidInput("missing --private path".to_string()))?;
+    Ok(IdentityImportArgs {
+        name,
+        public_path,
+        private_path,
+    })
+}
+
+fn parse_identity_export_args(args: &[String]) -> CliResult<IdentityExportArgs> {
+    let mut public_path = None;
+    let mut private_path = None;
+    let mut positionals = Vec::new();
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--public" => {
+                public_path = Some(require_arg(args, index + 1, "--public path")?.to_string());
+                index += 2;
+            }
+            "--private" => {
+                private_path = Some(require_arg(args, index + 1, "--private path")?.to_string());
+                index += 2;
+            }
+            value => {
+                positionals.push(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    if public_path.is_none() && private_path.is_none() {
+        return Err(Error::InvalidInput(
+            "identity export requires --public, --private, or both".to_string(),
+        )
+        .into());
+    }
+    if positionals.len() > 1 {
+        return Err(Error::InvalidInput(
+            "identity export accepts at most one identity name".to_string(),
+        )
+        .into());
+    }
+    let name = positionals
+        .pop()
+        .unwrap_or_else(|| VaultDirectory::DEFAULT_KEY_NAME.to_string());
+    Ok(IdentityExportArgs {
+        name,
+        public_path,
+        private_path,
+    })
 }
 
 fn parse_format(args: &[String]) -> CliResult<(Vec<String>, KeyFormat)> {
