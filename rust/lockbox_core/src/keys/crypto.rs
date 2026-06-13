@@ -12,16 +12,16 @@ pub(crate) fn seal_with_random_nonce(
     payload: &[u8],
     key: &[u8],
     aad: &[u8],
-) -> ([u8; 12], Vec<u8>) {
+) -> Result<([u8; 12], Vec<u8>)> {
     let mut content_key = derive_content_key(key);
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&content_key));
     content_key.zeroize();
     let mut nonce = [0u8; 12];
-    getrandom(&mut nonce).expect("system random source failed");
+    getrandom(&mut nonce).map_err(|err| Error::Io(err.to_string()))?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce), Payload { msg: payload, aad })
-        .expect("ChaCha20-Poly1305 encryption should not fail");
-    (nonce, ciphertext)
+        .map_err(|_| Error::SecurityLimitExceeded("encryption failed".to_string()))?;
+    Ok((nonce, ciphertext))
 }
 
 pub(crate) fn open_with_nonce(
@@ -73,12 +73,13 @@ pub(crate) fn seal_with_content_key_secure(
 ) -> Result<[u8; 12]> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(content_key));
     let mut nonce = [0u8; 12];
-    getrandom(&mut nonce).expect("system random source failed");
+    getrandom(&mut nonce).map_err(|err| Error::Io(err.to_string()))?;
     let tag = payload.with_mut_bytes(|bytes| {
         cipher
             .encrypt_in_place_detached(Nonce::from_slice(&nonce), aad, bytes)
-            .expect("ChaCha20-Poly1305 encryption should not fail")
+            .map_err(|_| Error::SecurityLimitExceeded("encryption failed".to_string()))
     })?;
+    let tag = tag?;
     payload.try_extend_from_slice(&tag)?;
     Ok(nonce)
 }
@@ -111,8 +112,8 @@ mod tests {
     fn seal_with_random_nonce_uses_unique_nonce() {
         let key = b"secret";
         let aad = b"test-aad";
-        let (first_nonce, first) = seal_with_random_nonce(b"payload", key, aad);
-        let (second_nonce, second) = seal_with_random_nonce(b"payload", key, aad);
+        let (first_nonce, first) = seal_with_random_nonce(b"payload", key, aad).unwrap();
+        let (second_nonce, second) = seal_with_random_nonce(b"payload", key, aad).unwrap();
 
         assert_ne!(first, second);
         assert_ne!(first_nonce, second_nonce);

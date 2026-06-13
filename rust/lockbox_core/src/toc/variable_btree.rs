@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::checked::{read_u16_le, read_u32_le};
 use crate::constants::DEFAULT_METADATA_MAX_PAGE_BODY_BYTES;
 use crate::page_tree::{
     decode_page_tree_children, encode_page_tree_children, group_by_encoded_size,
@@ -299,7 +300,7 @@ fn decode_variable_leaf_secure_metadata(
         return Err(Error::CorruptRecord);
     }
     let mut offset = VARIABLE_NODE_PREFIX_BYTES;
-    let count = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+    let count = read_u32_le(&payload[offset..offset + 4])? as usize;
     offset += ENTRY_COUNT_BYTES;
     if count > (payload.len() - VARIABLE_NODE_PREFIX_BYTES - ENTRY_COUNT_BYTES) / 6 {
         return Err(Error::CorruptRecord);
@@ -309,7 +310,7 @@ fn decode_variable_leaf_secure_metadata(
         if offset + 2 > payload.len() {
             return Err(Error::CorruptRecord);
         }
-        let name_len = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap()) as usize;
+        let name_len = read_u16_le(&payload[offset..offset + 2])? as usize;
         offset += 2;
         if offset + name_len > payload.len() {
             return Err(Error::CorruptRecord);
@@ -331,8 +332,7 @@ fn decode_variable_leaf_secure_metadata(
         if offset + 4 > payload.len() {
             return Err(Error::CorruptRecord);
         }
-        let value_len =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        let value_len = read_u32_le(&payload[offset..offset + 4])? as usize;
         offset += 4;
         if offset + value_len > payload.len() {
             return Err(Error::CorruptRecord);
@@ -369,7 +369,7 @@ fn variable_entry_encoded_len(entry: &VariableEntry) -> usize {
         + entry
             .value
             .with_plaintext(str::len)
-            .expect("variable value is valid while grouping")
+            .unwrap_or(DEFAULT_METADATA_MAX_PAGE_BODY_BYTES)
 }
 
 fn variable_child_encoded_len(child: &VariableChild) -> usize {

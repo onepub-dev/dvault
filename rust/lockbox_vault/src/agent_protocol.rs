@@ -496,9 +496,7 @@ impl<'a> Cursor<'a> {
 
     fn read_u16(&mut self) -> io::Result<u16> {
         let bytes = self.read_exact(2)?;
-        Ok(u16::from_le_bytes(
-            bytes.try_into().expect("slice length checked"),
-        ))
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
     fn read_u32(&mut self) -> io::Result<u32> {

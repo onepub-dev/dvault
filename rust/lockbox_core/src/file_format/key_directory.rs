@@ -1,3 +1,4 @@
+use crate::checked::{array_16, read_u16_le, read_u32_le, read_u64_le};
 use crate::key_slot::{KeySlot, MAX_KEY_SLOT_NAME_BYTES};
 use crate::key_wrap::RecipientWrappedKey;
 use crate::lockbox_id::LockboxId;
@@ -132,23 +133,24 @@ fn decode_key_directory_header(
     if header.len() != KEY_DIR_HEADER_LEN || &header[0..8] != KEY_DIR_MAGIC {
         return Err(Error::CorruptHeader);
     }
-    if u16::from_le_bytes(header[8..10].try_into().unwrap()) != KEY_DIR_VERSION {
+    if read_u16_le(&header[8..10]).map_err(|_| Error::CorruptHeader)? != KEY_DIR_VERSION {
         return Err(Error::CorruptHeader);
     }
     if header[10..12].iter().any(|byte| *byte != 0) {
         return Err(Error::CorruptHeader);
     }
-    let header_len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+    let header_len = read_u32_le(&header[12..16]).map_err(|_| Error::CorruptHeader)? as usize;
     if header_len != KEY_DIR_HEADER_LEN {
         return Err(Error::CorruptHeader);
     }
-    let total_len = u64::from_le_bytes(header[16..24].try_into().unwrap()) as usize;
+    let total_len = read_u64_le(&header[16..24]).map_err(|_| Error::CorruptHeader)? as usize;
     if total_len > MAX_KEY_DIRECTORY_BYTES {
         return Err(Error::SecurityLimitExceeded(
             "key directory exceeds 1 MiB".to_string(),
         ));
     }
-    let lockbox_id = LockboxId::from_bytes(header[32..48].try_into().unwrap());
+    let lockbox_id =
+        LockboxId::from_bytes(array_16(&header[32..48]).map_err(|_| Error::CorruptHeader)?);
     if expected_lockbox_id.is_some_and(|expected| lockbox_id != expected) {
         return Err(Error::CorruptHeader);
     }
@@ -158,8 +160,8 @@ fn decode_key_directory_header(
     Ok(KeyDirectoryHeader {
         total_len,
         lockbox_id,
-        generation: u64::from_le_bytes(header[24..32].try_into().unwrap()),
-        copy_index: u32::from_le_bytes(header[48..52].try_into().unwrap()),
+        generation: read_u64_le(&header[24..32]).map_err(|_| Error::CorruptHeader)?,
+        copy_index: read_u32_le(&header[48..52]).map_err(|_| Error::CorruptHeader)?,
     })
 }
 
@@ -242,7 +244,7 @@ fn decode_key_slots(payload: &[u8]) -> Result<Vec<KeySlot>> {
     if payload.len() < 4 {
         return Err(Error::CorruptHeader);
     }
-    let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let count = read_u32_le(&payload[0..4]).map_err(|_| Error::CorruptHeader)? as usize;
     if count > (payload.len() - 4) / 9 {
         return Err(Error::CorruptHeader);
     }
@@ -254,7 +256,7 @@ fn decode_key_slots(payload: &[u8]) -> Result<Vec<KeySlot>> {
         }
         let kind = payload[offset];
         offset += 1;
-        let id = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        let id = read_u64_le(&payload[offset..offset + 8]).map_err(|_| Error::CorruptHeader)?;
         offset += 8;
         match kind {
             1 => {
@@ -301,7 +303,8 @@ fn read_optional_name(payload: &[u8], offset: &mut usize) -> Result<Option<Strin
     if *offset + 4 > payload.len() {
         return Err(Error::CorruptHeader);
     }
-    let len = u32::from_le_bytes(payload[*offset..*offset + 4].try_into().unwrap()) as usize;
+    let len =
+        read_u32_le(&payload[*offset..*offset + 4]).map_err(|_| Error::CorruptHeader)? as usize;
     *offset += 4;
     if len > MAX_KEY_SLOT_NAME_BYTES {
         return Err(Error::SecurityLimitExceeded(format!(
@@ -330,7 +333,8 @@ fn read_bytes(payload: &[u8], offset: &mut usize) -> Result<Vec<u8>> {
     if *offset + 4 > payload.len() {
         return Err(Error::CorruptHeader);
     }
-    let len = u32::from_le_bytes(payload[*offset..*offset + 4].try_into().unwrap()) as usize;
+    let len =
+        read_u32_le(&payload[*offset..*offset + 4]).map_err(|_| Error::CorruptHeader)? as usize;
     *offset += 4;
     if *offset + len > payload.len() {
         return Err(Error::CorruptHeader);

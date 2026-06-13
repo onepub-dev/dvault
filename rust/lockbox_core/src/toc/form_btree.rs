@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::checked::{read_u16_le, read_u32_le};
 use crate::constants::DEFAULT_METADATA_MAX_PAGE_BODY_BYTES;
 use crate::form::{
     validate_form_alias, validate_form_field_id, validate_form_label, validate_form_record_name,
@@ -510,7 +511,9 @@ fn record_encoded_len(record: &FormRecord) -> usize {
                     + match &value.value {
                         FormValue::Normal(value) => 2 + value.len(),
                         FormValue::Secret(value) => {
-                            4 + value.with_str(str::len).expect("secret value is valid")
+                            4 + value
+                                .with_str(str::len)
+                                .unwrap_or(DEFAULT_METADATA_MAX_PAGE_BODY_BYTES)
                         }
                     }
             })
@@ -547,8 +550,7 @@ impl<'a> Reader<'a> {
         if self.offset + 4 > self.bytes.len() {
             return Err(Error::CorruptRecord);
         }
-        let value =
-            u32::from_le_bytes(self.bytes[self.offset..self.offset + 4].try_into().unwrap());
+        let value = read_u32_le(&self.bytes[self.offset..self.offset + 4])?;
         self.offset += 4;
         Ok(value)
     }
@@ -569,8 +571,7 @@ impl<'a> Reader<'a> {
         if self.offset + 4 > self.bytes.len() {
             return Err(Error::CorruptRecord);
         }
-        let len = u32::from_le_bytes(self.bytes[self.offset..self.offset + 4].try_into().unwrap())
-            as usize;
+        let len = read_u32_le(&self.bytes[self.offset..self.offset + 4])? as usize;
         self.offset += 4;
         if self.offset + len > self.bytes.len() {
             return Err(Error::CorruptRecord);
@@ -584,8 +585,7 @@ impl<'a> Reader<'a> {
         if self.offset + 2 > self.bytes.len() {
             return Err(Error::CorruptRecord);
         }
-        let len = u16::from_le_bytes(self.bytes[self.offset..self.offset + 2].try_into().unwrap())
-            as usize;
+        let len = read_u16_le(&self.bytes[self.offset..self.offset + 2])? as usize;
         self.offset += 2;
         Ok(len)
     }

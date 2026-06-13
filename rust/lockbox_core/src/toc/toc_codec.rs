@@ -61,8 +61,7 @@ pub(crate) fn encode_toc_entries<'a>(entries: impl IntoIterator<Item = &'a TocEn
             put_varint(chunk.file_offset, &mut out);
             put_varint(chunk.len, &mut out);
             put_varint(chunk.compression_frame_offset, &mut out);
-            let descriptor_index =
-                frame_descriptor_index(&descriptors, chunk).expect("descriptor exists");
+            let descriptor_index = frame_descriptor_index(&descriptors, chunk).unwrap_or(0);
             put_varint(descriptor_index as u64, &mut out);
         }
         previous_path = entry.path.as_str();
@@ -501,7 +500,7 @@ fn encoded_chunk_len(
         + varint_len(chunk.file_offset)
         + varint_len(chunk.len)
         + varint_len(chunk.compression_frame_offset)
-        + varint_len(frame_descriptor_index(descriptors, chunk).expect("descriptor exists") as u64)
+        + varint_len(frame_descriptor_index(descriptors, chunk).unwrap_or(0) as u64)
 }
 
 fn encoded_segment_len(segment: &CompressionFrameSegment) -> usize {

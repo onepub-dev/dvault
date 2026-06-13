@@ -5,7 +5,7 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -177,6 +177,12 @@ impl From<std::io::Error> for StoreError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
     }
+}
+
+fn lock_store<'a, T>(mutex: &'a Mutex<T>, name: &str) -> Result<MutexGuard<'a, T>, StoreError> {
+    mutex
+        .lock()
+        .map_err(|_| StoreError::Config(format!("{name} lock was poisoned")))
 }
 
 impl From<protocol::ProtocolError> for StoreError {
@@ -469,7 +475,10 @@ impl ShareStore {
     }
 
     pub fn topology(&self) -> ClusterTopology {
-        let mut topology = self.topology.lock().unwrap().clone();
+        let mut topology = match self.topology.lock() {
+            Ok(topology) => topology.clone(),
+            Err(_) => Self::build_initial_topology(&self.config),
+        };
         let stale_after_ms = self.config.topology_stale_after_ms;
         if stale_after_ms > 0 {
             topology = topology.with_filtered_stale_servers(stale_after_ms);
@@ -499,7 +508,7 @@ impl ShareStore {
                 "topology registration token invalid".to_string(),
             ));
         }
-        let mut topology = self.topology.lock().unwrap().clone();
+        let mut topology = lock_store(&self.topology, "topology")?.clone();
         let now_ms = unix_ms(SystemTime::now());
         if let Some(server) = topology
             .servers
@@ -526,7 +535,7 @@ impl ShareStore {
         topology.validate().map_err(store_error_from_client_error)?;
         topology = topology.with_filtered_stale_servers(self.config.topology_stale_after_ms);
         self.normalize_routes_for_automembership(&mut topology);
-        *self.topology.lock().unwrap() = topology.clone();
+        *lock_store(&self.topology, "topology")? = topology.clone();
         Ok(topology)
     }
 
@@ -605,11 +614,11 @@ impl ShareStore {
             ));
         }
         topology.version = topology.version.max(1);
-        let version = self.topology.lock().unwrap().version;
+        let version = lock_store(&self.topology, "topology")?.version;
         if topology.version < version {
             return Ok(());
         }
-        *self.topology.lock().unwrap() = topology;
+        *lock_store(&self.topology, "topology")? = topology;
         Ok(())
     }
 
@@ -800,13 +809,10 @@ impl ShareStore {
         };
         let shard_id = self.shard_for(&code_hash);
         let shard = &self.shards[shard_id];
-        let mut index = shard.index.lock().unwrap();
-        let (payload_offset, payload_len) = append_put(
-            &mut shard.file.lock().unwrap(),
-            &code_hash,
-            &entry,
-            &share_payload,
-        )?;
+        let mut index = lock_store(&shard.index, "shard index")?;
+        let mut file = lock_store(&shard.file, "shard file")?;
+        let (payload_offset, payload_len) =
+            append_put(&mut file, &code_hash, &entry, &share_payload)?;
         entry.payload_offset = payload_offset;
         entry.payload_len = payload_len;
         self.append_bucket_put(&code_hash, &entry)?;
@@ -814,10 +820,7 @@ impl ShareStore {
         if index.len() < self.config.index_cache_entries / self.shards.len().max(1) {
             index.insert(code_hash, entry);
         }
-        shard
-            .expiry_buckets
-            .lock()
-            .unwrap()
+        lock_store(&shard.expiry_buckets, "expiry buckets")?
             .push_back((expires_at_ms, vec![(code_hash, share_code.clone())]));
         self.created.fetch_add(1, Ordering::Relaxed);
         self.live.fetch_add(1, Ordering::Relaxed);
@@ -857,7 +860,7 @@ impl ShareStore {
 
         let now = unix_ms(SystemTime::now());
         let cutoff = now.saturating_sub(Duration::from_secs(60 * 60).as_millis() as u64);
-        let mut limits = self.email_rate_limits.lock().unwrap();
+        let mut limits = lock_store(&self.email_rate_limits, "email rate limits")?;
 
         if email_limit != 0 {
             let bucket = limits.by_email.entry(email.to_string()).or_default();
@@ -915,7 +918,7 @@ impl ShareStore {
             .map_err(|err| StoreError::Io(std::io::Error::other(err.to_string())))?;
         let token_hex = hex_encode(&token);
         let token_hash = stable_hash(b"email-verification-token", token_hex.as_bytes());
-        self.verifications.lock().unwrap().insert(
+        lock_store(&self.verifications, "email verifications")?.insert(
             share_code.to_string(),
             VerificationEntry {
                 email: email.to_string(),
@@ -947,7 +950,10 @@ impl ShareStore {
         }
         let token_hash = stable_hash(b"email-verification-token", token.as_bytes());
         let now = unix_ms(SystemTime::now());
-        let mut verifications = self.verifications.lock().unwrap();
+        let mut verifications = self
+            .verifications
+            .lock()
+            .map_err(|_| "The verification state is unavailable.".to_string())?;
         let Some(entry) = verifications.get_mut(share_code) else {
             return Err("The verification link is unknown or has expired.".to_string());
         };
@@ -969,7 +975,9 @@ impl ShareStore {
         share_code: &str,
         expires_at_ms: u64,
     ) -> Option<protocol::EmailVerification> {
-        let verifications = self.verifications.lock().unwrap();
+        let Ok(verifications) = self.verifications.lock() else {
+            return None;
+        };
         let entry = verifications.get(share_code)?.clone();
         let verified_at = entry.verified_at_ms.unwrap_or(0);
         let verified = verified_at != 0;
@@ -1030,7 +1038,7 @@ impl ShareStore {
         }
         let code_hash = self.code_hash(share_code);
         let shard = &self.shards[self.shard_for(&code_hash)];
-        let mut index = shard.index.lock().unwrap();
+        let mut index = lock_store(&shard.index, "shard index")?;
         let mut cached = true;
         let mut entry = match index.get(&code_hash) {
             Some(entry) => entry.clone(),
@@ -1047,7 +1055,8 @@ impl ShareStore {
         };
         if entry.expires_at_ms <= unix_ms(SystemTime::now()) {
             index.remove(&code_hash);
-            append_tombstone(&mut shard.file.lock().unwrap(), &code_hash)?;
+            let mut file = lock_store(&shard.file, "shard file")?;
+            append_tombstone(&mut file, &code_hash)?;
             self.append_bucket_tombstone(&code_hash)?;
             self.enqueue_replication(ReplicationEventKind::Tombstone {
                 share_code: share_code.to_string(),
@@ -1058,7 +1067,8 @@ impl ShareStore {
         }
         if entry.fetches >= entry.max_fetches {
             index.remove(&code_hash);
-            append_tombstone(&mut shard.file.lock().unwrap(), &code_hash)?;
+            let mut file = lock_store(&shard.file, "shard file")?;
+            append_tombstone(&mut file, &code_hash)?;
             self.append_bucket_tombstone(&code_hash)?;
             self.enqueue_replication(ReplicationEventKind::Tombstone {
                 share_code: share_code.to_string(),
@@ -1078,7 +1088,7 @@ impl ShareStore {
         } else if cached {
             index.insert(code_hash, entry.clone());
         }
-        let mut file = shard.file.lock().unwrap();
+        let mut file = lock_store(&shard.file, "shard file")?;
         if remaining == 0 {
             append_tombstone(&mut file, &code_hash)?;
             self.append_bucket_tombstone(&code_hash)?;
@@ -1097,7 +1107,7 @@ impl ShareStore {
         let payload = read_payload(&mut file, payload_offset, payload_len)?;
         let email_verification = self.email_verification_for_fetch(share_code, expires_at_ms);
         if remaining == 0 {
-            self.verifications.lock().unwrap().remove(share_code);
+            lock_store(&self.verifications, "email verifications")?.remove(share_code);
         }
         self.fetched.fetch_add(1, Ordering::Relaxed);
         Ok(FetchedShare {
@@ -1138,7 +1148,7 @@ impl ShareStore {
         let code_hash = self.code_hash(share_code);
         let token_hash = self.delete_token_hash(delete_token);
         let shard = &self.shards[self.shard_for(&code_hash)];
-        let mut index = shard.index.lock().unwrap();
+        let mut index = lock_store(&shard.index, "shard index")?;
         let entry = match index.get(&code_hash).cloned() {
             Some(entry) => entry,
             None => match self.lookup_bucket(&code_hash)? {
@@ -1153,9 +1163,10 @@ impl ShareStore {
             return Err(StoreError::DeleteTokenInvalid);
         }
         index.remove(&code_hash);
-        append_tombstone(&mut shard.file.lock().unwrap(), &code_hash)?;
+        let mut file = lock_store(&shard.file, "shard file")?;
+        append_tombstone(&mut file, &code_hash)?;
         self.append_bucket_tombstone(&code_hash)?;
-        self.verifications.lock().unwrap().remove(share_code);
+        lock_store(&self.verifications, "email verifications")?.remove(share_code);
         self.deleted.fetch_add(1, Ordering::Relaxed);
         self.live.fetch_sub(1, Ordering::Relaxed);
         self.enqueue_replication(ReplicationEventKind::Tombstone {
@@ -1230,7 +1241,7 @@ impl ShareStore {
         epoch: u64,
         sequence: u64,
     ) -> Result<bool, StoreError> {
-        let mut state = self.replication_state.lock().unwrap();
+        let mut state = lock_store(&self.replication_state, "replication state")?;
         let should_persist_for_gap = {
             let origin_state = state.origins.entry(origin).or_default();
             if epoch < origin_state.epoch {
@@ -1307,10 +1318,10 @@ impl ShareStore {
             max_fetches,
             fetches,
         };
-        let mut index = shard.index.lock().unwrap();
+        let mut index = lock_store(&shard.index, "shard index")?;
         let existed = index.contains_key(&code_hash) || self.lookup_bucket(&code_hash)?.is_some();
-        let (payload_offset, payload_len) =
-            append_put(&mut shard.file.lock().unwrap(), &code_hash, &entry, payload)?;
+        let mut file = lock_store(&shard.file, "shard file")?;
+        let (payload_offset, payload_len) = append_put(&mut file, &code_hash, &entry, payload)?;
         entry.payload_offset = payload_offset;
         entry.payload_len = payload_len;
         self.append_bucket_put(&code_hash, &entry)?;
@@ -1320,10 +1331,7 @@ impl ShareStore {
         if !existed {
             self.live.fetch_add(1, Ordering::Relaxed);
         }
-        shard
-            .expiry_buckets
-            .lock()
-            .unwrap()
+        lock_store(&shard.expiry_buckets, "expiry buckets")?
             .push_back((expires_at_ms, vec![(code_hash, share_code.to_string())]));
         Ok(())
     }
@@ -1332,11 +1340,12 @@ impl ShareStore {
         let code_hash = self.code_hash(share_code);
         let shard = &self.shards[self.shard_for(&code_hash)];
         if self.lookup_bucket(&code_hash)?.is_some() {
-            if let Some(cached) = shard.index.lock().unwrap().get_mut(&code_hash) {
+            if let Some(cached) = lock_store(&shard.index, "shard index")?.get_mut(&code_hash) {
                 cached.fetches = fetches;
             }
         }
-        append_fetch_count(&mut shard.file.lock().unwrap(), &code_hash, fetches)?;
+        let mut file = lock_store(&shard.file, "shard file")?;
+        append_fetch_count(&mut file, &code_hash, fetches)?;
         self.append_bucket_fetch_count(&code_hash, fetches)?;
         Ok(())
     }
@@ -1344,9 +1353,12 @@ impl ShareStore {
     fn apply_replica_tombstone(&self, share_code: &str) -> Result<(), StoreError> {
         let code_hash = self.code_hash(share_code);
         let shard = &self.shards[self.shard_for(&code_hash)];
-        let removed = shard.index.lock().unwrap().remove(&code_hash).is_some()
+        let removed = lock_store(&shard.index, "shard index")?
+            .remove(&code_hash)
+            .is_some()
             || self.lookup_bucket(&code_hash)?.is_some();
-        append_tombstone(&mut shard.file.lock().unwrap(), &code_hash)?;
+        let mut file = lock_store(&shard.file, "shard file")?;
+        append_tombstone(&mut file, &code_hash)?;
         self.append_bucket_tombstone(&code_hash)?;
         if removed {
             self.live.fetch_sub(1, Ordering::Relaxed);
@@ -1375,7 +1387,9 @@ impl ShareStore {
         for shard in &self.shards {
             let mut due = Vec::new();
             {
-                let mut buckets = shard.expiry_buckets.lock().unwrap();
+                let Ok(mut buckets) = shard.expiry_buckets.lock() else {
+                    continue;
+                };
                 while let Some((expires_at, _)) = buckets.front() {
                     if *expires_at > now_ms {
                         break;
@@ -1388,8 +1402,12 @@ impl ShareStore {
             if due.is_empty() {
                 continue;
             }
-            let mut index = shard.index.lock().unwrap();
-            let mut file = shard.file.lock().unwrap();
+            let Ok(mut index) = shard.index.lock() else {
+                continue;
+            };
+            let Ok(mut file) = shard.file.lock() else {
+                continue;
+            };
             for (hash, share_code) in due {
                 if index.remove(&hash).is_some() {
                     let _ = append_tombstone(&mut file, &hash);
@@ -1404,10 +1422,9 @@ impl ShareStore {
             self.live.fetch_sub(purged, Ordering::Relaxed);
         }
         let now_ms = unix_ms(SystemTime::now());
-        self.verifications
-            .lock()
-            .unwrap()
-            .retain(|_, entry| entry.expires_at_ms > now_ms);
+        if let Ok(mut verifications) = self.verifications.lock() {
+            verifications.retain(|_, entry| entry.expires_at_ms > now_ms);
+        }
         purged
     }
 
@@ -1450,17 +1467,14 @@ impl ShareStore {
         let mut sequence = load_replication_sequence(&self.replication_sequence_path)?;
         let mut sent = 0usize;
         for shard in &self.shards {
-            let snapshot = shard
-                .index
-                .lock()
-                .unwrap()
+            let snapshot = lock_store(&shard.index, "shard index")?
                 .iter()
                 .map(|(hash, entry)| (*hash, entry.clone()))
                 .collect::<Vec<_>>();
             if snapshot.is_empty() {
                 continue;
             }
-            let mut file = shard.file.lock().unwrap();
+            let mut file = lock_store(&shard.file, "shard file")?;
             for (_, entry) in snapshot {
                 if entry.expires_at_ms <= unix_ms(SystemTime::now()) {
                     continue;
@@ -1519,7 +1533,7 @@ impl ShareStore {
                 continue;
             }
             let live_bytes = {
-                let index = shard.index.lock().unwrap();
+                let index = lock_store(&shard.index, "shard index")?;
                 compacted_bytes_for_index(&index)
             };
             if live_bytes == 0 || live_bytes.saturating_mul(2) < segment_bytes {
@@ -1601,7 +1615,7 @@ impl ShareStore {
         );
         let hash = self.code_hash(&code);
         let shard = &self.shards[self.shard_for(&hash)];
-        if shard.index.lock().unwrap().contains_key(&hash) {
+        if lock_store(&shard.index, "shard index")?.contains_key(&hash) {
             return Ok(None);
         }
         if self.lookup_bucket(&hash)?.is_some() {
@@ -2425,8 +2439,8 @@ fn put_record_payload_offset(share_code: &str) -> usize {
 
 fn compact_shard(shard: &Shard) -> Result<CompactionReport, StoreError> {
     let bytes_before = shard.path.metadata().map(|m| m.len()).unwrap_or(0);
-    let mut index = shard.index.lock().unwrap();
-    let mut file = shard.file.lock().unwrap();
+    let mut index = lock_store(&shard.index, "shard index")?;
+    let mut file = lock_store(&shard.file, "shard file")?;
 
     if index.is_empty() {
         file.set_len(0)?;

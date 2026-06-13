@@ -1,3 +1,4 @@
+use crate::checked::{array_16, array_32, read_u16_le, read_u32_le, read_u64_le};
 use crate::crypto::strong_checksum;
 use crate::lockbox_id::LockboxId;
 use crate::{Error, Result};
@@ -171,23 +172,23 @@ impl<'a> Reader<'a> {
     }
 
     fn u16(&mut self) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+        read_u16_le(self.take(2)?)
     }
 
     fn u32(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+        read_u32_le(self.take(4)?)
     }
 
     fn u64(&mut self) -> Result<u64> {
-        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+        read_u64_le(self.take(8)?)
     }
 
     fn array16(&mut self) -> Result<[u8; 16]> {
-        Ok(self.take(16)?.try_into().unwrap())
+        array_16(self.take(16)?)
     }
 
     fn array32(&mut self) -> Result<[u8; 32]> {
-        Ok(self.take(32)?.try_into().unwrap())
+        array_32(self.take(32)?)
     }
 
     fn bytes(&mut self) -> Result<Vec<u8>> {

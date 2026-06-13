@@ -54,7 +54,9 @@ pub fn run_listener(listener: TcpListener, store: Arc<ShareStore>) -> std::io::R
             .stack_size(256 * 1024)
             .spawn(move || loop {
                 let stream = {
-                    let guard = rx.lock().unwrap();
+                    let Ok(guard) = rx.lock() else {
+                        break;
+                    };
                     guard.recv()
                 };
                 match stream {
@@ -139,7 +141,9 @@ impl RateLimiter {
         };
         let now = Instant::now();
         let refill_per_second = self.per_minute as f64 / 60.0;
-        let mut clients = self.clients.lock().unwrap();
+        let Ok(mut clients) = self.clients.lock() else {
+            return false;
+        };
         let bucket = clients.entry(peer_ip).or_insert(ClientBucket {
             tokens: self.burst as f64,
             last_refill: now,

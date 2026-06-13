@@ -1456,7 +1456,10 @@ fn prepare_compression_frame_batches(
     }
     prepared
         .into_iter()
-        .map(|frame| frame.expect("compression worker did not return a batch"))
+        .enumerate()
+        .map(|(index, frame)| {
+            frame.unwrap_or_else(|| prepare_compression_frame(&batches[index], zstd_level))
+        })
         .collect()
 }
 

@@ -1,3 +1,4 @@
+use crate::checked::{read_u16_le, read_u32_le, read_u64_le};
 use crate::constants::DEFAULT_MAX_PAGE_LOGICAL_BYTES;
 use crate::{Error, Result};
 use ruzstd::decoding::FrameDecoder;
@@ -39,14 +40,14 @@ pub(crate) fn decode_page_body(body: &[u8]) -> Result<Vec<u8>> {
     if body.len() < 17 {
         return Err(Error::CorruptRecord);
     }
-    let real_len = u64::from_le_bytes(body[0..8].try_into().unwrap());
+    let real_len = read_u64_le(&body[0..8])?;
     if real_len > MAX_DECOMPRESSED_PAGE_BODY_BYTES {
         return Err(Error::SecurityLimitExceeded(format!(
             "page body expands to {real_len} bytes"
         )));
     }
     let algorithm = body[8];
-    let stored_len = u64::from_le_bytes(body[9..17].try_into().unwrap());
+    let stored_len = read_u64_le(&body[9..17])?;
     let stored_len = usize::try_from(stored_len).map_err(|_| Error::CorruptRecord)?;
     if stored_len > body.len() - 17 {
         return Err(Error::CorruptRecord);
@@ -220,15 +221,9 @@ fn zstd_declared_content_size(stored: &[u8]) -> Result<Option<u64>> {
     }
     let size = match size_bytes {
         1 => u64::from(stored[cursor]),
-        2 => {
-            u64::from(u16::from_le_bytes(
-                stored[cursor..cursor + 2].try_into().unwrap(),
-            )) + 256
-        }
-        4 => u64::from(u32::from_le_bytes(
-            stored[cursor..cursor + 4].try_into().unwrap(),
-        )),
-        8 => u64::from_le_bytes(stored[cursor..cursor + 8].try_into().unwrap()),
+        2 => u64::from(read_u16_le(&stored[cursor..cursor + 2])?) + 256,
+        4 => u64::from(read_u32_le(&stored[cursor..cursor + 4])?),
+        8 => read_u64_le(&stored[cursor..cursor + 8])?,
         _ => unreachable!(),
     };
     Ok(Some(size))

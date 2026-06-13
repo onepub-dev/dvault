@@ -7,6 +7,7 @@
 //! know about a user's local vault or unlock-cache agent; those are implemented in
 //! `lockbox_vault`.
 
+mod checked;
 mod compression;
 mod constants;
 mod error;
