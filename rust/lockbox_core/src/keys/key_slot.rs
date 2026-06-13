@@ -73,7 +73,6 @@ pub(crate) enum KeySlot {
     },
     HybridRecipient {
         id: u64,
-        name: Option<String>,
         wrapped: Box<RecipientWrappedKey>,
     },
 }
@@ -93,9 +92,9 @@ impl KeySlot {
                 protection: LockboxKeySlotProtection::Password,
                 algorithm: LockboxKeySlotAlgorithm::Argon2idChaCha20Poly1305,
             },
-            KeySlot::HybridRecipient { id, name, .. } => LockboxKeySlot {
+            KeySlot::HybridRecipient { id, .. } => LockboxKeySlot {
                 id: *id,
-                name: name.clone(),
+                name: None,
                 protection: LockboxKeySlotProtection::Recipient,
                 algorithm: LockboxKeySlotAlgorithm::X25519MlKem768ChaCha20Poly1305,
             },
@@ -129,7 +128,6 @@ impl KeySlot {
         }
         Ok(Self::HybridRecipient {
             id,
-            name,
             wrapped: Box::new(recipient.encrypt(content_key)?),
         })
     }

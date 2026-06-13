@@ -431,7 +431,7 @@ fn hybrid_wraps_for_same_recipient_do_not_share_key_exchange_material() {
 }
 
 #[test]
-fn recipient_slot_names_survive_round_trip() {
+fn recipient_slot_names_are_not_persisted() {
     let alice = RecipientKeyPair::generate().unwrap();
     let bob = RecipientKeyPair::generate().unwrap();
     let mut lb = Lockbox::create_with_recipient(&alice.public_key()).unwrap();
@@ -440,16 +440,19 @@ fn recipient_slot_names_survive_round_trip() {
         .unwrap();
     lb.commit().unwrap();
 
+    let bytes = lb.to_bytes();
+    assert!(!String::from_utf8_lossy(&bytes).contains("bob-laptop"));
+
     let reopened = Lockbox::open_with_recipient(lb.to_bytes(), &bob).unwrap();
-    let named_slot = reopened
+    let recipient_slot = reopened
         .list_key_slots()
         .into_iter()
-        .find(|slot| slot.name.as_deref() == Some("bob-laptop"))
-        .expect("named recipient slot");
+        .find(|slot| slot.protection == LockboxKeySlotProtection::Recipient)
+        .expect("recipient slot");
 
-    assert_eq!(named_slot.protection, LockboxKeySlotProtection::Recipient);
+    assert_eq!(recipient_slot.name, None);
     assert_eq!(
-        named_slot.algorithm,
+        recipient_slot.algorithm,
         LockboxKeySlotAlgorithm::X25519MlKem768ChaCha20Poly1305
     );
 }

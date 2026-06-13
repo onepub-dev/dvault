@@ -978,7 +978,7 @@ fn access_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox access list secrets.lbox\n  lockbox access list --format json secrets.lbox",
-                    "Context:\n  Access list shows the access slots currently attached to a lockbox, plus verified owner-signing status and host created/updated times. Use slot ids from this output when removing access.",
+                    "Context:\n  Access list shows the access slots currently attached to a lockbox, plus verified owner-signing status and host created/updated times. Recipient names are not stored in lockbox metadata, so this output cannot identify or correlate the same contact across lockboxes. Use slot ids from this output when removing access.",
                 ))
                 .arg(output_format_arg())
                 .arg(

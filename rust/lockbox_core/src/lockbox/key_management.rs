@@ -431,17 +431,18 @@ impl Lockbox {
         self.add_recipient_with_name(None, recipient)
     }
 
-    /// Add a named recipient public key to the lockbox and return its key id.
+    /// Add a recipient public key selected by a local name and return its key id.
     ///
-    /// The name is stored as lockbox metadata so access listings can show who
-    /// a recipient slot was added for. It is not used for cryptographic
-    /// authentication.
+    /// The name is validated for CLI compatibility, but is not stored in the
+    /// lockbox. Persisting names would leak who can open a shared lockbox.
     pub fn add_recipient_named(
         &mut self,
         name: impl Into<String>,
         recipient: &RecipientPublicKey,
     ) -> Result<u64> {
-        self.add_recipient_with_name(Some(name.into()), recipient)
+        let name = name.into();
+        crate::key_slot::validate_key_slot_name(&name)?;
+        self.add_recipient_with_name(None, recipient)
     }
 
     fn add_recipient_with_name(
