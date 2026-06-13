@@ -41,7 +41,7 @@ fn cli_publish_and_receive_with_two_servers() {
         bin,
         &[
             "vault",
-            "share",
+            "contact",
             "receive",
             &publish.share_code,
             "received",
@@ -148,7 +148,7 @@ fn publish_contact(
         bin,
         &[
             "vault",
-            "share",
+            "identity",
             "publish",
             "--topology-url",
             topology_url,

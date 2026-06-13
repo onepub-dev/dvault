@@ -41,10 +41,6 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "identity" => identity_command(&args[1..]),
         "contact" => contact_command(&args[1..]),
         "form" => form_command(&args[1..]),
-        "share" => share_command(&args[1..]),
-        "publish" => share_publish(&args[1..]),
-        "receive" | "recieve" | "fetch" => share_receive(&args[1..]),
-        "remove" | "delete" => share_delete(&args[1..]),
         "lockbox" => lockbox_command(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
     }
@@ -87,19 +83,6 @@ fn change_passphrase(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
-fn share_command(args: &[String]) -> CliResult<()> {
-    match args.first().map(String::as_str) {
-        Some("publish") => share_publish(&args[1..]),
-        Some("receive") | Some("recieve") | Some("fetch") => share_receive(&args[1..]),
-        Some("remove") | Some("rm") | Some("delete") => share_delete(&args[1..]),
-        _ => Err(Error::InvalidInput(
-            "missing vault share command; use `lockbox vault share publish`, `lockbox vault share receive`, or `lockbox vault share remove`"
-                .to_string(),
-        )
-        .into()),
-    }
-}
-
 fn identity_command(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault identity command")?;
     match command {
@@ -112,6 +95,7 @@ fn identity_command(args: &[String]) -> CliResult<()> {
         "export-private" => export_key(&args[1..]),
         "remove" | "rm" => remove_key(&args[1..]),
         "rotate" => rotate_key(&args[1..]),
+        "publish" => share_publish(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault identity command: {command}")).into()),
     }
 }
@@ -120,9 +104,10 @@ fn contact_command(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
         Some("list" | "ls") => list_contacts(&args[1..]),
         Some("add") => contact_add(&args[1..]),
+        Some("receive" | "fetch") => share_receive(&args[1..]),
         Some("remove" | "rm") => remove_contact(&args[1..]),
         _ => Err(Error::InvalidInput(
-            "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact add <name> <public-key>`, or `lockbox vault contact remove <name>`"
+            "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact add <name> <public-key>`, `lockbox vault contact receive <share-code>`, or `lockbox vault contact remove <name>`"
                 .to_string(),
         )
         .into()),
@@ -481,11 +466,6 @@ fn share_publish(args: &[String]) -> CliResult<()> {
         println!("verification_url={url}");
     }
     println!("verification_advice=check the inbox for {email} and click the verification link");
-    println!("delete_token={}", encode_hex(&result.delete_token));
-    println!(
-        "delete_token_purpose=use this token with `lockbox vault share remove {} <delete-token>` to remove the pending share before it expires",
-        result.share_code
-    );
     println!(
         "expires_at_utc={}",
         format_unix_ms_utc(result.expires_at_unix_ms)
@@ -568,22 +548,6 @@ fn share_receive(args: &[String]) -> CliResult<()> {
         encode_hex(&verification.attestation)
     );
     println!("verification_advice={SHARE_RECEIVE_VERIFICATION_ADVICE}");
-    Ok(())
-}
-
-fn share_delete(args: &[String]) -> CliResult<()> {
-    let options = ShareCliOptions::parse(args)?;
-    let share_code = options
-        .positionals
-        .first()
-        .ok_or_else(|| Error::InvalidInput("missing share code".to_string()))?;
-    let delete_token = options
-        .positionals
-        .get(1)
-        .ok_or_else(|| Error::InvalidInput("missing delete token".to_string()))?;
-    let delete_token = decode_hex(delete_token)?;
-    let deleted = share_client_pool(&options)?.delete(share_code, &delete_token)?;
-    println!("deleted={}", if deleted { "yes" } else { "no" });
     Ok(())
 }
 

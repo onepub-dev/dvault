@@ -539,22 +539,6 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
         }
         "passphrase" => {}
         "path" => {}
-        "publish" => {
-            push_share_publish_options(&mut args, sub);
-            push_optional(&mut args, sub, "identity");
-        }
-        "receive" | "recieve" | "fetch" => {
-            push_share_transport_options(&mut args, sub);
-            push_option(&mut args, sub, "fingerprint", "--fingerprint");
-            push_flag(&mut args, sub, "overwrite", "--overwrite");
-            args.push(value(sub, "share-code"));
-            push_optional(&mut args, sub, "contact-name");
-        }
-        "remove" | "delete" => {
-            push_share_transport_options(&mut args, sub);
-            args.push(value(sub, "share-code"));
-            args.push(value(sub, "delete-token"));
-        }
         "identity" => {
             let (identity_command, identity_sub) = sub
                 .subcommand()
@@ -587,6 +571,10 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     push_optional(&mut args, identity_sub, "name");
                 }
                 "rotate" => push_optional(&mut args, identity_sub, "name"),
+                "publish" => {
+                    push_share_publish_options(&mut args, identity_sub);
+                    push_optional(&mut args, identity_sub, "name");
+                }
                 _ => {
                     return Err(Error::InvalidInput(format!(
                         "unknown vault identity command: {identity_command}"
@@ -605,6 +593,13 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                         args.push(value(contact_sub, "public-key"));
                     }
                     "list" | "ls" => push_option(&mut args, contact_sub, "format", "--format"),
+                    "receive" | "fetch" => {
+                        push_share_transport_options(&mut args, contact_sub);
+                        push_option(&mut args, contact_sub, "fingerprint", "--fingerprint");
+                        push_flag(&mut args, contact_sub, "overwrite", "--overwrite");
+                        args.push(value(contact_sub, "share-code"));
+                        push_optional(&mut args, contact_sub, "contact-name");
+                    }
                     "remove" | "rm" => args.push(value(contact_sub, "name")),
                     _ => {
                         return Err(Error::InvalidInput(format!(
@@ -649,41 +644,6 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             } else {
                 return Err(Error::InvalidInput(
                     "missing vault form command; use `lockbox vault form define` or `lockbox vault form definitions`"
-                        .to_string(),
-                )
-                .into());
-            }
-        }
-        "share" => {
-            if let Some((share_command, share_sub)) = sub.subcommand() {
-                args.push(share_command.to_string());
-                match share_command {
-                    "publish" => {
-                        push_share_publish_options(&mut args, share_sub);
-                        push_optional(&mut args, share_sub, "identity");
-                    }
-                    "receive" | "recieve" | "fetch" => {
-                        push_share_transport_options(&mut args, share_sub);
-                        push_option(&mut args, share_sub, "fingerprint", "--fingerprint");
-                        push_flag(&mut args, share_sub, "overwrite", "--overwrite");
-                        args.push(value(share_sub, "share-code"));
-                        push_optional(&mut args, share_sub, "contact-name");
-                    }
-                    "remove" | "rm" | "delete" => {
-                        push_share_transport_options(&mut args, share_sub);
-                        args.push(value(share_sub, "share-code"));
-                        args.push(value(share_sub, "delete-token"));
-                    }
-                    _ => {
-                        return Err(Error::InvalidInput(format!(
-                            "unknown vault share command: {share_command}"
-                        ))
-                        .into())
-                    }
-                }
-            } else {
-                return Err(Error::InvalidInput(
-                    "missing vault share command; use `lockbox vault share publish`, `lockbox vault share receive`, or `lockbox vault share remove`"
                         .to_string(),
                 )
                 .into());

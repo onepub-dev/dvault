@@ -1193,7 +1193,7 @@ fn vault_command(verbose: bool) -> Command {
                 .disable_help_subcommand(true)
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault contact list\n  lockbox vault contact add alice ./alice.pub\n  lockbox vault contact remove alice",
+                    "Examples:\n  lockbox vault contact list\n  lockbox vault contact receive <share-code> alice\n  lockbox vault contact add alice ./alice.pub\n  lockbox vault contact remove alice",
                     "Context:\n  Contacts are saved public keys for other people or systems. A contact can be added to a lockbox access list, but cannot open a lockbox by itself; opening requires the matching private identity.",
                 ))
                 .subcommand_required(true)
@@ -1228,61 +1228,17 @@ fn vault_command(verbose: bool) -> Command {
                         .arg(required("public-key", "Public key path.")),
                 )
                 .subcommand(
-                    Command::new("remove")
-                        .about("Remove a contact.")
-                        .visible_alias("rm")
-                        .after_help(verbose_help(
-                            verbose,
-                            "Examples:\n  lockbox vault contact remove alice\n  lockbox vault contact rm alice",
-                            "Context:\n  Contact remove deletes the saved public key from your vault. It does not remove access already written into any lockbox; use access remove for that.",
-                        ))
-                        .arg(required("name", "Contact name.")),
-                ),
-        )
-        .subcommand(
-            Command::new("share")
-                .about("Share vault identity contact details through a key server.")
-                .disable_help_subcommand(true)
-                .after_help(verbose_help(
-                    verbose,
-                    "Examples:\n  lockbox vault publish\n  lockbox vault share receive <share-code>\n  lockbox vault share remove <share-code> <delete-token>",
-                    "Context:\n  Vault share publishes or receives typed contact-share payloads through the configured binary key server protocol. The publisher verifies their identity email with the key server, and the receiver verifies the printed fingerprint over a second channel they initiate.",
-                ))
-                .subcommand_required(true)
-                .arg_required_else_help(true)
-                .subcommand(
-                    Command::new("publish")
-                        .about("Publish one vault identity public key as a share.")
-                        .arg(key_server_arg())
-                        .arg(share_topology_arg())
-                        .arg(optional("identity", "Vault identity name. Defaults to default."))
-                        .arg(
-                            Arg::new("ttl")
-                                .long("ttl")
-                                .value_name("SECONDS")
-                                .help("Share lifetime in seconds."),
-                        )
-                        .arg(
-                            Arg::new("max-fetches")
-                                .long("max-fetches")
-                                .value_name("N")
-                                .help("Maximum successful receives."),
-                        ),
-                )
-                .subcommand(
                     Command::new("receive")
-                        .about("Receive a contact share and save it as a contact.")
+                        .about("Receive a published identity and save it as a contact.")
                         .visible_alias("fetch")
-                        .visible_alias("recieve")
                         .after_help(verbose_help(
                             verbose,
-                            "Examples:\n  lockbox vault receive <share-code>\n  lockbox vault share receive <share-code> alice",
+                            "Examples:\n  lockbox vault contact receive <share-code>\n  lockbox vault contact receive <share-code> alice",
                             concat!(
                                 "Context:\n  Receive saves the shared public key and signing key as a local contact. ",
                                 "The key server must have verified the publisher email first. Enter the ",
-                                "contact fingerprint received through a second trusted channel, such as a phone ",
-                                "call you initiated. Use the full fingerprint: short PINs are only ",
-                                "accidental-error checks and are too small to authenticate a public key ",
+                                "full fingerprint received through a second trusted channel. Short PINs are ",
+                                "only accidental-error checks and are too small to authenticate a public key ",
                                 "against substitution.",
                             ),
                         ))
@@ -1305,75 +1261,15 @@ fn vault_command(verbose: bool) -> Command {
                 )
                 .subcommand(
                     Command::new("remove")
-                        .about("Remove a pending share with its delete token.")
-                        .alias("delete")
+                        .about("Remove a contact.")
                         .visible_alias("rm")
-                        .arg(key_server_arg())
-                        .arg(share_topology_arg())
-                        .arg(required("share-code", "Published share code."))
-                        .arg(required("delete-token", "Delete token printed by publish.")),
+                        .after_help(verbose_help(
+                            verbose,
+                            "Examples:\n  lockbox vault contact remove alice\n  lockbox vault contact rm alice",
+                            "Context:\n  Contact remove deletes the saved public key from your vault. It does not remove access already written into any lockbox; use access remove for that.",
+                        ))
+                        .arg(required("name", "Contact name.")),
                 ),
-        )
-        .subcommand(
-            Command::new("publish")
-                .about("Publish one vault identity public key by verified email.")
-                .arg(key_server_arg())
-                .arg(share_topology_arg())
-                .arg(optional("identity", "Vault identity name. Defaults to default."))
-                .arg(
-                    Arg::new("ttl")
-                        .long("ttl")
-                        .value_name("SECONDS")
-                        .help("Share lifetime in seconds."),
-                )
-                .arg(
-                    Arg::new("max-fetches")
-                        .long("max-fetches")
-                        .value_name("N")
-                        .help("Maximum successful receives."),
-                ),
-        )
-        .subcommand(
-            Command::new("receive")
-                .about("Receive a verified public key by share code.")
-                .visible_alias("recieve")
-                .visible_alias("fetch")
-                .after_help(verbose_help(
-                    verbose,
-                    "Examples:\n  lockbox vault receive <share-code>\n  lockbox vault receive <share-code> alice",
-                    concat!(
-                        "Context:\n  Receive saves the shared public key and signing key as a local contact. ",
-                        "The key server must have verified the publisher email first. Enter the ",
-                        "full fingerprint received through a second trusted channel. Short PINs are ",
-                        "only accidental-error checks and are too small to authenticate a public key ",
-                        "against substitution.",
-                    ),
-                ))
-                .arg(key_server_arg())
-                .arg(share_topology_arg())
-                .arg(
-                    Arg::new("fingerprint")
-                        .long("fingerprint")
-                        .value_name("HEX")
-                        .help("Contact fingerprint from a trusted second channel. Prompts when omitted."),
-                )
-                .arg(
-                    Arg::new("overwrite")
-                        .long("overwrite")
-                        .action(ArgAction::SetTrue)
-                        .help("Replace an existing contact."),
-                )
-                .arg(required("share-code", "Published share code."))
-                .arg(optional("contact-name", "Contact name to save.")),
-        )
-        .subcommand(
-            Command::new("remove")
-                .about("Remove a pending published key with its delete token.")
-                .alias("delete")
-                .arg(key_server_arg())
-                .arg(share_topology_arg())
-                .arg(required("share-code", "Published share code."))
-                .arg(required("delete-token", "Delete token printed by publish.")),
         )
         .subcommand(
             Command::new("lockbox")
@@ -1430,8 +1326,8 @@ fn vault_identity_command(verbose: bool) -> Command {
         .disable_help_subcommand(true)
         .after_help(verbose_help(
             verbose,
-            "Examples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity export laptop ./laptop.pub",
-            "Context:\n  An identity has a public key and a private key. Share the public key so someone else can grant you access to a lockbox; keep the private key secret because it opens lockboxes granted to that identity. To save someone else's public key, use `lockbox vault contact add`.",
+            "Examples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity publish laptop\n  lockbox vault identity export laptop ./laptop.pub",
+            "Context:\n  An identity has a public key and a private key. Publish or export the public key so someone else can grant you access to a lockbox; keep the private key secret because it opens lockboxes granted to that identity. To save someone else's public key, use `lockbox vault contact receive` or `lockbox vault contact add`.",
         ))
         .subcommand_required(true)
         .arg_required_else_help(true)
@@ -1489,6 +1385,30 @@ fn vault_identity_command(verbose: bool) -> Command {
                         .required(true)
                         .help("Optional identity name followed by the identity email address."),
                 ),
+        )
+        .subcommand(
+            Command::new("publish")
+                .about("Publish one identity public key by verified email.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault identity publish\n  lockbox vault identity publish laptop",
+                    "Context:\n  Publish sends one identity public key to the key server and prints a fingerprint. The receiver must ask you for that fingerprint through a trusted second channel before saving the contact.",
+                ))
+                .arg(key_server_arg())
+                .arg(share_topology_arg())
+                .arg(
+                    Arg::new("ttl")
+                        .long("ttl")
+                        .value_name("SECONDS")
+                        .help("Share lifetime in seconds."),
+                )
+                .arg(
+                    Arg::new("max-fetches")
+                        .long("max-fetches")
+                        .value_name("N")
+                        .help("Maximum successful receives."),
+                )
+                .arg(optional("name", "Identity name. Defaults to default.")),
         )
         .subcommand(
             Command::new("import")

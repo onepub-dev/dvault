@@ -225,18 +225,22 @@ fn help_is_grouped_and_commands_have_specific_help() {
         vault_identity_create_help.contains("lockbox vault identity export laptop ./laptop.pub")
     );
 
-    let vault_share_help = run_output(bin, &["vault", "share", "--help"]);
-    assert_success(&vault_share_help);
-    let vault_share_help = String::from_utf8_lossy(&vault_share_help.stdout);
-    assert!(vault_share_help.contains("remove"));
-    assert!(vault_share_help.contains("lockbox vault share remove"));
-    let vault_share_receive_verbose_help =
-        run_output(bin, &["vault", "share", "receive", "--help", "--verbose"]);
-    assert_success(&vault_share_receive_verbose_help);
-    let vault_share_receive_verbose_help =
-        String::from_utf8_lossy(&vault_share_receive_verbose_help.stdout);
-    assert!(vault_share_receive_verbose_help.contains("short PINs"));
-    assert!(vault_share_receive_verbose_help.contains("authenticate a public key"));
+    let identity_publish_help = run_output(bin, &["vault", "identity", "publish", "--help"]);
+    assert_success(&identity_publish_help);
+    let identity_publish_help = String::from_utf8_lossy(&identity_publish_help.stdout);
+    assert!(identity_publish_help.contains("Publish one identity public key"));
+    let contact_receive_verbose_help =
+        run_output(bin, &["vault", "contact", "receive", "--help", "--verbose"]);
+    assert_success(&contact_receive_verbose_help);
+    let contact_receive_verbose_help =
+        String::from_utf8_lossy(&contact_receive_verbose_help.stdout);
+    assert!(contact_receive_verbose_help.contains("Short PINs"));
+    assert!(contact_receive_verbose_help.contains("authenticate a public key"));
+    for removed in ["share", "publish", "receive", "remove"] {
+        let output = run_output(bin, &["vault", removed, "--help"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
+    }
     let vault_form_help = run_output(bin, &["vault", "form", "--help"]);
     assert_success(&vault_form_help);
     let vault_form_help = String::from_utf8_lossy(&vault_form_help.stdout);
@@ -275,7 +279,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_identity_verbose_help = String::from_utf8_lossy(&vault_identity_verbose_help.stdout);
     assert!(vault_identity_verbose_help.contains("Context:"));
     assert!(vault_identity_verbose_help.contains("has a public key and a private key"));
-    assert!(vault_identity_verbose_help.contains("Share the public key"));
+    assert!(vault_identity_verbose_help.contains("Publish or export the public key"));
     assert!(vault_identity_verbose_help.contains("keep the private key secret"));
     assert!(vault_identity_verbose_help.contains("lockbox vault contact add"));
     assert!(!vault_identity_verbose_help.contains("on this machine"));
@@ -2359,8 +2363,12 @@ fn vault_publish_without_identity_email_is_actionable() {
     let agent_root = dir.join("agent");
 
     run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
-    let publish =
-        run_output_without_content_key(bin, &["vault", "publish"], &vault_root, &agent_root);
+    let publish = run_output_without_content_key(
+        bin,
+        &["vault", "identity", "publish"],
+        &vault_root,
+        &agent_root,
+    );
     assert!(!publish.status.success());
     let stderr = String::from_utf8_lossy(&publish.stderr);
     assert!(stderr.contains(
