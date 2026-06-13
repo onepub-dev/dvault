@@ -2632,6 +2632,16 @@ fn session_and_close_report_empty_cache_and_already_closed_state() {
     assert!(unlock_list.contains("Open lockboxes:"));
     assert!(unlock_list.contains("none"));
 
+    run_without_content_key(
+        bin,
+        &["session", "activate", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    let closed = run_output_without_content_key(bin, &["close"], &vault_root, &agent_root);
+    assert_success(&closed);
+    assert!(String::from_utf8_lossy(&closed.stdout).contains("already closed"));
+
     let closed = run_output_without_content_key(
         bin,
         &["close", lockbox.to_str().unwrap()],
@@ -2769,6 +2779,261 @@ fn session_activate_sets_default_lockbox_for_commands() {
         active_lockbox.display()
     )));
     assert!(!stderr.contains("Check the supplied value"));
+}
+
+#[test]
+fn session_active_lockbox_applies_to_lockbox_argument_variants() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = short_target_dir("active-variants");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let lockbox = dir.join("active.lbox");
+
+    run_in(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_in(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &["session", "activate", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+
+    let source = dir.join("a.txt");
+    fs::write(&source, "alpha").unwrap();
+    run_in(
+        bin,
+        &["add", source.to_str().unwrap(), "/docs/a.txt"],
+        &vault_root,
+        &agent_root,
+    );
+
+    let listing = run_output_in(
+        bin,
+        &["list", "--recursive", "--format", "tsv", "/docs"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&listing);
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("/docs/a.txt"));
+
+    let cat = run_output_in(bin, &["cat", "/docs/a.txt"], &vault_root, &agent_root);
+    assert_success(&cat);
+    assert_eq!(String::from_utf8_lossy(&cat.stdout), "alpha");
+
+    let extracted = dir.join("extracted.txt");
+    run_in(
+        bin,
+        &["extract", "/docs/a.txt", extracted.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_eq!(fs::read_to_string(&extracted).unwrap(), "alpha");
+
+    let restored = dir.join("restore");
+    run_in(
+        bin,
+        &["extract", "--to", restored.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_eq!(
+        fs::read_to_string(restored.join("docs").join("a.txt")).unwrap(),
+        "alpha"
+    );
+
+    run_in(
+        bin,
+        &["rename", "/docs/a.txt", "/docs/b.txt"],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &["rm", "--force", "/docs/b.txt"],
+        &vault_root,
+        &agent_root,
+    );
+
+    run_in(
+        bin,
+        &["var", "set", "/prod/API_KEY", "normal-key"],
+        &vault_root,
+        &agent_root,
+    );
+    let value = run_output_in(
+        bin,
+        &["variables", "get", "/prod/API_KEY"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&value);
+    assert_eq!(String::from_utf8_lossy(&value.stdout), "normal-key\n");
+
+    let variables = run_output_in(
+        bin,
+        &["variables", "list", "--format", "tsv", "/prod"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&variables);
+    assert!(String::from_utf8_lossy(&variables.stdout).contains("/prod/API_KEY"));
+
+    let exported = run_output_in(
+        bin,
+        &["variables", "export", "--format", "json", "/prod"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&exported);
+    assert!(String::from_utf8_lossy(&exported.stdout)
+        .contains("{\"name\":\"API_KEY\",\"value\":\"normal-key\"}"));
+    run_in(
+        bin,
+        &["variables", "rm", "/prod/API_KEY"],
+        &vault_root,
+        &agent_root,
+    );
+
+    run_in(
+        bin,
+        &[
+            "form",
+            "define",
+            "login",
+            "--field",
+            "username:text",
+            "--field",
+            "password:secret",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    let definitions = run_output_in(
+        bin,
+        &["form", "definitions", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&definitions);
+    assert!(String::from_utf8_lossy(&definitions.stdout).contains("login"));
+
+    run_in(
+        bin,
+        &[
+            "form",
+            "add",
+            "/work/github",
+            "--type",
+            "login",
+            "--set",
+            "username=bsutton",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &["form", "set", "/work/github", "username", "alice"],
+        &vault_root,
+        &agent_root,
+    );
+    let username = run_output_in(
+        bin,
+        &["form", "get", "/work/github", "username"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&username);
+    assert_eq!(String::from_utf8_lossy(&username.stdout), "alice\n");
+
+    let shown = run_output_in(
+        bin,
+        &["form", "show", "/work/github"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&shown);
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("field\tusername"));
+
+    let forms = run_output_in(
+        bin,
+        &["form", "list", "--format", "tsv", "/work"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&forms);
+    assert!(String::from_utf8_lossy(&forms.stdout).contains("/work/github"));
+
+    run_in(
+        bin,
+        &["form", "edit", "/work/github", "--set", "username=bob"],
+        &vault_root,
+        &agent_root,
+    );
+    run_in(
+        bin,
+        &["form", "rm", "/work/github"],
+        &vault_root,
+        &agent_root,
+    );
+
+    let visualize = run_output_in(bin, &["visualize"], &vault_root, &agent_root);
+    assert_success(&visualize);
+    assert!(String::from_utf8_lossy(&visualize.stdout).contains("Lockbox"));
+
+    let report = run_output_in(
+        bin,
+        &["recover", "--report", "--format", "json"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&report);
+    assert!(String::from_utf8_lossy(&report.stdout).contains("file_count"));
+
+    run_in(bin, &["access", "add", "default"], &vault_root, &agent_root);
+    let access = run_output_in(
+        bin,
+        &["access", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&access);
+    let access = String::from_utf8_lossy(&access.stdout);
+    assert!(access.contains("\tdefault\tRecipient\t"));
+    let default_slot = access
+        .lines()
+        .find(|line| line.contains("\tdefault\tRecipient\t"))
+        .and_then(|line| line.split('\t').next())
+        .expect("default access slot");
+
+    let refresh = run_output_in(
+        bin,
+        &["access", "refresh", "default", "--dry-run"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&refresh);
+    assert!(String::from_utf8_lossy(&refresh.stdout).contains("matching access entries"));
+
+    let remove_access = run_output_in(
+        bin,
+        &["access", "rm", default_slot],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!remove_access.status.success());
+    let remove_access = String::from_utf8_lossy(&remove_access.stderr);
+    assert!(remove_access.contains("cannot remove the last access entry"));
+    assert!(!remove_access.contains("missing lockbox"));
+
+    run_in(bin, &["session", "deactivate"], &vault_root, &agent_root);
 }
 
 #[test]

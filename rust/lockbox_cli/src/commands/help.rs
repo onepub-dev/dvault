@@ -91,7 +91,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .conflicts_with_all(["password-env", "password-file"])
                         .help("Read the lockbox password from stdin."),
                 )
-                .arg(required("lockbox", "Lockbox path.")),
+                .arg(optional("lockbox", "Lockbox path. Defaults to the active lockbox.")),
             archive_command("close", "Close the lockbox.")
                 .after_help(verbose_help(
                     verbose,
@@ -106,8 +106,7 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Close all lockboxes."),
                 )
                 .arg(
-                    optional("lockbox", "Lockbox path.")
-                        .required_unless_present("all")
+                    optional("lockbox", "Lockbox path. Defaults to the active lockbox.")
                         .conflicts_with("all"),
                 ),
             archive_command("recover", "Recover readable entries from a damaged lockbox.")
@@ -116,7 +115,10 @@ pub(crate) fn command(verbose: bool) -> Command {
                     "Examples:\n  lockbox recover damaged.lbox --output recovered.lbox\n  lockbox recover --report --format table damaged.lbox",
                     "Context:\n  Recover scans a damaged lockbox and writes a new lockbox containing readable entries. Use --report or --dry-run first when you want to inspect what can be recovered without writing an output file.",
                 ))
-                .arg(required("lockbox", "Damaged lockbox path."))
+                .arg(optional(
+                    "lockbox",
+                    "Damaged lockbox path. Defaults to the active lockbox.",
+                ))
                 .arg(
                     Arg::new("output")
                         .long("output")
@@ -185,12 +187,10 @@ pub(crate) fn command(verbose: bool) -> Command {
                     "Examples:\n  lockbox extract secrets.lbox /notes.txt ./notes.txt\n  lockbox extract --to ./restore secrets.lbox\n  lockbox extract --to ./restore --overwrite secrets.lbox",
                     "Context:\n  Extract copies encrypted content back to the host filesystem. Use the single-file form for one stored path, or --to when restoring the whole lockbox into a directory.",
                 ))
-                .arg(required("lockbox", "Lockbox path."))
                 .arg(
                     Arg::new("to")
                         .long("to")
                         .value_name("DESTINATION")
-                        .conflicts_with_all(["lockbox-path", "destination"])
                         .help("Extract the full lockbox to a directory."),
                 )
                 .arg(
@@ -212,18 +212,25 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Restore file permissions when extracting a directory."),
                 )
                 .arg(
-                    optional("lockbox-path", "Path inside the lockbox.")
-                        .required_unless_present("to"),
-                )
-                .arg(optional("destination", "Destination path.").required_unless_present("to")),
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH DESTINATION | PATH DESTINATION")
+                        .num_args(0..=3)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass path and destination. Otherwise pass lockbox, path, and destination."),
+                ),
             file_command("cat", "Write a stored file to stdout.")
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox cat secrets.lbox /notes.txt\n  lockbox cat secrets.lbox /notes.txt > notes.txt",
                     "Context:\n  Cat streams one stored file to stdout. Use it for inspection, piping, or shell redirection when you do not want reVault to create a host file directly.",
                 ))
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("lockbox-path", "Path inside the lockbox.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH | PATH")
+                        .num_args(1..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the stored path."),
+                ),
             file_command("list", "List stored entries.")
                 .visible_alias("ls")
                 .after_help(verbose_help(
@@ -239,8 +246,13 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .action(ArgAction::SetTrue)
                         .help("List entries below child directories."),
                 )
-                .arg(optional("lockbox", "Lockbox path. Defaults to the active lockbox."))
-                .arg(optional("path", "Path or glob pattern inside the lockbox.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH | PATH")
+                        .num_args(0..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the optional stored path or glob."),
+                ),
             file_command("rm", "Remove a stored entry.")
                 .visible_alias("remove")
                 .after_help(verbose_help(
@@ -255,8 +267,13 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Remove without an interactive confirmation."),
                 )
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("lockbox-path", "Path inside the lockbox.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH | PATH")
+                        .num_args(1..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the stored path."),
+                ),
             file_command("rename", "Rename a stored entry.")
                 .visible_alias("mv")
                 .after_help(verbose_help(
@@ -264,9 +281,13 @@ pub(crate) fn command(verbose: bool) -> Command {
                     "Examples:\n  lockbox rename secrets.lbox /draft.txt /final.txt\n  lockbox mv secrets.lbox /old-dir /archive/old-dir",
                     "Context:\n  Rename changes the path stored inside the lockbox. It does not touch host filesystem paths; both arguments are lockbox paths.",
                 ))
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("from", "Existing path inside the lockbox."))
-                .arg(required("to", "New path inside the lockbox.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX FROM TO | FROM TO")
+                        .num_args(2..=3)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the stored source and destination paths."),
+                ),
             variables_command(verbose),
             form_command(verbose),
             session_command(verbose),
@@ -284,13 +305,18 @@ pub(crate) fn command(verbose: bool) -> Command {
             vault_command(verbose),
             developer_command("visualize", "Print internal lockbox structure.")
                 .visible_alias("visualise")
-                .arg(required("lockbox", "Lockbox path.")),
+                .arg(optional("lockbox", "Lockbox path. Defaults to the active lockbox.")),
             developer_command("keygen", "Generate raw keypair files.")
                 .arg(required("private-key", "Private key output path."))
                 .arg(required("public-key", "Public key output path.")),
             developer_command("open-key", "Open using a vault private key.")
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(optional("vault-key", "Vault private key name.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX VAULT_KEY | VAULT_KEY")
+                        .num_args(0..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the optional vault private key name."),
+                ),
         ]);
     if verbose {
         apply_verbose_help_template(command)
@@ -417,7 +443,6 @@ fn variables_command(verbose: bool) -> Command {
                 "Examples:\n  lockbox variables set secrets.lbox APP_MODE production\n  lockbox variables set --secret secrets.lbox API_TOKEN --interactive\n  printf '%s' \"$TOKEN\" | lockbox variables set --secret --stdin secrets.lbox API_TOKEN",
                 "Context:\n  Variables set writes one named value into a lockbox. Use --secret for values that should not be exported in bulk, such as tokens and passwords. Choose one value source: argument, prompt, stdin, file, or process environment.",
             ))
-            .arg(required("lockbox", "Lockbox path."))
             .arg(
                 Arg::new("secret")
                     .short('s')
@@ -425,12 +450,12 @@ fn variables_command(verbose: bool) -> Command {
                     .action(ArgAction::SetTrue)
                     .help("Store the value as secret."),
             )
-            .arg(required("name", "Variable name."))
             .arg(
-                Arg::new("positional-value")
-                    .value_name("VALUE")
-                    .allow_hyphen_values(true)
-                    .help("Literal value to store."),
+                Arg::new("args")
+                    .value_name("LOCKBOX NAME VALUE | NAME VALUE")
+                    .num_args(1..=3)
+                    .action(ArgAction::Append)
+                    .help("With an active lockbox, pass name and optional value. Otherwise pass lockbox, name, and optional value."),
             )
             .arg(
                 Arg::new("interactive")
@@ -476,7 +501,6 @@ fn variables_command(verbose: bool) -> Command {
                 "Examples:\n  lockbox variables get secrets.lbox APP_MODE\n  lockbox variables get --secret secrets.lbox API_TOKEN\n  lockbox variables get --secret --output api-token.txt secrets.lbox API_TOKEN",
                 "Context:\n  Variables get reads one named value from a lockbox. Secret values require --secret so accidental terminal output is an explicit user choice. Use --output when the exact bytes should go to a file.",
             ))
-            .arg(required("lockbox", "Lockbox path."))
             .arg(
                 Arg::new("secret")
                     .short('s')
@@ -497,7 +521,13 @@ fn variables_command(verbose: bool) -> Command {
                     .action(ArgAction::SetTrue)
                     .help("Replace the output file if it already exists."),
             )
-            .arg(required("name", "Variable name.")),
+            .arg(
+                Arg::new("args")
+                    .value_name("LOCKBOX NAME | NAME")
+                    .num_args(1..=2)
+                    .action(ArgAction::Append)
+                    .help("With an active lockbox, pass only the variable name."),
+            ),
     )
     .subcommand(
         Command::new("list")
@@ -509,8 +539,13 @@ fn variables_command(verbose: bool) -> Command {
                 "Context:\n  Variables list shows value names and whether each value is normal or secret. It does not print stored values. Pass a path such as /production to list that group, or a glob such as **/API_KEY to match names across groups.",
             ))
             .arg(output_format_arg())
-            .arg(optional("lockbox", "Lockbox path. Defaults to the active lockbox."))
-            .arg(optional("pattern", "Optional variable path or glob pattern.")),
+            .arg(
+                Arg::new("args")
+                    .value_name("LOCKBOX PATTERN | PATTERN")
+                    .num_args(0..=2)
+                    .action(ArgAction::Append)
+                    .help("With an active lockbox, pass only the optional pattern."),
+            ),
     )
     .subcommand(
         Command::new("export")
@@ -527,8 +562,13 @@ fn variables_command(verbose: bool) -> Command {
                     .default_value("posix")
                     .help("Output format."),
             )
-            .arg(required("lockbox", "Lockbox path."))
-            .arg(optional("path", "Optional variable path to export.")),
+            .arg(
+                Arg::new("args")
+                    .value_name("LOCKBOX PATH | PATH")
+                    .num_args(0..=2)
+                    .action(ArgAction::Append)
+                    .help("With an active lockbox, pass only the optional variable path."),
+            ),
     )
     .subcommand(
         Command::new("rm")
@@ -539,8 +579,13 @@ fn variables_command(verbose: bool) -> Command {
                 "Examples:\n  lockbox variables rm secrets.lbox APP_MODE\n  lockbox variables remove secrets.lbox API_TOKEN",
                 "Context:\n  Variables rm removes one named value from a lockbox. It affects only the lockbox record, not the current process environment.",
             ))
-            .arg(required("lockbox", "Lockbox path."))
-            .arg(required("name", "Variable name.")),
+            .arg(
+                Arg::new("args")
+                    .value_name("LOCKBOX NAME | NAME")
+                    .num_args(1..=2)
+                    .action(ArgAction::Append)
+                    .help("With an active lockbox, pass only the variable name."),
+            ),
     )
 }
 
@@ -564,8 +609,13 @@ fn form_command(verbose: bool) -> Command {
                     "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form define secrets.lbox login --name Login --field username:text:required:User --field password:secret:required:Password\n\nField form:\n  FIELD[:KIND[:required[:LABEL]]]\n\nKinds:\n  text, secret, password, url, email, date, month, notes, number",
                     "Context:\n  Define creates a new form definition for a new alias. If the alias already resolves to exactly one definition, define appends a new revision. If an imported shared lockbox has conflicting aliases, pass --definition-id to revise the intended definition explicitly.",
                 ))
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(optional("alias", "Form alias. Defaults to --name when omitted."))
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX ALIAS | ALIAS")
+                        .num_args(0..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the optional form alias."),
+                )
                 .arg(
                     Arg::new("name")
                         .long("name")
@@ -593,7 +643,13 @@ fn form_command(verbose: bool) -> Command {
                 .about("List form definitions.")
                 .visible_alias("types")
                 .arg(output_format_arg())
-                .arg(required("lockbox", "Lockbox path.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX")
+                        .num_args(0..=1)
+                        .action(ArgAction::Append)
+                        .help("Lockbox path. Defaults to the active lockbox."),
+                ),
         )
         .subcommand(
             Command::new("add")
@@ -603,8 +659,13 @@ fn form_command(verbose: bool) -> Command {
                     "Examples:\n  lockbox form add secrets.lbox /work/github --type login --name GitHub\n  lockbox form add secrets.lbox /work/github --type login --set username=bsutton --set site=https://github.com\n  lockbox form add secrets.lbox /work/github --type login --interactive",
                     "Context:\n  Add creates one form record in the lockbox. Use --set for non-secret values known up front. Use --interactive to prompt for remaining fields, including secret fields without echoing them.",
                 ))
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("path", "Form record path inside the lockbox."))
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH | PATH")
+                        .num_args(1..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the form record path."),
+                )
                 .arg(
                     Arg::new("type")
                         .long("type")
@@ -641,8 +702,13 @@ fn form_command(verbose: bool) -> Command {
                     "Examples:\n  lockbox form edit secrets.lbox /work/github --set username=bsutton\n  lockbox form edit secrets.lbox /work/github --interactive",
                     "Context:\n  Edit updates an existing form record. Use --interactive after a form definition revision to fill fields that exist in the latest definition but are missing from the stored record.",
                 ))
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("path", "Form record path."))
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH | PATH")
+                        .num_args(1..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the form record path."),
+                )
                 .arg(
                     Arg::new("set")
                         .long("set")
@@ -661,9 +727,13 @@ fn form_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("set")
                 .about("Set one form field value.")
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("path", "Form record path."))
-                .arg(required("field", "Field id."))
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH FIELD VALUE | PATH FIELD VALUE")
+                        .num_args(2..=4)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass form record path, field id, and optional value."),
+                )
                 .arg(
                     Arg::new("secret")
                         .long("secret")
@@ -671,18 +741,11 @@ fn form_command(verbose: bool) -> Command {
                         .help("Set a secret field value."),
                 )
                 .arg(
-                    Arg::new("value")
-                        .value_name("VALUE")
-                        .allow_hyphen_values(true)
-                        .conflicts_with_all(["stdin", "file", "from-env", "interactive"])
-                        .help("Literal non-secret field value."),
-                )
-                .arg(
                     Arg::new("explicit-value")
                         .long("value")
                         .short('v')
                         .value_name("VALUE")
-                        .conflicts_with_all(["value", "stdin", "file", "from-env", "interactive"])
+                        .conflicts_with_all(["stdin", "file", "from-env", "interactive"])
                         .help("Set a literal non-secret field value."),
                 )
                 .arg(
@@ -690,7 +753,7 @@ fn form_command(verbose: bool) -> Command {
                         .long("stdin")
                         .short('t')
                         .action(ArgAction::SetTrue)
-                        .conflicts_with_all(["value", "explicit-value", "file", "from-env", "interactive"])
+                        .conflicts_with_all(["explicit-value", "file", "from-env", "interactive"])
                         .help("Read the field value from stdin."),
                 )
                 .arg(
@@ -698,7 +761,7 @@ fn form_command(verbose: bool) -> Command {
                         .long("file")
                         .short('f')
                         .value_name("FILE")
-                        .conflicts_with_all(["value", "explicit-value", "stdin", "from-env", "interactive"])
+                        .conflicts_with_all(["explicit-value", "stdin", "from-env", "interactive"])
                         .help("Read the field value from a file."),
                 )
                 .arg(
@@ -706,7 +769,7 @@ fn form_command(verbose: bool) -> Command {
                         .long("from-env")
                         .short('e')
                         .value_name("NAME")
-                        .conflicts_with_all(["value", "explicit-value", "stdin", "file", "interactive"])
+                        .conflicts_with_all(["explicit-value", "stdin", "file", "interactive"])
                         .help("Read the field value from an variable."),
                 )
                 .arg(
@@ -714,7 +777,7 @@ fn form_command(verbose: bool) -> Command {
                         .long("interactive")
                         .short('i')
                         .action(ArgAction::SetTrue)
-                        .conflicts_with_all(["value", "explicit-value", "stdin", "file", "from-env"])
+                        .conflicts_with_all(["explicit-value", "stdin", "file", "from-env"])
                         .help("Prompt for the field value."),
                 ),
         )
@@ -726,9 +789,13 @@ fn form_command(verbose: bool) -> Command {
                     "Examples:\n  lockbox form get secrets.lbox /work/github username\n  lockbox form get --secret secrets.lbox /work/github password\n  lockbox form get --secret --output password.txt secrets.lbox /work/github password",
                     "Context:\n  Form get reads one field from a form record. Secret fields require --secret so accidental terminal output is an explicit user choice. Use --output when the exact bytes should go to a file.",
                 ))
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("path", "Form record path."))
-                .arg(required("field", "Field id."))
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH FIELD | PATH FIELD")
+                        .num_args(2..=3)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the form record path and field id."),
+                )
                 .arg(
                     Arg::new("secret")
                         .long("secret")
@@ -752,21 +819,36 @@ fn form_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("show")
                 .about("Show one form record.")
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("path", "Form record path.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH | PATH")
+                        .num_args(1..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the form record path."),
+                ),
         )
         .subcommand(
             Command::new("list")
                 .about("List form records.")
                 .arg(output_format_arg())
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(optional("pattern", "Optional form record path or glob pattern.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATTERN | PATTERN")
+                        .num_args(0..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the optional pattern."),
+                ),
         )
         .subcommand(
             Command::new("rm")
                 .about("Remove one form record.")
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("path", "Form record path.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX PATH | PATH")
+                        .num_args(1..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the form record path."),
+                ),
         )
 }
 
@@ -861,15 +943,13 @@ fn access_command(verbose: bool) -> Command {
                     "Examples:\n  lockbox access add secrets.lbox alice\n  lockbox access add secrets.lbox identity:alice\n  lockbox access add secrets.lbox contact:alice\n  lockbox access add secrets.lbox alice ./alice.pub",
                     "Context:\n  Access add grants open access by adding an identity or contact to the lockbox. A bare name can refer to one of your saved identities or saved contacts. If both use the same name, use identity:name or contact:name. For a public key file, provide the contact name first so the lockbox can record who the access entry belongs to.",
                 ))
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required(
-                    "identity-or-contact",
-                    "Identity name, contact name, identity:name, contact:name, or contact name for a public key file.",
-                ))
-                .arg(optional(
-                    "public-key",
-                    "Public key path. When supplied, the previous argument is stored as the access name.",
-                )),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX IDENTITY PUBLIC_KEY | IDENTITY PUBLIC_KEY")
+                        .num_args(1..=3)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass identity/contact and optional public key. Identity name, contact name, identity:name, contact:name, or contact name plus a public key file. Public key path."),
+                ),
         )
         .subcommand(
             Command::new("list")
@@ -881,7 +961,13 @@ fn access_command(verbose: bool) -> Command {
                     "Context:\n  Access list shows the access slots currently attached to a lockbox. Use slot ids from this output when removing access.",
                 ))
                 .arg(output_format_arg())
-                .arg(required("lockbox", "Lockbox path.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX")
+                        .num_args(0..=1)
+                        .action(ArgAction::Append)
+                        .help("Lockbox path. Defaults to the active lockbox."),
+                ),
         )
         .subcommand(
             Command::new("remove")
@@ -892,8 +978,13 @@ fn access_command(verbose: bool) -> Command {
                     "Examples:\n  lockbox access remove secrets.lbox 2\n  lockbox access rm secrets.lbox 2",
                     "Context:\n  Access remove deletes one open slot from the lockbox. reVault prevents removing the last usable access entry because that could make the lockbox inaccessible.",
                 ))
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("slot-id", "Access slot id.")),
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX SLOT_ID | SLOT_ID")
+                        .num_args(1..=2)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass only the access slot id."),
+                ),
         )
         .subcommand(
             Command::new("refresh")
@@ -913,6 +1004,7 @@ fn access_command(verbose: bool) -> Command {
                     Arg::new("args")
                         .value_name("LOCKBOX IDENTITY | IDENTITY")
                         .num_args(0..=2)
+                        .action(ArgAction::Append)
                         .help("Without --all, pass lockbox and identity. With --all, optionally pass one identity."),
                 )
                 .arg(

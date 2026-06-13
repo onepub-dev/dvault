@@ -54,10 +54,10 @@ pub(crate) fn run() -> CliResult<()> {
     match command {
         "create" => keys::create(&create_args(command_matches), &access)?,
         "doctor" => doctor::run(&one_optional_arg(command_matches, "lockbox"))?,
-        "open" => keys::open(&open_args(command_matches))?,
-        "close" => keys::close(&close_args(command_matches))?,
+        "open" => keys::open(&open_args(command_matches)?)?,
+        "close" => keys::close(&close_args(command_matches)?)?,
         "keygen" => keys::keygen(&two_args(command_matches, "private-key", "public-key"))?,
-        "open-key" => keys::open_key(&open_key_args(command_matches))?,
+        "open-key" => keys::open_key(&open_key_args(command_matches)?)?,
         "session" => session::run(&session_args(command_matches)?)?,
         "access" => keys::access(&access_args(command_matches)?, &access)?,
         "vault" => vault::run(&vault_args(command_matches)?)?,
@@ -67,20 +67,14 @@ pub(crate) fn run() -> CliResult<()> {
             read_worker_policy(command_matches)?,
         )?,
         "extract" => files::extract(&extract_args(command_matches)?, &access)?,
-        "cat" => files::cat(
-            &two_args(command_matches, "lockbox", "lockbox-path"),
-            &access,
-        )?,
+        "cat" => files::cat(&cat_args(command_matches)?, &access)?,
         "list" => files::list(&list_args(command_matches)?, &access)?,
-        "rm" => files::remove(&remove_args(command_matches), &access)?,
-        "rename" => files::rename(
-            &three_args(command_matches, "lockbox", "from", "to"),
-            &access,
-        )?,
+        "rm" => files::remove(&remove_args(command_matches)?, &access)?,
+        "rename" => files::rename(&rename_args(command_matches)?, &access)?,
         "variables" => variables::run(&variables_args(command_matches)?, &access)?,
         "form" => form::run(&form_args(command_matches)?, &access)?,
         "recover" => recovery::run(&recover_args(command_matches)?, &access)?,
-        "visualize" => visualize::run(&one_arg(command_matches, "lockbox"), &access)?,
+        "visualize" => visualize::run(&visualize_args(command_matches)?, &access)?,
         _ => return Err(Error::InvalidInput(format!("unknown command: {command}")).into()),
     }
 
@@ -160,25 +154,25 @@ fn create_args(matches: &ArgMatches) -> Vec<String> {
     args
 }
 
-fn close_args(matches: &ArgMatches) -> Vec<String> {
+fn close_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     if matches.get_flag("all") {
-        vec!["--all".to_string()]
+        Ok(vec!["--all".to_string()])
     } else {
-        one_arg(matches, "lockbox")
+        Ok(vec![optional_lockbox_value(matches, "lockbox")?])
     }
 }
 
-fn open_args(matches: &ArgMatches) -> Vec<String> {
-    let mut args = one_arg(matches, "lockbox");
+fn open_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    let mut args = vec![optional_lockbox_value(matches, "lockbox")?];
     push_option(&mut args, matches, "duration", "--duration");
     push_option(&mut args, matches, "password-env", "--password-env");
     push_option(&mut args, matches, "password-file", "--password-file");
     push_flag(&mut args, matches, "password-stdin", "--password-stdin");
-    args
+    Ok(args)
 }
 
 fn recover_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
-    let mut args = one_arg(matches, "lockbox");
+    let mut args = vec![optional_lockbox_value(matches, "lockbox")?];
     push_option(&mut args, matches, "output", "--output");
     push_flag(&mut args, matches, "overwrite", "--overwrite");
     if matches.get_flag("report") || matches.get_flag("dry-run") {
@@ -222,6 +216,38 @@ fn active_lockbox_for_add_if_set() -> CliResult<Option<String>> {
     Ok(Some(active))
 }
 
+fn optional_lockbox_value(matches: &ArgMatches, name: &str) -> CliResult<String> {
+    match matches.get_one::<String>(name) {
+        Some(value) => Ok(value.clone()),
+        None => active_lockbox_for_command(),
+    }
+}
+
+fn optional_lockbox_positionals(
+    mut values: Vec<String>,
+    required_after_lockbox: usize,
+) -> CliResult<Vec<String>> {
+    if values
+        .first()
+        .is_some_and(|value| looks_like_lockbox_path(value))
+    {
+        if values.len() < required_after_lockbox + 1 {
+            return Err(cli_error("missing argument after lockbox"));
+        }
+        return Ok(values);
+    }
+    if values.len() < required_after_lockbox {
+        return Err(cli_error("missing required argument"));
+    }
+    values.insert(0, active_lockbox_for_command()?);
+    Ok(values)
+}
+
+fn active_lockbox_for_command() -> CliResult<String> {
+    active_lockbox_for_add_if_set()?
+        .ok_or_else(|| cli_error("missing lockbox; pass a .lbox path or activate a lockbox"))
+}
+
 fn looks_like_lockbox_path(value: &str) -> bool {
     value.ends_with(".lbox")
         || Path::new(value)
@@ -229,17 +255,41 @@ fn looks_like_lockbox_path(value: &str) -> bool {
             .is_some_and(|ext| ext == "lbox")
 }
 
-fn open_key_args(matches: &ArgMatches) -> Vec<String> {
-    let mut args = one_arg(matches, "lockbox");
-    if let Some(key) = matches.get_one::<String>("vault-key") {
-        args.push(key.clone());
-    }
-    args
+fn positional_values(matches: &ArgMatches, name: &str) -> Vec<String> {
+    matches
+        .get_many::<String>(name)
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default()
+}
+
+fn open_key_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    let values = positional_values(matches, "args");
+    let args = match values.as_slice() {
+        [] => vec![active_lockbox_for_command()?],
+        [first] if looks_like_lockbox_path(first) => vec![first.clone()],
+        [key] => vec![active_lockbox_for_command()?, key.clone()],
+        [lockbox, key] if looks_like_lockbox_path(lockbox) => vec![lockbox.clone(), key.clone()],
+        [lockbox, _] => {
+            return Err(cli_error(format!(
+                "lockbox path must end with .lbox: {lockbox}"
+            )))
+        }
+        _ => unreachable!("clap limits open-key positional arguments"),
+    };
+    Ok(args)
 }
 
 fn extract_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
-    let mut args = one_arg(matches, "lockbox");
     if let Some(destination) = matches.get_one::<String>("to") {
+        let values = positional_values(matches, "args");
+        if values.len() > 1 {
+            return Err(cli_error("extract --to accepts at most one lockbox path"));
+        }
+        let mut args = if let Some(lockbox) = values.first() {
+            vec![lockbox.clone()]
+        } else {
+            vec![active_lockbox_for_command()?]
+        };
         args.push("--to".to_string());
         args.push(destination.clone());
         push_flag(&mut args, matches, "overwrite", "--overwrite");
@@ -252,40 +302,49 @@ fn extract_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
         );
         return Ok(args);
     }
-    args.push(value(matches, "lockbox-path"));
-    args.push(value(matches, "destination"));
+    let args = positional_values(matches, "args");
+    let mut args = optional_lockbox_positionals(args, 2)?;
     push_flag(&mut args, matches, "overwrite", "--overwrite");
     Ok(args)
 }
 
+fn cat_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    optional_lockbox_positionals(positional_values(matches, "args"), 1)
+}
+
 fn list_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
-    let mut args = vec![value_or_active(matches, "lockbox")?];
+    let mut args = optional_lockbox_positionals(positional_values(matches, "args"), 0)?;
     push_option(&mut args, matches, "format", "--format");
     push_flag(&mut args, matches, "recursive", "--recursive");
-    if let Some(path) = matches.get_one::<String>("path") {
-        args.push(path.clone());
-    }
     Ok(args)
 }
 
-fn remove_args(matches: &ArgMatches) -> Vec<String> {
-    let mut args = two_args(matches, "lockbox", "lockbox-path");
+fn remove_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    let mut args = optional_lockbox_positionals(positional_values(matches, "args"), 1)?;
     push_flag(&mut args, matches, "force", "--force");
-    args
+    Ok(args)
+}
+
+fn rename_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    optional_lockbox_positionals(positional_values(matches, "args"), 2)
+}
+
+fn visualize_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    Ok(vec![optional_lockbox_value(matches, "lockbox")?])
 }
 
 fn variables_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let (command, sub) = matches
         .subcommand()
         .ok_or_else(|| Error::InvalidInput("missing variables command".to_string()))?;
-    let mut args = vec![command.to_string(), value_or_active(sub, "lockbox")?];
+    let mut args = vec![command.to_string()];
     match command {
         "set" => {
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                1,
+            )?);
             push_flag(&mut args, sub, "secret", "-s");
-            args.push(value(sub, "name"));
-            if let Some(value) = sub.get_one::<String>("positional-value") {
-                args.push(value.clone());
-            }
             push_flag(&mut args, sub, "interactive", "-i");
             push_flag(&mut args, sub, "stdin", "-t");
             push_option(&mut args, sub, "value", "-v");
@@ -293,21 +352,32 @@ fn variables_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_option(&mut args, sub, "from-env", "-e");
         }
         "get" => {
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                1,
+            )?);
             push_flag(&mut args, sub, "secret", "-s");
             push_option(&mut args, sub, "output", "--output");
             push_flag(&mut args, sub, "overwrite", "--overwrite");
-            args.push(value(sub, "name"));
         }
         "list" | "ls" => {
-            args[1] = value_or_active(sub, "lockbox")?;
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                0,
+            )?);
             push_option(&mut args, sub, "format", "--format");
-            push_optional(&mut args, sub, "pattern");
         }
         "export" => {
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                0,
+            )?);
             push_option(&mut args, sub, "format", "--format");
-            push_optional(&mut args, sub, "path");
         }
-        "rm" | "remove" => args.push(value(sub, "name")),
+        "rm" | "remove" => args.extend(optional_lockbox_positionals(
+            positional_values(sub, "args"),
+            1,
+        )?),
         _ => {
             return Err(Error::InvalidInput(format!("unknown variables command: {command}")).into())
         }
@@ -319,10 +389,13 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let (command, sub) = matches
         .subcommand()
         .ok_or_else(|| Error::InvalidInput("missing form command".to_string()))?;
-    let mut args = vec![command.to_string(), value(sub, "lockbox")];
+    let mut args = vec![command.to_string()];
     match command {
         "define" => {
-            push_optional(&mut args, sub, "alias");
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                0,
+            )?);
             push_option(&mut args, sub, "name", "--name");
             push_option(&mut args, sub, "definition-id", "--definition-id");
             if let Some(fields) = sub.get_many::<String>("field") {
@@ -333,10 +406,17 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             }
         }
         "definitions" | "types" => {
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                0,
+            )?);
             push_option(&mut args, sub, "format", "--format");
         }
         "add" => {
-            args.push(value(sub, "path"));
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                1,
+            )?);
             push_option(&mut args, sub, "type", "--type");
             push_option(&mut args, sub, "name", "--name");
             if let Some(assignments) = sub.get_many::<String>("set") {
@@ -348,7 +428,10 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "interactive", "--interactive");
         }
         "edit" => {
-            args.push(value(sub, "path"));
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                1,
+            )?);
             if let Some(assignments) = sub.get_many::<String>("set") {
                 for assignment in assignments {
                     args.push("--set".to_string());
@@ -358,34 +441,44 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "interactive", "--interactive");
         }
         "set" => {
-            args.push(value(sub, "path"));
-            args.push(value(sub, "field"));
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                2,
+            )?);
             push_flag(&mut args, sub, "secret", "--secret");
             push_flag(&mut args, sub, "interactive", "--interactive");
             push_flag(&mut args, sub, "stdin", "--stdin");
             push_option(&mut args, sub, "explicit-value", "--value");
             push_option(&mut args, sub, "file", "--file");
             push_option(&mut args, sub, "from-env", "--from-env");
-            if let Some(value) = sub.get_one::<String>("value") {
-                args.push(value.clone());
-            }
         }
         "get" => {
-            args.push(value(sub, "path"));
-            args.push(value(sub, "field"));
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                2,
+            )?);
             push_flag(&mut args, sub, "secret", "--secret");
             push_option(&mut args, sub, "output", "--output");
             push_flag(&mut args, sub, "overwrite", "--overwrite");
         }
         "show" => {
-            args.push(value(sub, "path"));
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                1,
+            )?);
         }
         "list" => {
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                0,
+            )?);
             push_option(&mut args, sub, "format", "--format");
-            push_optional(&mut args, sub, "pattern");
         }
         "rm" => {
-            args.push(value(sub, "path"));
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                1,
+            )?);
         }
         _ => return Err(Error::InvalidInput(format!("unknown form command: {command}")).into()),
     }
@@ -601,35 +694,40 @@ fn access_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let mut args = vec![command.to_string()];
     match command {
         "add" => {
-            args.push(value(sub, "lockbox"));
-            args.push(value(sub, "identity-or-contact"));
-            if let Some(public_key) = sub.get_one::<String>("public-key") {
-                args.push(public_key.clone());
-            }
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                1,
+            )?);
         }
         "list" | "ls" => {
-            args.push(value(sub, "lockbox"));
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                0,
+            )?);
             push_option(&mut args, sub, "format", "--format");
         }
         "refresh" => {
             if sub.get_flag("all") {
                 args.push("--all".to_string());
+                push_many(&mut args, sub, "args");
+            } else {
+                args.extend(optional_lockbox_positionals(
+                    positional_values(sub, "args"),
+                    1,
+                )?);
             }
-            push_many(&mut args, sub, "args");
             push_flag(&mut args, sub, "dry-run", "--dry-run");
             push_flag(&mut args, sub, "yes", "--yes");
         }
         "remove" | "rm" => {
-            args.push(value(sub, "lockbox"));
-            args.push(value(sub, "slot-id"));
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                1,
+            )?);
         }
         _ => return Err(Error::InvalidInput(format!("unknown access command: {command}")).into()),
     }
     Ok(args)
-}
-
-fn one_arg(matches: &ArgMatches, name: &str) -> Vec<String> {
-    vec![value(matches, name)]
 }
 
 fn one_optional_arg(matches: &ArgMatches, name: &str) -> Vec<String> {
@@ -643,31 +741,11 @@ fn two_args(matches: &ArgMatches, first: &str, second: &str) -> Vec<String> {
     vec![value(matches, first), value(matches, second)]
 }
 
-fn three_args(matches: &ArgMatches, first: &str, second: &str, third: &str) -> Vec<String> {
-    vec![
-        value(matches, first),
-        value(matches, second),
-        value(matches, third),
-    ]
-}
-
 fn value(matches: &ArgMatches, name: &str) -> String {
     matches
         .get_one::<String>(name)
         .unwrap_or_else(|| panic!("clap did not provide required argument {name}"))
         .clone()
-}
-
-fn value_or_active(matches: &ArgMatches, name: &str) -> CliResult<String> {
-    if let Some(value) = matches.get_one::<String>(name) {
-        return Ok(value.clone());
-    }
-    session::active_lockbox_or_none()?.ok_or_else(|| {
-        Error::InvalidInput(format!(
-            "missing {name}; pass a lockbox path or run `lockbox session activate <lockbox>`"
-        ))
-        .into()
-    })
 }
 
 fn push_optional(args: &mut Vec<String>, matches: &ArgMatches, name: &str) {
