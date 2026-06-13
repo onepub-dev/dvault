@@ -1284,6 +1284,7 @@ fn doctor_and_session_report_agent_state() {
     let doctor = String::from_utf8_lossy(&doctor.stdout);
     assert!(doctor.contains("Session agent"));
     assert!(doctor.contains("running: no"));
+    assert!(doctor.contains("open lockboxes:"));
     assert!(doctor.contains("log:"));
     assert!(doctor.contains(agent_root.to_str().unwrap()));
     assert_contains_in_order(
@@ -1421,6 +1422,14 @@ fn doctor_lockbox_adds_open_checks_when_unlocked() {
     assert!(doctor.contains("open: yes"));
     assert!(doctor.contains("pages:"));
     assert!(doctor.contains("intact files:"));
+
+    let global_doctor =
+        run_output_without_lockbox_password(bin, &["doctor"], &vault_root, &agent_root)
+            .output()
+            .unwrap();
+    assert_success(&global_doctor);
+    let global_doctor = String::from_utf8_lossy(&global_doctor.stdout);
+    assert!(global_doctor.contains("open lockboxes: 1"));
 }
 
 #[test]

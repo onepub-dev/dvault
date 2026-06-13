@@ -59,6 +59,10 @@ fn run_global() -> CliResult<()> {
         }
     );
     println!("  running: {}", yes_no(is_running()));
+    match list() {
+        Ok(lockboxes) => println!("  open lockboxes: {}", lockboxes.len()),
+        Err(err) => println!("  open lockboxes: unknown: {err}"),
+    }
     println!("  log: {}", agent_log_destination());
     println!();
     println!("Known lockboxes");
