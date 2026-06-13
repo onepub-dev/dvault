@@ -345,6 +345,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(auto_open_help.contains("off"));
     assert!(auto_open_help.contains("vault"));
     assert!(auto_open_help.contains("lockboxes"));
+    assert!(auto_open_help.contains("--yes"));
 
     let doctor_help = run_output(bin, &["doctor", "--help"]);
     assert_success(&doctor_help);
@@ -2843,9 +2844,22 @@ fn session_and_close_report_empty_cache_and_already_closed_state() {
     assert_success(&lock_all);
     assert!(String::from_utf8_lossy(&lock_all.stdout).contains("sessions closed"));
 
-    let auto_open_off = run_output_without_content_key(
+    let refused_auto_open_off = run_output_without_content_key_with_stdin(
         bin,
         &["session", "auto-open", "off"],
+        &vault_root,
+        &agent_root,
+        "no\n",
+    );
+    assert_success(&refused_auto_open_off);
+    assert!(String::from_utf8_lossy(&refused_auto_open_off.stderr).contains("Disable auto-open?"));
+    assert!(
+        String::from_utf8_lossy(&refused_auto_open_off.stdout).contains("Auto-open not disabled.")
+    );
+
+    let auto_open_off = run_output_without_content_key(
+        bin,
+        &["session", "auto-open", "off", "--yes"],
         &vault_root,
         &agent_root,
     );

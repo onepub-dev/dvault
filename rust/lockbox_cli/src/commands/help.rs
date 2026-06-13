@@ -906,7 +906,7 @@ fn session_command(verbose: bool) -> Command {
                 .arg_required_else_help(false)
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox session auto-open status\n  lockbox session auto-open off\n  lockbox session auto-open vault\n  lockbox session auto-open lockboxes",
+                    "Examples:\n  lockbox session auto-open status\n  lockbox session auto-open off\n  lockbox session auto-open off --yes\n  lockbox session auto-open vault\n  lockbox session auto-open lockboxes",
                     "Context:\n  Auto-open controls whether reVault may use your OS login to automatically open only the vault, or both the vault and lockboxes as required.",
                 ))
                 .subcommand(
@@ -914,9 +914,21 @@ fn session_command(verbose: bool) -> Command {
                         .about("Show the current auto-open scope.")
                         .arg(output_format_arg()),
                 )
-                .subcommand(Command::new("off").about(
-                    "Disable auto-open and close all open lockbox sessions.",
-                ))
+                .subcommand(
+                    Command::new("off")
+                        .about("Disable auto-open and close all open lockbox sessions.")
+                        .after_help(verbose_help(
+                            verbose,
+                            "Examples:\n  lockbox session auto-open off\n  lockbox session auto-open off --yes",
+                            "Context:\n  Disabling auto-open removes the stored vault pass phrase from the OS key store and closes all open lockbox sessions.",
+                        ))
+                        .arg(
+                            Arg::new("yes")
+                                .long("yes")
+                                .action(ArgAction::SetTrue)
+                                .help("Disable auto-open without prompting."),
+                        ),
+                )
                 .subcommand(Command::new("vault").about(
                     "Allow reVault to automatically open the vault only.",
                 ))

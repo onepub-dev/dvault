@@ -1,10 +1,11 @@
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use lockbox_core::Error;
 use lockbox_vault::{
-    forget_platform_vault_password, get_platform_vault_password, list as list_open_lockboxes,
-    local_vault, platform_secret_store_status, put_platform_vault_password, set_auto_open_scope,
+    get_platform_vault_password, list as list_open_lockboxes, local_vault,
+    platform_secret_store_status, put_platform_vault_password, set_auto_open_scope,
     stop as stop_agent, verify_agent_transport_security, AutoOpenScope, VaultDirectory,
 };
 
@@ -142,8 +143,11 @@ fn auto_open(args: &[String]) -> CliResult<()> {
     match command {
         "status" => auto_open_status(&args[1..]),
         "off" => {
+            if !confirm_auto_open_off(&args[1..])? {
+                println!("Auto-open not disabled.");
+                return Ok(());
+            }
             set_auto_open_scope(AutoOpenScope::Off)?;
-            let _ = forget_platform_vault_password();
             local_vault().lock_all()?;
             clear_active_lockbox()?;
             auto_open_status(&[])
@@ -168,6 +172,31 @@ fn auto_open(args: &[String]) -> CliResult<()> {
             Err(Error::InvalidInput(format!("unknown session auto-open command: {command}")).into())
         }
     }
+}
+
+fn confirm_auto_open_off(args: &[String]) -> CliResult<bool> {
+    let yes = args.iter().any(|arg| arg == "--yes");
+    let unexpected = args
+        .iter()
+        .find(|arg| !matches!(arg.as_str(), "--yes"))
+        .map(String::as_str);
+    if let Some(arg) = unexpected {
+        return Err(
+            Error::InvalidInput(format!("unknown session auto-open off option: {arg}")).into(),
+        );
+    }
+    if yes {
+        return Ok(true);
+    }
+
+    eprintln!("Disable auto-open?");
+    eprintln!("The stored vault pass phrase will be removed from the OS key store.");
+    eprintln!("All open lockbox sessions will be closed.");
+    eprint!("Type 'yes' to disable auto-open: ");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(answer.trim() == "yes")
 }
 
 fn auto_open_status(args: &[String]) -> CliResult<()> {

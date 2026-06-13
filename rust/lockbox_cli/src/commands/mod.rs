@@ -681,6 +681,8 @@ fn session_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     args.push(auto_command.to_string());
                     if auto_command == "status" {
                         push_option(&mut args, auto_sub, "format", "--format");
+                    } else if auto_command == "off" {
+                        push_flag(&mut args, auto_sub, "yes", "--yes");
                     }
                 } else {
                     args.push("status".to_string());
