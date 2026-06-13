@@ -17,9 +17,9 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -38,9 +38,7 @@ pub(crate) fn serve_agent() -> io::Result<()> {
     log_agent_event("agent starting");
     let socket = socket_path();
     prepare_socket_dir()?;
-    if socket.exists() {
-        let _ = fs::remove_file(&socket);
-    }
+    remove_stale_socket(&socket)?;
     let listener = UnixListener::bind(&socket)?;
     listener.set_nonblocking(true)?;
 
@@ -140,11 +138,11 @@ fn sleep_watcher_has_suspend(watcher: &Option<SleepWatcher>) -> bool {
 }
 
 pub(crate) fn verify_agent_transport_security() -> io::Result<()> {
-    Ok(())
+    prepare_socket_dir()
 }
 
 pub(crate) fn get(lockbox_id: LockboxId) -> io::Result<Option<SecretVec>> {
-    if UnixStream::connect(socket_path()).is_err() {
+    if !existing_agent_is_reachable()? {
         return Ok(None);
     }
     match request(&encode_get(lockbox_id)?)? {
@@ -164,28 +162,28 @@ pub(crate) fn put(
 }
 
 pub(crate) fn forget(lockbox_id: LockboxId) -> io::Result<()> {
-    if UnixStream::connect(socket_path()).is_err() {
+    if !existing_agent_is_reachable()? {
         return Ok(());
     }
     expect_ok(request(&encode_forget(lockbox_id)?)?)
 }
 
 pub(crate) fn forget_all() -> io::Result<()> {
-    if UnixStream::connect(socket_path()).is_err() {
+    if !existing_agent_is_reachable()? {
         return Ok(());
     }
     expect_ok(request(&encode_forget_all()?)?)
 }
 
 pub(crate) fn stop() -> io::Result<()> {
-    if UnixStream::connect(socket_path()).is_err() {
+    if !existing_agent_is_reachable()? {
         return Ok(());
     }
     expect_ok(request(&encode_stop()?)?)
 }
 
 pub(crate) fn list() -> io::Result<Vec<CachedLockbox>> {
-    if UnixStream::connect(socket_path()).is_err() {
+    if !existing_agent_is_reachable()? {
         return Ok(Vec::new());
     }
     match request(&encode_list()?)? {
@@ -202,7 +200,7 @@ pub(crate) fn register_secret_activity(kind: SecretActivityKind) -> io::Result<u
 }
 
 pub(crate) fn unregister_secret_activity(pid: u32, token: u64) -> io::Result<()> {
-    if UnixStream::connect(socket_path()).is_err() {
+    if !existing_agent_is_reachable()? {
         return Ok(());
     }
     expect_control_ok(request_control(&encode_unregister_secret_activity(
@@ -211,7 +209,12 @@ pub(crate) fn unregister_secret_activity(pid: u32, token: u64) -> io::Result<()>
 }
 
 pub(crate) fn is_running() -> bool {
-    UnixStream::connect(socket_path()).is_ok()
+    existing_agent_is_reachable().unwrap_or(false)
+}
+
+fn existing_agent_is_reachable() -> io::Result<bool> {
+    prepare_socket_dir()?;
+    Ok(UnixStream::connect(socket_path()).is_ok())
 }
 
 fn request(message: &SecretVec) -> io::Result<AgentResponse> {
@@ -246,10 +249,10 @@ fn connect_started_agent() -> io::Result<UnixStream> {
 }
 
 fn ensure_agent() -> io::Result<()> {
+    prepare_socket_dir()?;
     if UnixStream::connect(socket_path()).is_ok() {
         return Ok(());
     }
-    prepare_socket_dir()?;
     let exe = env::current_exe()?;
     Command::new(exe)
         .arg("__agent")
@@ -281,7 +284,7 @@ fn handle_client(
     active: &Arc<Mutex<ActiveSecretRegistry>>,
 ) -> io::Result<bool> {
     if !client_matches_current_user(&stream)? {
-        log_agent_event("rejected agent request from a different user");
+        log_agent_event("rejected agent request from a different user or group");
         return Ok(false);
     }
     let request = read_agent_frame(stream.try_clone()?, max_message_bytes())?;
@@ -300,11 +303,18 @@ fn handle_client(
 }
 
 fn client_matches_current_user(stream: &UnixStream) -> io::Result<bool> {
-    Ok(peer_uid(stream)? == current_effective_uid())
+    let peer = peer_credentials(stream)?;
+    Ok(peer.uid == current_effective_uid() && peer.gid == current_effective_gid())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PeerCredentials {
+    uid: u32,
+    gid: u32,
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
+fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCredentials> {
     use std::os::unix::io::AsRawFd;
 
     let mut credential = std::mem::MaybeUninit::<libc::ucred>::uninit();
@@ -327,7 +337,11 @@ fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
             "peer credential response was truncated",
         ));
     }
-    Ok(unsafe { credential.assume_init().uid as u32 })
+    let credential = unsafe { credential.assume_init() };
+    Ok(PeerCredentials {
+        uid: credential.uid as u32,
+        gid: credential.gid as u32,
+    })
 }
 
 #[cfg(any(
@@ -338,7 +352,7 @@ fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
     target_os = "netbsd",
     target_os = "openbsd"
 ))]
-fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
+fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCredentials> {
     use std::os::unix::io::AsRawFd;
 
     let mut euid = 0 as libc::uid_t;
@@ -347,7 +361,10 @@ fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
     if result != 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(euid as u32)
+    Ok(PeerCredentials {
+        uid: euid as u32,
+        gid: egid as u32,
+    })
 }
 
 #[cfg(not(any(
@@ -360,12 +377,19 @@ fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
     target_os = "netbsd",
     target_os = "openbsd"
 )))]
-fn peer_uid(_stream: &UnixStream) -> io::Result<u32> {
-    Ok(current_effective_uid())
+fn peer_credentials(_stream: &UnixStream) -> io::Result<PeerCredentials> {
+    Ok(PeerCredentials {
+        uid: current_effective_uid(),
+        gid: current_effective_gid(),
+    })
 }
 
 fn current_effective_uid() -> u32 {
     unsafe { libc::geteuid() as u32 }
+}
+
+fn current_effective_gid() -> u32 {
+    unsafe { libc::getegid() as u32 }
 }
 
 fn handle_agent_request(
@@ -615,9 +639,103 @@ fn read_secure_payload(
 
 fn prepare_socket_dir() -> io::Result<()> {
     let dir = socket_dir();
-    fs::create_dir_all(&dir)?;
-    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+    match fs::symlink_metadata(&dir) {
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => fs::create_dir_all(&dir)?,
+        Err(err) => return Err(err),
+    }
+    validate_socket_dir_owner(&dir)?;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+    validate_socket_dir(&dir)
+}
+
+fn validate_socket_dir_owner(dir: &Path) -> io::Result<()> {
+    let metadata = socket_dir_metadata(dir)?;
+    if metadata.uid() != current_effective_uid() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "session agent directory is not owned by the current user: {}",
+                dir.display()
+            ),
+        ));
+    }
     Ok(())
+}
+
+fn validate_socket_dir(dir: &Path) -> io::Result<()> {
+    let metadata = socket_dir_metadata(dir)?;
+    if metadata.uid() != current_effective_uid() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "session agent directory is not owned by the current user: {}",
+                dir.display()
+            ),
+        ));
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "session agent directory is accessible by other users: {} (mode {mode:o})",
+                dir.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn socket_dir_metadata(dir: &Path) -> io::Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(dir)?;
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "session agent directory must not be a symlink: {}",
+                dir.display()
+            ),
+        ));
+    }
+    if !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "session agent directory path is not a directory: {}",
+                dir.display()
+            ),
+        ));
+    }
+    Ok(metadata)
+}
+
+fn remove_stale_socket(socket: &Path) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(socket) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to remove symlink at session agent socket path: {}",
+                socket.display()
+            ),
+        ));
+    }
+    if !file_type.is_socket() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "session agent socket path exists and is not a socket: {}",
+                socket.display()
+            ),
+        ));
+    }
+    fs::remove_file(socket)
 }
 
 fn socket_path() -> PathBuf {
@@ -724,15 +842,46 @@ mod tests {
     }
 
     #[test]
+    fn socket_dir_validation_rejects_unsafe_paths() {
+        let dir = unique_test_dir("socket-dir");
+        fs::create_dir_all(&dir).unwrap();
+
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o770)).unwrap();
+        let err = validate_socket_dir(&dir).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        validate_socket_dir(&dir).unwrap();
+
+        let not_dir = dir.join("not-a-dir");
+        fs::write(&not_dir, b"not a directory").unwrap();
+        let err = validate_socket_dir(&not_dir).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        let err = validate_socket_dir(&link).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stale_socket_cleanup_rejects_non_socket_paths() {
+        let dir = unique_test_dir("socket-path");
+        fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("agent.sock");
+        fs::write(&socket, b"not a socket").unwrap();
+
+        let err = remove_stale_socket(&socket).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn peer_owner_check_accepts_current_user_socket() {
-        let dir = env::temp_dir().join(format!(
-            "lockbox-agent-peer-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = unique_test_dir("peer");
         fs::create_dir_all(&dir).unwrap();
         let socket = dir.join("agent.sock");
         let listener = match UnixListener::bind(&socket) {
@@ -753,11 +902,28 @@ mod tests {
         };
         let (server, _) = listener.accept().unwrap();
 
-        assert_eq!(peer_uid(&server).unwrap(), current_effective_uid());
+        assert_eq!(
+            peer_credentials(&server).unwrap(),
+            PeerCredentials {
+                uid: current_effective_uid(),
+                gid: current_effective_gid()
+            }
+        );
         assert!(client_matches_current_user(&server).unwrap());
 
         drop(client);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    fn unique_test_dir(label: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "lockbox-agent-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
     }
 
     fn round_trip(
