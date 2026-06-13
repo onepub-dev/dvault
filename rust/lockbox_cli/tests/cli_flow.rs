@@ -3088,6 +3088,65 @@ fn auto_open_lockboxes_uses_remembered_password() {
 }
 
 #[test]
+fn auto_open_lockboxes_with_vault_identity_allows_first_add() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = short_target_dir("autoidentity");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let lockbox = dir.join("mystuff.lbox");
+    let source = dir.join("test.md");
+    fs::write(&source, "hello issue\n").unwrap();
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &["session", "auto-open", "lockboxes"],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(
+        bin,
+        &["create", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(
+        bin,
+        &["session", "activate", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+
+    let add = run_output_without_lockbox_password(
+        bin,
+        &["add", source.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    )
+    .output()
+    .unwrap();
+    if is_session_agent_unavailable(&add) {
+        eprintln!("skipping auto-open identity assertions: session agent unavailable");
+        return;
+    }
+    assert_success(&add);
+    assert!(!String::from_utf8_lossy(&add.stderr).contains("recipient-opened lockboxes"));
+
+    let listing = run_output_without_lockbox_password(
+        bin,
+        &["list", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    )
+    .output()
+    .unwrap();
+    assert_success(&listing);
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("test.md"));
+}
+
+#[test]
 fn unlock_accepts_password_sources_and_session_duration() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = short_target_dir("unlockpw");

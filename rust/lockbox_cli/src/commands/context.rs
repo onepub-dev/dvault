@@ -108,14 +108,19 @@ fn auto_open_lockbox(path: &str) -> Result<Lockbox, AutoOpenLockboxError> {
         let Ok(keypair) = vault.load_private_key(&identity) else {
             continue;
         };
-        if let Ok(lockbox) =
-            Vault::new(NoopStore).unlock_lockbox(path, LockboxUnlock::RecipientKeyPair(keypair))
+        if Vault::new(NoopStore)
+            .unlock_lockbox(path, LockboxUnlock::RecipientKeyPair(keypair))
+            .is_ok()
         {
-            if let Ok(cache_keypair) = vault.load_private_key(&identity) {
-                let _ = local_vault()
-                    .unlock_lockbox(path, LockboxUnlock::RecipientKeyPair(cache_keypair));
-            }
-            return Ok(lockbox);
+            let cache_keypair = vault
+                .load_private_key(&identity)
+                .map_err(|err| AutoOpenLockboxError::Unavailable(err.to_string()))?;
+            local_vault()
+                .unlock_lockbox(path, LockboxUnlock::RecipientKeyPair(cache_keypair))
+                .map_err(|err| AutoOpenLockboxError::Unavailable(err.to_string()))?;
+            return local_vault()
+                .open_lockbox(path)
+                .map_err(|err| AutoOpenLockboxError::Unavailable(err.to_string()));
         }
     }
     Err(AutoOpenLockboxError::Unavailable(
