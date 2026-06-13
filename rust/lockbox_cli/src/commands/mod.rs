@@ -26,6 +26,7 @@ pub(crate) fn run() -> CliResult<()> {
     if args.first().map(String::as_str) == Some("__agent_security_check") {
         return Ok(lockbox_vault::verify_agent_transport_security()?);
     }
+    reject_variables_set_single_dash_secret(&args)?;
 
     let verbose_help = args.iter().any(|arg| arg == "--verbose");
     if args.is_empty() || is_top_level_help(&args) {
@@ -89,6 +90,16 @@ fn normalize_form_define_separator(mut args: Vec<String>) -> Vec<String> {
     }
     args.retain(|arg| arg != "--");
     args
+}
+
+fn reject_variables_set_single_dash_secret(args: &[String]) -> CliResult<()> {
+    if matches!(args.first().map(String::as_str), Some("variables" | "var"))
+        && args.get(1).map(String::as_str) == Some("set")
+        && args.iter().skip(2).any(|arg| arg == "-secret")
+    {
+        return Err(cli_error("unknown option: -secret. Use --secret."));
+    }
+    Ok(())
 }
 
 fn command_secret_activity(command: &str) -> Option<SecretActivityKind> {

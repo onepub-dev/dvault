@@ -1082,6 +1082,23 @@ fn negative_cli_errors_remain_specific() {
     assert!(String::from_utf8_lossy(&invalid_env_set.stderr)
         .contains("variables set requires exactly one value source"));
 
+    let invalid_secret_flag = run_output(
+        bin,
+        &[
+            "var",
+            "set",
+            "-secret",
+            lockbox.to_str().unwrap(),
+            "/product/API_KEY",
+            "yyyyy",
+        ],
+    );
+    assert!(!invalid_secret_flag.status.success());
+    let invalid_secret_flag = String::from_utf8_lossy(&invalid_secret_flag.stderr);
+    assert!(invalid_secret_flag.contains("unknown option: -secret"));
+    assert!(invalid_secret_flag.contains("Use --secret"));
+    assert!(!invalid_secret_flag.contains("variables set requires exactly one value source"));
+
     let invalid_export = run_output(
         bin,
         &[
