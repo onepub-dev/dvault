@@ -1,10 +1,18 @@
 use lockbox_core::{Error, Result, SecretString};
+#[cfg(test)]
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
 
 use crate::vault_directory::{default_vault_dir, default_vault_path};
 
+#[cfg(all(
+    not(test),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 const SERVICE: &str = "dev.onepub.lockbox.vault";
 const DISABLED_MARKER: &str = ".platform-secret-store-disabled";
 const AUTO_OPEN_SCOPE_FILE: &str = ".auto-open-scope";
@@ -65,7 +73,6 @@ pub fn enable_platform_secret_store() -> Result<()> {
 /// The stored vault unlock secret is removed before the disable marker is
 /// written.
 pub fn disable_platform_secret_store() -> Result<()> {
-    let _ = forget_platform_vault_password();
     set_auto_open_scope(AutoOpenScope::Off)
 }
 
@@ -102,6 +109,7 @@ pub fn auto_open_scope() -> Result<AutoOpenScope> {
 pub fn set_auto_open_scope(scope: AutoOpenScope) -> Result<()> {
     match scope {
         AutoOpenScope::Off => {
+            let _ = forget_platform_vault_password();
             write_disabled_marker()?;
             write_auto_open_scope(scope)
         }
@@ -219,12 +227,15 @@ fn set_private_dir_permissions(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(test, target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn platform_supported() -> bool {
     true
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(all(
+    not(test),
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
 fn platform_supported() -> bool {
     false
 }
@@ -249,7 +260,10 @@ fn platform_backend_name() -> &'static str {
     "unsupported"
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(all(
+    not(test),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 fn platform_get_vault_password() -> Result<Option<SecretString>> {
     let entry = keyring_entry()?;
     match entry.get_secret() {
@@ -261,12 +275,32 @@ fn platform_get_vault_password() -> Result<Option<SecretString>> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(all(
+    not(test),
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
 fn platform_get_vault_password() -> Result<Option<SecretString>> {
     Ok(None)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(test)]
+fn platform_get_vault_password() -> Result<Option<SecretString>> {
+    let item = vault_item_name()?;
+    let secret = test_platform_store()
+        .lock()
+        .expect("test platform store lock poisoned")
+        .get(&item)
+        .cloned();
+    secret
+        .map(SecretString::try_from_utf8)
+        .transpose()
+        .map_err(|err| Error::InvalidKeyMaterial(err.to_string()))
+}
+
+#[cfg(all(
+    not(test),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 fn platform_put_vault_password(password: &SecretString) -> Result<()> {
     let entry = keyring_entry()?;
     password
@@ -275,12 +309,31 @@ fn platform_put_vault_password(password: &SecretString) -> Result<()> {
         .map_err(platform_error)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(all(
+    not(test),
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
 fn platform_put_vault_password(_password: &SecretString) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(test)]
+fn platform_put_vault_password(password: &SecretString) -> Result<()> {
+    let item = vault_item_name()?;
+    let secret = password
+        .with_bytes(|bytes| bytes.to_vec())
+        .map_err(|err| Error::InvalidKeyMaterial(err.to_string()))?;
+    test_platform_store()
+        .lock()
+        .expect("test platform store lock poisoned")
+        .insert(item, secret);
+    Ok(())
+}
+
+#[cfg(all(
+    not(test),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 fn platform_forget_vault_password() -> Result<()> {
     let entry = keyring_entry()?;
     match entry.delete_credential() {
@@ -289,25 +342,59 @@ fn platform_forget_vault_password() -> Result<()> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(all(
+    not(test),
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
 fn platform_forget_vault_password() -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(test)]
+fn platform_forget_vault_password() -> Result<()> {
+    let item = vault_item_name()?;
+    test_platform_store()
+        .lock()
+        .expect("test platform store lock poisoned")
+        .remove(&item);
+    Ok(())
+}
+
+#[cfg(test)]
+fn test_platform_store() -> &'static Mutex<HashMap<String, Vec<u8>>> {
+    static STORE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(all(
+    not(test),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 fn keyring_entry() -> Result<keyring::Entry> {
     let item = vault_item_name()?;
     keyring::Entry::new(SERVICE, &item).map_err(platform_error)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(all(
+    not(test),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 fn platform_error(err: keyring::Error) -> Error {
     Error::VaultUnavailable(format!("platform secret store is unavailable: {err}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_disabled_mode;
+    use super::{
+        auto_open_scope, get_platform_vault_password, parse_disabled_mode,
+        put_platform_vault_password, set_auto_open_scope, test_platform_store, AutoOpenScope,
+        MODE_ENV,
+    };
+    use lockbox_core::{Result, SecretString};
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
 
     #[test]
     fn platform_secret_store_mode_parses_disabled_values() {
@@ -321,5 +408,79 @@ mod tests {
     #[test]
     fn platform_secret_store_mode_rejects_unknown_values() {
         assert!(parse_disabled_mode("maybe").is_err());
+    }
+
+    #[test]
+    fn auto_open_off_forgets_stored_vault_password() -> Result<()> {
+        let _lock = env_lock().lock().expect("env test lock poisoned");
+        let vault_dir = temp_vault_dir("auto-open-off-forgets-stored-vault-password");
+        let _vault_dir_guard = EnvVarGuard::set("LOCKBOX_VAULT_DIR", &vault_dir);
+        let _mode_guard = EnvVarGuard::unset(MODE_ENV);
+        test_platform_store()
+            .lock()
+            .expect("test platform store lock poisoned")
+            .clear();
+
+        set_auto_open_scope(AutoOpenScope::Vault)?;
+        let password = SecretString::try_from_bytes(b"stored vault secret".to_vec())?;
+        put_platform_vault_password(&password)?;
+
+        let stored = get_platform_vault_password()?.expect("stored vault password");
+        assert_eq!(stored.with_str(str::to_owned)?, "stored vault secret");
+
+        set_auto_open_scope(AutoOpenScope::Off)?;
+        assert_eq!(auto_open_scope()?, AutoOpenScope::Off);
+
+        set_auto_open_scope(AutoOpenScope::Vault)?;
+        assert!(get_platform_vault_password()?.is_none());
+
+        fs::remove_dir_all(vault_dir).ok();
+        Ok(())
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn temp_vault_dir(name: &str) -> PathBuf {
+        let path = env::temp_dir().join(format!("lockbox-vault-{name}-{}", std::process::id()));
+        fs::remove_dir_all(&path).ok();
+        fs::create_dir_all(&path).expect("create temp vault dir");
+        path
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old_value: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let guard = Self {
+                key,
+                old_value: env::var_os(key),
+            };
+            env::set_var(key, value);
+            guard
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let guard = Self {
+                key,
+                old_value: env::var_os(key),
+            };
+            env::remove_var(key);
+            guard
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.old_value {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
     }
 }
