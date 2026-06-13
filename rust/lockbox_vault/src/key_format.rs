@@ -125,6 +125,11 @@ pub fn import_private_key_file(path: impl AsRef<Path>) -> Result<RecipientKeyPai
     import_private_key(bytes)
 }
 
+/// Returns the stable fingerprint for a recipient public key.
+pub fn public_key_fingerprint(key: &RecipientPublicKey) -> Vec<u8> {
+    fingerprint_bytes(&key.to_bytes())
+}
+
 /// Exports a recipient public key in the requested format.
 pub fn export_public_key(key: &RecipientPublicKey, format: KeyFormat) -> Result<Vec<u8>> {
     match format {
@@ -498,10 +503,14 @@ fn unpem(text: &str) -> Result<(String, JwkKey)> {
 }
 
 fn fingerprint(public_key: &[u8]) -> String {
+    encode_hex(&fingerprint_bytes(public_key))
+}
+
+fn fingerprint_bytes(public_key: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(b"lockbox-key-fingerprint-v1");
     hasher.update(public_key);
-    encode_hex(&hasher.finalize()[..16])
+    hasher.finalize()[..16].to_vec()
 }
 
 #[cfg(test)]
@@ -527,6 +536,12 @@ mod tests {
     fn jwk_and_jwks_round_trip() {
         let keypair = RecipientKeyPair::generate().unwrap();
         let jwk = export_private_key(&keypair, KeyFormat::Jwk).unwrap();
+        let public_jwk = export_public_key(&keypair.public_key(), KeyFormat::Jwk).unwrap();
+        let public_jwk_text = std::str::from_utf8(&public_jwk).unwrap();
+        assert!(public_jwk_text.contains(&format!(
+            r#""kid": "{}""#,
+            encode_hex(&public_key_fingerprint(&keypair.public_key()))
+        )));
         assert_eq!(
             import_private_key(jwk)
                 .unwrap()

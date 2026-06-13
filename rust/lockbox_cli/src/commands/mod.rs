@@ -587,8 +587,9 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             if let Some((contact_command, contact_sub)) = sub.subcommand() {
                 args.push(contact_command.to_string());
                 match contact_command {
-                    "add" => {
+                    "import" => {
                         push_flag(&mut args, contact_sub, "overwrite", "--overwrite");
+                        push_option(&mut args, contact_sub, "fingerprint", "--fingerprint");
                         args.push(value(contact_sub, "name"));
                         args.push(value(contact_sub, "public-key"));
                     }
@@ -610,7 +611,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 }
             } else {
                 return Err(Error::InvalidInput(
-                    "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact add <name> <public-key>`, or `lockbox vault contact remove <name>`"
+                    "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact import <name> <public-key>`, or `lockbox vault contact remove <name>`"
                         .to_string(),
                 )
                 .into());

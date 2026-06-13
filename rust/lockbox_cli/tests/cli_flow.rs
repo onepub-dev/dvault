@@ -7,7 +7,9 @@ use std::thread;
 use std::time::Duration;
 
 use lockbox_core::{Lockbox, LockboxUnlock};
-use lockbox_vault::import_private_key_file;
+use lockbox_vault::{
+    encode_hex, import_private_key_file, import_public_key, public_key_fingerprint,
+};
 
 static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -264,7 +266,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_identity_help = String::from_utf8_lossy(&vault_identity_help.stdout);
     assert!(vault_identity_help.contains("Manage your lockbox open identities."));
     assert!(!vault_identity_help.contains("has a public key and a private key"));
-    assert!(!vault_identity_help.contains("lockbox vault contact add"));
+    assert!(!vault_identity_help.contains("lockbox vault contact import"));
     assert!(!vault_identity_help.contains("on this machine"));
     assert!(vault_identity_help.contains("list"));
     assert!(vault_identity_help.contains("create"));
@@ -281,7 +283,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(vault_identity_verbose_help.contains("has a public key and a private key"));
     assert!(vault_identity_verbose_help.contains("Publish or export the public key"));
     assert!(vault_identity_verbose_help.contains("keep the private key secret"));
-    assert!(vault_identity_verbose_help.contains("lockbox vault contact add"));
+    assert!(vault_identity_verbose_help.contains("lockbox vault contact import"));
     assert!(!vault_identity_verbose_help.contains("on this machine"));
     assert_contains_in_order(
         &vault_identity_verbose_help,
@@ -303,7 +305,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(!vault_contact_help.contains("Contacts are saved public keys"));
     assert!(!vault_contact_help.contains("on this machine"));
     assert!(vault_contact_help.contains("list"));
-    assert!(vault_contact_help.contains("add"));
+    assert!(vault_contact_help.contains("import"));
     assert!(vault_contact_help.contains("remove"));
 
     let vault_contact_verbose_help = run_output(bin, &["vault", "contact", "--help", "--verbose"]);
@@ -1019,15 +1021,36 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
         String::from_utf8_lossy(&fs::read(&exported_public_key).unwrap())
             .contains("BEGIN LOCKBOX PUBLIC KEY")
     );
+    let contact_key = import_public_key(&fs::read(&public_key).unwrap()).unwrap();
+    let contact_fingerprint = encode_hex(&public_key_fingerprint(&contact_key));
+
+    let bad_import = run_output_without_content_key(
+        bin,
+        &[
+            "vault",
+            "contact",
+            "import",
+            "friend",
+            public_key.to_str().unwrap(),
+            "--fingerprint",
+            "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!bad_import.status.success());
+    assert!(String::from_utf8_lossy(&bad_import.stderr).contains("fingerprint mismatch"));
 
     run_without_content_key(
         bin,
         &[
             "vault",
             "contact",
-            "add",
+            "import",
             "friend",
             public_key.to_str().unwrap(),
+            "--fingerprint",
+            &contact_fingerprint,
         ],
         &vault_root,
         &agent_root,

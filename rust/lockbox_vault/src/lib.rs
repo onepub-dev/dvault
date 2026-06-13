@@ -67,7 +67,7 @@ pub use content_key_store::ContentKeyStore;
 pub use hex::{decode_hex, encode_hex};
 pub use key_format::{
     export_private_key, export_public_key, import_private_key, import_private_key_file,
-    import_public_key, KeyFormat,
+    import_public_key, public_key_fingerprint, KeyFormat,
 };
 pub use noop_store::NoopStore;
 pub use platform_secret_store::{

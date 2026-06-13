@@ -12,8 +12,8 @@ use lockbox_share_protocol::{
 use lockbox_vault::{
     backup_default_vault, default_vault_dir, default_vault_path, encode_hex, export_private_key,
     export_public_key, forget_platform_vault_password, import_private_key_file, import_public_key,
-    restore_default_vault, set_auto_open_scope, AutoOpenScope, IdentityGenerationStatus, KeyFormat,
-    VaultDirectory,
+    public_key_fingerprint, restore_default_vault, set_auto_open_scope, AutoOpenScope,
+    IdentityGenerationStatus, KeyFormat, VaultDirectory,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -103,11 +103,11 @@ fn identity_command(args: &[String]) -> CliResult<()> {
 fn contact_command(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
         Some("list" | "ls") => list_contacts(&args[1..]),
-        Some("add") => contact_add(&args[1..]),
+        Some("import") => contact_import(&args[1..]),
         Some("receive" | "fetch") => share_receive(&args[1..]),
         Some("remove" | "rm") => remove_contact(&args[1..]),
         _ => Err(Error::InvalidInput(
-            "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact add <name> <public-key>`, `lockbox vault contact receive <share-code>`, or `lockbox vault contact remove <name>`"
+            "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact import <name> <public-key>`, `lockbox vault contact receive <share-code>`, or `lockbox vault contact remove <name>`"
                 .to_string(),
         )
         .into()),
@@ -388,22 +388,71 @@ fn keygen(args: &[String]) -> CliResult<()> {
     Ok(())
 }
 
-fn contact_add(args: &[String]) -> CliResult<()> {
-    let overwrite = args.iter().any(|arg| arg == "--overwrite");
-    let args = args
-        .iter()
-        .filter(|arg| arg.as_str() != "--overwrite")
-        .cloned()
-        .collect::<Vec<_>>();
-    let name = require_arg(&args, 0, "contact name")?;
-    let public_path = require_arg(&args, 1, "public key path")?;
+fn contact_import(args: &[String]) -> CliResult<()> {
+    let options = ContactImportOptions::parse(args)?;
+    let name = require_arg(&options.positionals, 0, "contact name")?;
+    let public_path = require_arg(&options.positionals, 1, "public key path")?;
     let vault = default_vault()?;
-    if vault.contact_exists(name)? && !overwrite {
+    if vault.contact_exists(name)? && !options.overwrite {
         return Err(Error::AlreadyExists(format!("contact {name}")).into());
     }
     let recipient = import_public_key(&fs::read(public_path)?)?;
+    let expected_fingerprint = options
+        .fingerprint
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| prompt_line("Public key fingerprint from key owner: "))?;
+    let expected_fingerprint = decode_fingerprint_hex(&expected_fingerprint)?;
+    let computed_fingerprint = public_key_fingerprint(&recipient);
+    if expected_fingerprint != computed_fingerprint {
+        return Err(Error::InvalidInput(format!(
+            "public key fingerprint mismatch for {name}; expected {}, computed {}",
+            format_hex_pairs(&expected_fingerprint),
+            format_hex_pairs(&computed_fingerprint)
+        ))
+        .into());
+    }
     vault.store_contact(name, &recipient)?;
+    println!("contact={name}");
+    println!(
+        "public_key_fingerprint={}",
+        format_hex_pairs(&computed_fingerprint)
+    );
+    println!("fingerprint_verified=yes");
     Ok(())
+}
+
+#[derive(Default)]
+struct ContactImportOptions {
+    overwrite: bool,
+    fingerprint: Option<String>,
+    positionals: Vec<String>,
+}
+
+impl ContactImportOptions {
+    fn parse(args: &[String]) -> CliResult<Self> {
+        let mut options = ContactImportOptions::default();
+        let mut index = 0usize;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--overwrite" => options.overwrite = true,
+                "--fingerprint" => {
+                    index += 1;
+                    options.fingerprint =
+                        Some(require_arg(args, index, "--fingerprint value")?.to_string());
+                }
+                other if other.starts_with('-') => {
+                    return Err(Error::InvalidInput(format!(
+                        "unknown contact import option: {other}"
+                    ))
+                    .into());
+                }
+                value => options.positionals.push(value.to_string()),
+            }
+            index += 1;
+        }
+        Ok(options)
+    }
 }
 
 fn share_publish(args: &[String]) -> CliResult<()> {

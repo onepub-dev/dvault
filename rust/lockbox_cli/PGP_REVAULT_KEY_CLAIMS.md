@@ -57,7 +57,7 @@ signature: ...
 Bob imports the claim:
 
 ```bash
-lockbox contact add alice@example.com --method pgp-signed
+lockbox vault contact import alice@example.com ./alice.pub --fingerprint <hex>
 ```
 
 reVault should:

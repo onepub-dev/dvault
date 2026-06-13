@@ -1193,7 +1193,7 @@ fn vault_command(verbose: bool) -> Command {
                 .disable_help_subcommand(true)
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault contact list\n  lockbox vault contact receive <share-code> alice\n  lockbox vault contact add alice ./alice.pub\n  lockbox vault contact remove alice",
+                    "Examples:\n  lockbox vault contact list\n  lockbox vault contact receive <share-code> alice\n  lockbox vault contact import alice ./alice.pub --fingerprint <hex>\n  lockbox vault contact remove alice",
                     "Context:\n  Contacts are saved public keys for other people or systems. A contact can be added to a lockbox access list, but cannot open a lockbox by itself; opening requires the matching private identity.",
                 ))
                 .subcommand_required(true)
@@ -1210,12 +1210,12 @@ fn vault_command(verbose: bool) -> Command {
                         .arg(output_format_arg()),
                 )
                 .subcommand(
-                    Command::new("add")
-                        .about("Save a contact public key.")
+                    Command::new("import")
+                        .about("Import a contact public key after fingerprint verification.")
                         .after_help(verbose_help(
                             verbose,
-                            "Examples:\n  lockbox vault contact add alice ./alice.pub\n  lockbox vault contact add --overwrite alice ./alice-new.pub",
-                            "Context:\n  Contact add imports someone else's public key into your vault. Saving it as a contact gives you a stable name to use when sharing lockboxes.",
+                            "Examples:\n  lockbox vault contact import alice ./alice.pub --fingerprint <hex>\n  lockbox vault contact import --overwrite alice ./alice-new.pub --fingerprint <hex>",
+                            "Context:\n  Contact import saves someone else's public key only after the full public-key fingerprint matches. Ask the key owner for the fingerprint over a second channel before importing the key.",
                         ))
                         .arg(
                             Arg::new("overwrite")
@@ -1223,6 +1223,12 @@ fn vault_command(verbose: bool) -> Command {
                                 .hide(!verbose)
                                 .action(ArgAction::SetTrue)
                                 .help("Replace an existing contact."),
+                        )
+                        .arg(
+                            Arg::new("fingerprint")
+                                .long("fingerprint")
+                                .value_name("HEX")
+                                .help("Full public-key fingerprint from the key owner. Prompts when omitted."),
                         )
                         .arg(required("name", "Contact name."))
                         .arg(required("public-key", "Public key path.")),
@@ -1327,7 +1333,7 @@ fn vault_identity_command(verbose: bool) -> Command {
         .after_help(verbose_help(
             verbose,
             "Examples:\n  lockbox vault identity list\n  lockbox vault identity create laptop\n  lockbox vault identity publish laptop\n  lockbox vault identity export laptop ./laptop.pub",
-            "Context:\n  An identity has a public key and a private key. Publish or export the public key so someone else can grant you access to a lockbox; keep the private key secret because it opens lockboxes granted to that identity. To save someone else's public key, use `lockbox vault contact receive` or `lockbox vault contact add`.",
+            "Context:\n  An identity has a public key and a private key. Publish or export the public key so someone else can grant you access to a lockbox; keep the private key secret because it opens lockboxes granted to that identity. To save someone else's public key, use `lockbox vault contact receive` or `lockbox vault contact import`.",
         ))
         .subcommand_required(true)
         .arg_required_else_help(true)
