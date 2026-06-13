@@ -1313,6 +1313,9 @@ fn doctor_and_session_report_agent_state() {
     assert_success(&doctor);
     let doctor = String::from_utf8_lossy(&doctor.stdout);
     assert!(doctor.contains("Session agent"));
+    assert!(doctor.contains("suspend management:"));
+    assert!(doctor.contains("suspend notifications:"));
+    assert!(doctor.contains("sleep prevention:"));
     assert!(doctor.contains("running: no"));
     assert!(doctor.contains("open lockboxes:"));
     assert!(doctor.contains("log:"));

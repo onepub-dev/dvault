@@ -76,6 +76,7 @@ pub use platform_secret_store::{
     platform_secret_store_status, put_platform_vault_password, set_auto_open_scope, AutoOpenScope,
     PlatformSecretStoreStatus,
 };
+pub use sleep_watcher::{agent_sleep_support, AgentSleepSupport};
 pub use vault::{local_vault, LocalVault, Vault};
 pub use vault_directory::{
     backup_default_vault, default_vault_dir, default_vault_path, restore_default_vault,

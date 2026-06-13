@@ -1,8 +1,8 @@
 use super::context::{cli_error, require_arg, CliResult};
 use lockbox_core::{Error, Lockbox, LockboxFileInspection, LockboxKeySlotProtection};
 use lockbox_vault::{
-    agent_log_destination, default_vault_path, get_platform_vault_password, is_running, list,
-    local_vault, platform_secret_store_disabled, platform_secret_store_status,
+    agent_log_destination, agent_sleep_support, default_vault_path, get_platform_vault_password,
+    is_running, list, local_vault, platform_secret_store_disabled, platform_secret_store_status,
     verify_agent_transport_security, SecretString, VaultDirectory,
 };
 use std::fs::OpenOptions;
@@ -50,6 +50,7 @@ fn run_global() -> CliResult<()> {
     println!("  backend: {}", auto_open.backend);
     println!();
     println!("Session agent");
+    let sleep_support = agent_sleep_support();
     println!(
         "  transport security: {}",
         if verify_agent_transport_security().is_ok() {
@@ -57,6 +58,18 @@ fn run_global() -> CliResult<()> {
         } else {
             "unsupported"
         }
+    );
+    println!(
+        "  suspend management: {}",
+        yes_no(sleep_support.supported())
+    );
+    println!(
+        "  suspend notifications: {}",
+        yes_no(sleep_support.suspend_notifications)
+    );
+    println!(
+        "  sleep prevention: {}",
+        yes_no(sleep_support.sleep_inhibition)
     );
     println!("  running: {}", yes_no(is_running()));
     match list() {

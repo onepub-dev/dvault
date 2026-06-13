@@ -24,6 +24,27 @@ pub(crate) struct SleepInhibitor {
     _inner: platform::SleepInhibitor,
 }
 
+/// Platform sleep/suspend capabilities used by the lockbox session agent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AgentSleepSupport {
+    /// True when the agent can receive suspend/resume notifications.
+    pub suspend_notifications: bool,
+    /// True when active secret operations can request temporary sleep inhibition.
+    pub sleep_inhibition: bool,
+}
+
+impl AgentSleepSupport {
+    /// True when all sleep/suspend management features are available.
+    pub fn supported(self) -> bool {
+        self.suspend_notifications && self.sleep_inhibition
+    }
+}
+
+/// Returns sleep/suspend capabilities compiled for the current platform.
+pub fn agent_sleep_support() -> AgentSleepSupport {
+    platform::agent_sleep_support()
+}
+
 impl SleepInhibitor {
     pub(crate) fn acquire_active(reason: &str) -> io::Result<Self> {
         platform::SleepInhibitor::acquire_active(reason).map(|inner| Self { _inner: inner })
@@ -108,6 +129,13 @@ mod platform {
             .map(|_| ())
     }
 
+    pub(super) fn agent_sleep_support() -> AgentSleepSupport {
+        AgentSleepSupport {
+            suspend_notifications: true,
+            sleep_inhibition: true,
+        }
+    }
+
     pub(super) struct SleepInhibitor {
         _fd: OwnedFd,
     }
@@ -181,6 +209,13 @@ mod platform {
             .name("lockbox-sleep-watcher".to_string())
             .spawn(move || watch_iokit(handler))
             .map(|_| ())
+    }
+
+    pub(super) fn agent_sleep_support() -> AgentSleepSupport {
+        AgentSleepSupport {
+            suspend_notifications: true,
+            sleep_inhibition: true,
+        }
     }
 
     pub(super) struct SleepInhibitor {
@@ -377,6 +412,13 @@ mod platform {
             .map(|_| ())
     }
 
+    pub(super) fn agent_sleep_support() -> AgentSleepSupport {
+        AgentSleepSupport {
+            suspend_notifications: true,
+            sleep_inhibition: true,
+        }
+    }
+
     pub(super) struct SleepInhibitor;
 
     impl SleepInhibitor {
@@ -460,6 +502,13 @@ mod platform {
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod platform {
     use super::*;
+
+    pub(super) fn agent_sleep_support() -> AgentSleepSupport {
+        AgentSleepSupport {
+            suspend_notifications: false,
+            sleep_inhibition: false,
+        }
+    }
 
     pub(super) struct SleepInhibitor;
 
