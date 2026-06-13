@@ -2,6 +2,9 @@
 
 This package builds one system binary: `lockbox_key_server`.
 
+Production operation of this binary requires a separate commercial license from
+OnePub IP Pty Ltd. See `LICENSE`.
+
 ## 1) Build the binary
 
 ```bash

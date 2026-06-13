@@ -2,7 +2,7 @@
 name = "lockbox_key_server"
 version = "0.1.0"
 edition = "2021"
-license-file = "../../LICENSE"
+license-file = "LICENSE"
 description = "High-throughput reVault key rendezvous server"
 
 [lib]
