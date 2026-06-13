@@ -24,6 +24,10 @@ const SHARE_RECEIVE_VERIFICATION_ADVICE: &str = concat!(
     "verify the fingerprint by asking the publisher over a trusted channel you initiated; ",
     "if the publisher sends you the fingerprint before you ask, do not accept it"
 );
+const SHARE_FINGERPRINT_SECURITY_NOTE: &str = concat!(
+    "use the full fingerprint; short PINs are only accidental-error checks ",
+    "and are too small to authenticate a public key against substitution"
+);
 
 pub(crate) fn run(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault command")?;
@@ -378,6 +382,7 @@ fn share_publish(args: &[String]) -> CliResult<()> {
     println!(
         "fingerprint_purpose=do not send this fingerprint; ask the receiver to call you to obtain it"
     );
+    println!("fingerprint_security={SHARE_FINGERPRINT_SECURITY_NOTE}");
     if let Some(url) = &result.verification_url {
         println!("verification_url={url}");
     }
@@ -406,7 +411,7 @@ fn share_receive(args: &[String]) -> CliResult<()> {
         .fingerprint
         .clone()
         .map(Ok)
-        .unwrap_or_else(|| prompt_line("Fingerprint from trusted second channel: "))?;
+        .unwrap_or_else(|| prompt_line("Full fingerprint from trusted second channel: "))?;
     let expected_fingerprint = decode_fingerprint_hex(&expected_fingerprint)?;
     let pool = share_client_pool(&options)?;
     let fetched = pool.fetch(&share_code)?;
@@ -457,6 +462,7 @@ fn share_receive(args: &[String]) -> CliResult<()> {
         format_hex_pairs(&computed_fingerprint)
     );
     println!("fingerprint_verified=yes");
+    println!("fingerprint_security={SHARE_FINGERPRINT_SECURITY_NOTE}");
     println!("email_verification_email={}", verification.email);
     println!("email_verification_status=verified");
     println!(
@@ -699,7 +705,7 @@ fn decode_fingerprint_hex(value: &str) -> CliResult<Vec<u8>> {
     let fingerprint = decode_hex(&compact)?;
     if fingerprint.len() != CONTACT_FINGERPRINT_LEN {
         return Err(Error::InvalidInput(format!(
-            "fingerprint must contain {CONTACT_FINGERPRINT_LEN} two-digit hex groups"
+            "fingerprint must contain {CONTACT_FINGERPRINT_LEN} two-digit hex groups; short PINs are too small to authenticate a public key"
         ))
         .into());
     }
@@ -1091,6 +1097,9 @@ mod tests {
             decode_fingerprint_hex("00:01:0A:0B:10:11:7F:80:AB:BC:CD:DE:EF:F0:FE:FF").unwrap(),
             bytes
         );
+        let short = decode_fingerprint_hex("123456").unwrap_err().to_string();
+        assert!(short.contains("short PINs"));
+        assert!(short.contains("authenticate a public key"));
     }
 
     #[test]

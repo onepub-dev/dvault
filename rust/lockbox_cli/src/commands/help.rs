@@ -1202,7 +1202,9 @@ fn vault_command(verbose: bool) -> Command {
                                 "Context:\n  Receive saves the shared public key and signing key as a local contact. ",
                                 "The key server must have verified the publisher email first. Enter the ",
                                 "contact fingerprint received through a second trusted channel, such as a phone ",
-                                "call you initiated.",
+                                "call you initiated. Use the full fingerprint: short PINs are only ",
+                                "accidental-error checks and are too small to authenticate a public key ",
+                                "against substitution.",
                             ),
                         ))
                         .arg(key_server_arg())
@@ -1257,6 +1259,17 @@ fn vault_command(verbose: bool) -> Command {
                 .about("Receive a verified public key by share code.")
                 .visible_alias("recieve")
                 .visible_alias("fetch")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault receive <share-code>\n  lockbox vault receive <share-code> alice",
+                    concat!(
+                        "Context:\n  Receive saves the shared public key and signing key as a local contact. ",
+                        "The key server must have verified the publisher email first. Enter the ",
+                        "full fingerprint received through a second trusted channel. Short PINs are ",
+                        "only accidental-error checks and are too small to authenticate a public key ",
+                        "against substitution.",
+                    ),
+                ))
                 .arg(key_server_arg())
                 .arg(share_topology_arg())
                 .arg(
