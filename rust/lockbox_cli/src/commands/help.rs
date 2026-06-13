@@ -571,13 +571,13 @@ fn variables_command(verbose: bool) -> Command {
             ),
     )
     .subcommand(
-        Command::new("rm")
+        Command::new("remove")
             .about("Remove a variable value.")
-            .visible_alias("remove")
+            .visible_alias("rm")
             .after_help(verbose_help(
                 verbose,
-                "Examples:\n  lockbox variables rm secrets.lbox APP_MODE\n  lockbox variables remove secrets.lbox API_TOKEN",
-                "Context:\n  Variables rm removes one named value from a lockbox. It affects only the lockbox record, not the current process environment.",
+                "Examples:\n  lockbox variables remove secrets.lbox APP_MODE\n  lockbox variables rm secrets.lbox API_TOKEN",
+                "Context:\n  Variables remove deletes one named value from a lockbox. It affects only the lockbox record, not the current process environment.",
             ))
             .arg(
                 Arg::new("args")

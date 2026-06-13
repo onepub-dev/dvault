@@ -59,7 +59,7 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
                 VariableValueRef::Secret(_) => Ok(()),
             })?;
         }
-        "rm" => {
+        "remove" | "rm" => {
             let name = VariableName::new(require_arg(args, 2, "name")?)?;
             let mut lb = open_existing(lockbox_path, access)?;
             lb.delete_variable(&name)?;

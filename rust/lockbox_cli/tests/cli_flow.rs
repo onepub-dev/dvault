@@ -988,6 +988,29 @@ fn file_env_and_developer_aliases_execute_real_flows() {
     assert_success(&env_list);
     assert!(!String::from_utf8_lossy(&env_list.stdout).contains("APP_MODE"));
 
+    run(
+        bin,
+        &[
+            "variables",
+            "set",
+            lockbox.to_str().unwrap(),
+            "APP_MODE_ALIAS",
+            "prod",
+        ],
+    );
+    run(
+        bin,
+        &[
+            "variables",
+            "rm",
+            lockbox.to_str().unwrap(),
+            "APP_MODE_ALIAS",
+        ],
+    );
+    let env_list = run_output(bin, &["variables", "list", lockbox.to_str().unwrap()]);
+    assert_success(&env_list);
+    assert!(!String::from_utf8_lossy(&env_list.stdout).contains("APP_MODE_ALIAS"));
+
     let visualize = run_output(bin, &["visualise", lockbox.to_str().unwrap()]);
     assert_success(&visualize);
     assert!(String::from_utf8_lossy(&visualize.stdout).contains("Lockbox"));
@@ -3415,7 +3438,7 @@ fn session_active_lockbox_applies_to_lockbox_argument_variants() {
         .contains("{\"name\":\"prod_API_KEY\",\"value\":\"normal-key\"}"));
     run_in(
         bin,
-        &["variables", "rm", "/prod/API_KEY"],
+        &["variables", "remove", "/prod/API_KEY"],
         &vault_root,
         &agent_root,
     );
