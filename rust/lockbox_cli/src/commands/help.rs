@@ -363,7 +363,7 @@ Sharing
 
 Vault
   doctor          Show local vault and session agent diagnostics.
-  vault           Manage identities and contacts."
+  vault           Manage identities, contacts, and reusable forms."
     );
 
     if verbose {
@@ -593,8 +593,8 @@ fn form_command(verbose: bool) -> Command {
     base_command("form", "Manage typed multi-field form records.")
         .after_help(verbose_help(
             verbose,
-            "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form add secrets.lbox /work/github --type login --name GitHub --set username=bsutton\n  lockbox form add secrets.lbox /work/github --type login --interactive\n  lockbox form show secrets.lbox /work/github",
-            "Context:\n  Forms store structured records inside a lockbox. Definitions are versioned by a stable definition id and embedded in the lockbox, so shared lockboxes remain self-describing even when another party uses the same form alias for a different definition.",
+            "Examples:\n  lockbox vault form define login --field username:text --field password:secret\n  lockbox form use login secrets.lbox\n  lockbox form add secrets.lbox /work/github --type login --name GitHub --set username=bsutton\n  lockbox form show secrets.lbox /work/github",
+            "Context:\n  Forms store structured records inside a lockbox. Reusable definitions normally live in the vault and can be copied into a lockbox with form use. Definitions remain embedded in each lockbox so shared lockboxes are self-describing.",
         ))
         .subcommand_required(true)
         .arg_required_else_help(true)
@@ -649,6 +649,33 @@ fn form_command(verbose: bool) -> Command {
                         .num_args(0..=1)
                         .action(ArgAction::Append)
                         .help("Lockbox path. Defaults to the active lockbox."),
+                ),
+        )
+        .subcommand(
+            Command::new("use")
+                .about("Copy a vault form definition into a lockbox.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox form use login secrets.lbox\n  lockbox form use login",
+                    "Context:\n  Use copies a reusable definition from the vault into the lockbox. With an active lockbox, the lockbox path can be omitted.",
+                ))
+                .arg(required("form", "Vault form alias or definition id."))
+                .arg(optional("lockbox", "Lockbox path. Defaults to the active lockbox.")),
+        )
+        .subcommand(
+            Command::new("capture")
+                .about("Copy a lockbox form definition into the vault.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox form capture secrets.lbox login\n  lockbox form capture secrets.lbox login shared-login\n  lockbox form capture login",
+                    "Context:\n  Capture stores a lockbox definition in the vault so it can be reused. Pass a new form name when the vault already uses the same alias for a different definition.",
+                ))
+                .arg(
+                    Arg::new("args")
+                        .value_name("LOCKBOX FORM NEW_NAME | FORM NEW_NAME")
+                        .num_args(1..=3)
+                        .action(ArgAction::Append)
+                        .help("With an active lockbox, pass form name and optional new name."),
                 ),
         )
         .subcommand(
@@ -1035,7 +1062,7 @@ fn access_command(verbose: bool) -> Command {
 }
 
 fn vault_command(verbose: bool) -> Command {
-    base_command("vault", "Manage identities and contacts.")
+    base_command("vault", "Manage identities, contacts, and reusable forms.")
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
@@ -1108,6 +1135,58 @@ fn vault_command(verbose: bool) -> Command {
                 .hide(!verbose),
         )
         .subcommand(vault_identity_command(verbose))
+        .subcommand(
+            Command::new("form")
+                .about("Manage reusable form definitions.")
+                .disable_help_subcommand(true)
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault form define login --field username:text --field password:secret\n  lockbox vault form definitions\n  lockbox form use login secrets.lbox",
+                    "Context:\n  Vault form definitions are reusable templates stored in the local vault. Use form use to copy one into a lockbox before creating records that use it.",
+                ))
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .subcommand(
+                    Command::new("define")
+                        .about("Create or revise a reusable form definition.")
+                        .override_usage(
+                            "lockbox vault form define [alias] --field <NAME[:KIND[:required[:LABEL]]]>...",
+                        )
+                        .after_help(verbose_help(
+                            verbose,
+                            "Examples:\n  lockbox vault form define login --field username:text --field password:secret\n  lockbox vault form define login --name Login --field username:text:required:User --field password:secret:required:Password\n\nField form:\n  NAME[:KIND[:required[:LABEL]]]\n\nKinds:\n  text, secret, password, url, email, date, month, notes, number",
+                            "Context:\n  Define stores the reusable form definition in the vault. If the alias already resolves to one definition, define appends a new revision.",
+                        ))
+                        .arg(optional("alias", "Form alias."))
+                        .arg(
+                            Arg::new("name")
+                                .long("name")
+                                .value_name("DISPLAY_NAME")
+                                .help("Human display name for this form definition."),
+                        )
+                        .arg(
+                            Arg::new("definition-id")
+                                .long("definition-id")
+                                .alias("type-id")
+                                .value_name("DEFINITION_ID")
+                                .help("Revise or create this stable form definition id."),
+                        )
+                        .arg(
+                            Arg::new("field")
+                                .long("field")
+                                .value_name("NAME[:KIND[:required[:LABEL]]]")
+                                .action(ArgAction::Append)
+                                .required(true)
+                                .help("Add one field to the definition."),
+                        ),
+                )
+                .subcommand(
+                    Command::new("definitions")
+                        .about("List reusable form definitions.")
+                        .visible_alias("types")
+                        .arg(output_format_arg()),
+                ),
+        )
         .subcommand(
             Command::new("contact")
                 .about("Manage contacts that can be given access to a lockbox.")

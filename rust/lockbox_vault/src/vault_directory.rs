@@ -1,7 +1,8 @@
 use lockbox_core::{
-    Error, ListOptions, Lockbox, LockboxEntryKind, LockboxId, LockboxPath, LockboxProtection,
-    LockboxUnlock, OwnerSigningKeyPair, OwnerSigningPublicKey, RecipientKeyPair,
-    RecipientPublicKey, Result, SecretString, SecretVec, VariableName,
+    Error, FormDefinition, FormFieldDefinition, FormTypeId, ListOptions, Lockbox, LockboxEntryKind,
+    LockboxId, LockboxPath, LockboxProtection, LockboxUnlock, OwnerSigningKeyPair,
+    OwnerSigningPublicKey, RecipientKeyPair, RecipientPublicKey, Result, SecretString, SecretVec,
+    VariableName,
 };
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -545,6 +546,57 @@ impl VaultDirectory {
     /// deleted or modified.
     pub fn forget_known_lockbox(&self, path: impl AsRef<Path>) -> Result<()> {
         self.delete_record_if_exists(&known_lockbox_record_path(path.as_ref())?)
+    }
+
+    /// Creates or revises a reusable form definition stored in the vault.
+    pub fn define_form(
+        &self,
+        alias: &str,
+        name: &str,
+        fields: Vec<FormFieldDefinition>,
+    ) -> Result<FormDefinition> {
+        let _guard = VaultFileLock::acquire(&self.root)?;
+        let mut lockbox = self.lockbox.borrow_mut();
+        let definition = lockbox.define_form(alias, name, fields)?;
+        lockbox.commit()?;
+        set_private_file_permissions(&self.path)?;
+        Ok(definition)
+    }
+
+    /// Creates or revises a reusable form definition with a stable definition id.
+    pub fn define_form_with_type_id(
+        &self,
+        type_id: FormTypeId,
+        alias: &str,
+        name: &str,
+        fields: Vec<FormFieldDefinition>,
+    ) -> Result<FormDefinition> {
+        let _guard = VaultFileLock::acquire(&self.root)?;
+        let mut lockbox = self.lockbox.borrow_mut();
+        let definition = lockbox.define_form_with_type_id(type_id, alias, name, fields)?;
+        lockbox.commit()?;
+        set_private_file_permissions(&self.path)?;
+        Ok(definition)
+    }
+
+    /// Imports an exact reusable form definition into the vault.
+    pub fn import_form_definition(&self, definition: FormDefinition) -> Result<FormDefinition> {
+        let _guard = VaultFileLock::acquire(&self.root)?;
+        let mut lockbox = self.lockbox.borrow_mut();
+        let definition = lockbox.import_form_definition(definition)?;
+        lockbox.commit()?;
+        set_private_file_permissions(&self.path)?;
+        Ok(definition)
+    }
+
+    /// Resolves a reusable vault form definition by alias or definition id.
+    pub fn resolve_form_definition(&self, reference: &str) -> Result<FormDefinition> {
+        self.lockbox.borrow().resolve_form_definition(reference)
+    }
+
+    /// Lists reusable form definitions stored in the vault.
+    pub fn list_form_definitions(&self) -> Result<Vec<FormDefinition>> {
+        self.lockbox.borrow().list_form_definitions()
     }
 
     /// Stores a lockbox pass phrase in the vault, keyed by lockbox id.

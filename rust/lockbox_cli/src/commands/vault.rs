@@ -2,6 +2,7 @@ use super::context::{
     cli_error, default_vault, read_new_vault_password, read_replacement_vault_password,
     read_vault_password, remember_default_vault_password, require_arg, CliResult,
 };
+use super::form::{parse_field_spec, print_form_definition_saved};
 use super::output::{output_format_from_args, print_records};
 use lockbox_core::{Error, OwnerSigningPublicKey, RecipientKeyPair, RecipientPublicKey};
 use lockbox_share_protocol::{
@@ -39,6 +40,7 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "path" => path(),
         "identity" => identity_command(&args[1..]),
         "contact" => contact_command(&args[1..]),
+        "form" => form_command(&args[1..]),
         "share" => share_command(&args[1..]),
         "publish" => share_publish(&args[1..]),
         "receive" | "recieve" | "fetch" => share_receive(&args[1..]),
@@ -137,6 +139,98 @@ fn lockbox_command(args: &[String]) -> CliResult<()> {
         )
         .into()),
     }
+}
+
+fn form_command(args: &[String]) -> CliResult<()> {
+    match args.first().map(String::as_str) {
+        Some("define") => form_define(&args[1..]),
+        Some("definitions" | "types") => form_definitions(&args[1..]),
+        Some(command) => Err(Error::InvalidInput(format!("unknown vault form command: {command}")).into()),
+        None => Err(Error::InvalidInput(
+            "missing vault form command; use `lockbox vault form define` or `lockbox vault form definitions`"
+                .to_string(),
+        )
+        .into()),
+    }
+}
+
+fn form_define(args: &[String]) -> CliResult<()> {
+    let mut alias = None;
+    let mut name = None;
+    let mut type_id = None;
+    let mut fields = Vec::new();
+    let mut index = 0;
+    if let Some(value) = args.get(index).filter(|value| !value.starts_with("--")) {
+        alias = Some(value.clone());
+        name = Some(value.clone());
+        index += 1;
+    }
+    while index < args.len() {
+        match args[index].as_str() {
+            "--name" => {
+                index += 1;
+                name = Some(require_arg(args, index, "--name value")?.to_string());
+            }
+            "--definition-id" | "--type-id" => {
+                index += 1;
+                type_id = Some(lockbox_core::FormTypeId::new(require_arg(
+                    args,
+                    index,
+                    "--definition-id value",
+                )?)?);
+            }
+            "--field" => {
+                index += 1;
+                fields.push(parse_field_spec(require_arg(
+                    args,
+                    index,
+                    "--field value",
+                )?)?);
+            }
+            value => {
+                return Err(Error::InvalidInput(format!(
+                    "unexpected vault form define argument: {value}"
+                ))
+                .into());
+            }
+        }
+        index += 1;
+    }
+    let name = name.ok_or_else(|| {
+        Error::InvalidInput("vault form define requires an alias or --name".to_string())
+    })?;
+    let alias = alias.unwrap_or_else(|| name.clone());
+    let vault = default_vault()?;
+    let definition = if let Some(type_id) = type_id {
+        vault.define_form_with_type_id(type_id, &alias, &name, fields)?
+    } else {
+        vault.define_form(&alias, &name, fields)?
+    };
+    print_form_definition_saved(&definition);
+    Ok(())
+}
+
+fn form_definitions(args: &[String]) -> CliResult<()> {
+    let (_, format) = output_format_from_args(args)?;
+    let rows = default_vault()?
+        .list_form_definitions()?
+        .into_iter()
+        .map(|definition| {
+            vec![
+                definition.alias,
+                definition.type_id.to_string(),
+                definition.revision.to_string(),
+                definition.name,
+                definition.fields.len().to_string(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_records(
+        &["alias", "definition_id", "revision", "name", "fields"],
+        rows,
+        format,
+    )?;
+    Ok(())
 }
 
 fn init(args: &[String]) -> CliResult<()> {

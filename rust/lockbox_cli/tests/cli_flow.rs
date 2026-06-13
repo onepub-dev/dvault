@@ -94,6 +94,8 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(form_help.contains("Manage typed multi-field form records."));
     assert!(form_help.contains("define"));
     assert!(form_help.contains("definitions"));
+    assert!(form_help.contains("use"));
+    assert!(form_help.contains("capture"));
     assert!(form_help.contains("add"));
     assert!(form_help.contains("show"));
     assert!(form_help.contains("rm"));
@@ -235,6 +237,12 @@ fn help_is_grouped_and_commands_have_specific_help() {
         String::from_utf8_lossy(&vault_share_receive_verbose_help.stdout);
     assert!(vault_share_receive_verbose_help.contains("short PINs"));
     assert!(vault_share_receive_verbose_help.contains("authenticate a public key"));
+    let vault_form_help = run_output(bin, &["vault", "form", "--help"]);
+    assert_success(&vault_form_help);
+    let vault_form_help = String::from_utf8_lossy(&vault_form_help.stdout);
+    assert!(vault_form_help.contains("Manage reusable form definitions."));
+    assert!(vault_form_help.contains("define"));
+    assert!(vault_form_help.contains("definitions"));
     assert!(!vault_identity_create_help.contains("export-public"));
     assert!(vault_identity_create_help.contains("lockbox vault identity create laptop\n"));
     assert!(!vault_identity_create_help.contains("[public-key-output]"));
@@ -322,11 +330,12 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let vault_help = run_output(bin, &["vault", "--help"]);
     assert_success(&vault_help);
     let vault_help = String::from_utf8_lossy(&vault_help.stdout);
-    assert!(vault_help.contains("Manage identities and contacts."));
+    assert!(vault_help.contains("Manage identities, contacts, and reusable forms."));
     assert!(!vault_help.contains("sessions"));
     assert!(!vault_help.contains("doctor"));
     assert!(vault_help.contains("identity"));
     assert!(vault_help.contains("contact"));
+    assert!(vault_help.contains("form"));
     assert!(!vault_help.contains("  key"));
     assert!(!vault_help.contains("trust"));
     assert!(!vault_help.contains("credentials"));
@@ -1058,6 +1067,140 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
     );
     assert_success(&contacts);
     assert!(!String::from_utf8_lossy(&contacts.stdout).contains("friend"));
+}
+
+#[test]
+fn vault_form_definitions_can_be_used_and_captured() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-forms");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let main_lockbox = dir.join("forms-main.lbox");
+    let shared_lockbox = dir.join("forms-shared.lbox");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &[
+            "vault",
+            "form",
+            "define",
+            "login",
+            "--field",
+            "username:text",
+            "--field",
+            "password:secret",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    let vault_definitions = run_output_without_content_key(
+        bin,
+        &["vault", "form", "definitions", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&vault_definitions);
+    assert!(String::from_utf8_lossy(&vault_definitions.stdout).contains("login"));
+
+    run_without_content_key(
+        bin,
+        &["create", "--password", main_lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(
+        bin,
+        &["form", "use", "login", main_lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    let lockbox_definitions = run_output_without_content_key(
+        bin,
+        &[
+            "form",
+            "definitions",
+            main_lockbox.to_str().unwrap(),
+            "--format",
+            "tsv",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&lockbox_definitions);
+    assert!(String::from_utf8_lossy(&lockbox_definitions.stdout).contains("login"));
+
+    run_without_content_key(
+        bin,
+        &[
+            "form",
+            "add",
+            main_lockbox.to_str().unwrap(),
+            "/work/github",
+            "--type",
+            "login",
+            "--set",
+            "username=bsutton",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    let records = run_output_without_content_key(
+        bin,
+        &[
+            "form",
+            "list",
+            main_lockbox.to_str().unwrap(),
+            "--format",
+            "tsv",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&records);
+    assert!(String::from_utf8_lossy(&records.stdout).contains("/work/github"));
+
+    run_without_content_key(
+        bin,
+        &["create", "--password", shared_lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(
+        bin,
+        &[
+            "form",
+            "define",
+            shared_lockbox.to_str().unwrap(),
+            "server",
+            "--field",
+            "host:text",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    run_without_content_key(
+        bin,
+        &[
+            "form",
+            "capture",
+            shared_lockbox.to_str().unwrap(),
+            "server",
+            "captured-server",
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    let vault_definitions = run_output_without_content_key(
+        bin,
+        &["vault", "form", "definitions", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&vault_definitions);
+    assert!(String::from_utf8_lossy(&vault_definitions.stdout).contains("captured-server"));
 }
 
 #[test]

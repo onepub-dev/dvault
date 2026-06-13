@@ -4,10 +4,12 @@ use std::{
 };
 
 use lockbox_core::{
-    Error, FormFieldDefinition, FormFieldKind, FormValue, LockboxPath, SecretString,
+    Error, FormDefinition, FormFieldDefinition, FormFieldKind, FormValue, LockboxPath, SecretString,
 };
 
-use super::context::{cli_error, open_existing, open_or_create, require_arg, Access, CliResult};
+use super::context::{
+    cli_error, default_vault, open_existing, open_or_create, require_arg, Access, CliResult,
+};
 use super::output::{output_format_from_args, print_records};
 use crate::secret_prompt::prompt_secret;
 
@@ -16,6 +18,8 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
     match subcommand {
         "define" => define(&args[1..], access),
         "definitions" | "types" => definitions(&args[1..], access),
+        "use" => use_vault_definition(&args[1..], access),
+        "capture" => capture_definition(&args[1..], access),
         "add" => add(&args[1..], access),
         "edit" => edit(&args[1..], access),
         "set" => set(&args[1..], access),
@@ -81,12 +85,51 @@ fn define(args: &[String], access: &Access) -> CliResult<()> {
         lb.define_form(&alias, &name, fields)?
     };
     lb.commit()?;
+    print_form_definition_saved(&definition);
+    Ok(())
+}
+
+pub(crate) fn print_form_definition_saved(definition: &FormDefinition) {
     println!("Form definition saved.");
     println!("  alias: {}", definition.alias);
     println!("  definition_id: {}", definition.type_id);
     println!("  revision: {}", definition.revision);
     println!("  name: {}", definition.name);
     println!("  fields: {}", definition.fields.len());
+}
+
+fn use_vault_definition(args: &[String], access: &Access) -> CliResult<()> {
+    let form_name = require_arg(args, 0, "form name")?;
+    let lockbox_path = require_arg(args, 1, "lockbox")?;
+    let definition = default_vault()?.resolve_form_definition(form_name)?;
+    let mut lb = open_or_create(lockbox_path, access)?;
+    let definition = lb.import_form_definition(definition)?;
+    lb.commit()?;
+    print_form_definition_saved(&definition);
+    Ok(())
+}
+
+fn capture_definition(args: &[String], access: &Access) -> CliResult<()> {
+    let lockbox_path = require_arg(args, 0, "lockbox")?;
+    let form_name = require_arg(args, 1, "form name")?;
+    let new_name = args.get(2).map(String::as_str);
+    let lb = open_existing(lockbox_path, access)?;
+    let mut definition = lb.resolve_form_definition(form_name)?;
+    let vault = default_vault()?;
+    if let Some(new_name) = new_name {
+        definition.alias = new_name.to_string();
+        definition.name = new_name.to_string();
+    } else if let Ok(existing) = vault.resolve_form_definition(&definition.alias) {
+        if existing.type_id != definition.type_id {
+            return Err(Error::AlreadyExists(format!(
+                "vault form definition alias {}; pass a new form name",
+                definition.alias
+            ))
+            .into());
+        }
+    }
+    let definition = vault.import_form_definition(definition)?;
+    print_form_definition_saved(&definition);
     Ok(())
 }
 
@@ -506,7 +549,7 @@ enum FieldValueSource {
     FromEnv(String),
 }
 
-fn parse_field_spec(spec: &str) -> CliResult<FormFieldDefinition> {
+pub(crate) fn parse_field_spec(spec: &str) -> CliResult<FormFieldDefinition> {
     let mut parts = spec.splitn(4, ':');
     let id = parts.next().unwrap_or_default().to_string();
     let kind = match parts.next() {

@@ -433,6 +433,19 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             )?);
             push_option(&mut args, sub, "format", "--format");
         }
+        "use" => {
+            args.push(value(sub, "form"));
+            match sub.get_one::<String>("lockbox") {
+                Some(lockbox) => args.push(lockbox.clone()),
+                None => args.push(active_lockbox_for_command()?),
+            }
+        }
+        "capture" => {
+            args.extend(optional_lockbox_positionals(
+                positional_values(sub, "args"),
+                1,
+            )?);
+        }
         "add" => {
             args.extend(optional_lockbox_positionals(
                 positional_values(sub, "args"),
@@ -603,6 +616,39 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             } else {
                 return Err(Error::InvalidInput(
                     "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact add <name> <public-key>`, or `lockbox vault contact remove <name>`"
+                        .to_string(),
+                )
+                .into());
+            }
+        }
+        "form" => {
+            if let Some((form_command, form_sub)) = sub.subcommand() {
+                args.push(form_command.to_string());
+                match form_command {
+                    "define" => {
+                        push_optional(&mut args, form_sub, "alias");
+                        push_option(&mut args, form_sub, "name", "--name");
+                        push_option(&mut args, form_sub, "definition-id", "--definition-id");
+                        if let Some(fields) = form_sub.get_many::<String>("field") {
+                            for field in fields {
+                                args.push("--field".to_string());
+                                args.push(field.clone());
+                            }
+                        }
+                    }
+                    "definitions" | "types" => {
+                        push_option(&mut args, form_sub, "format", "--format");
+                    }
+                    _ => {
+                        return Err(Error::InvalidInput(format!(
+                            "unknown vault form command: {form_command}"
+                        ))
+                        .into())
+                    }
+                }
+            } else {
+                return Err(Error::InvalidInput(
+                    "missing vault form command; use `lockbox vault form define` or `lockbox vault form definitions`"
                         .to_string(),
                 )
                 .into());

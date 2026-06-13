@@ -137,6 +137,38 @@ impl Lockbox {
         Ok(definitions)
     }
 
+    pub fn import_form_definition(&mut self, definition: FormDefinition) -> Result<FormDefinition> {
+        if definition.revision == 0 {
+            return Err(Error::InvalidInput(
+                "form definition revision must be greater than zero".to_string(),
+            ));
+        }
+        let definition = validated_definition(
+            definition.type_id,
+            definition.alias,
+            definition.revision,
+            &definition.name,
+            definition.fields,
+        )?;
+        self.ensure_forms_loaded()?;
+        let key = definition_key(&definition.type_id, definition.revision);
+        let mut definitions = self.form_definitions.borrow_mut();
+        let definitions = definitions.as_mut().ok_or(Error::CorruptRecord)?;
+        if let Some(existing) = definitions.get(&key) {
+            if existing == &definition {
+                return Ok(existing.clone());
+            }
+            return Err(Error::InvalidOperation(format!(
+                "form definition {} revision {} already exists with different content",
+                definition.type_id, definition.revision
+            )));
+        }
+        definitions.insert(key.clone(), definition.clone());
+        self.dirty_form_keys.insert(key);
+        self.dirty_forms = true;
+        Ok(definition)
+    }
+
     pub fn create_form_record(
         &mut self,
         path: &LockboxPath,
