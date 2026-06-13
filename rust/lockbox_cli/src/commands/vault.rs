@@ -113,7 +113,7 @@ fn contact_command(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
         Some("list" | "ls") => list_contacts(&args[1..]),
         Some("import") => contact_import(&args[1..]),
-        Some("receive" | "fetch") => share_receive(&args[1..]),
+        Some("receive") => share_receive(&args[1..]),
         Some("remove" | "rm") => remove_contact(&args[1..]),
         _ => Err(Error::InvalidInput(
             "missing vault contact command; use `lockbox vault contact list`, `lockbox vault contact import <name> <public-key>`, `lockbox vault contact receive <share-code>`, or `lockbox vault contact remove <name>`"
