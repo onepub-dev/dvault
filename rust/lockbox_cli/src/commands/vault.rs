@@ -1071,10 +1071,11 @@ fn export_public(args: &[String]) -> CliResult<()> {
         [] => return Err(Error::InvalidInput("missing public key path".to_string()).into()),
     };
     let keypair = vault.load_private_key(name)?;
-    fs::write(
-        destination,
-        export_public_key(&keypair.public_key(), format)?,
-    )?;
+    let public_key = keypair.public_key();
+    let fingerprint = public_key_fingerprint(&public_key);
+    fs::write(destination, export_public_key(&public_key, format)?)?;
+    println!("identity={name}");
+    println!("public_key_fingerprint={}", format_hex_pairs(&fingerprint));
     Ok(())
 }
 

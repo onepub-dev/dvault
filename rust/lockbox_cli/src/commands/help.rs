@@ -1434,7 +1434,7 @@ fn vault_identity_command(verbose: bool) -> Command {
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox vault identity export ./default.pub\n  lockbox vault identity export laptop ./laptop.pub",
-                    "Context:\n  Identity export writes the public key for one of your identities. Share this file with someone who needs to grant you access to a lockbox. The public key does not open lockboxes by itself.",
+                    "Context:\n  Identity export writes the public key for one of your identities and prints its fingerprint. Share the file with someone who needs to grant you access to a lockbox, then give them the fingerprint over a second channel. The public key does not open lockboxes by itself.",
                 ))
                 .arg(format_arg(verbose))
                 .arg(

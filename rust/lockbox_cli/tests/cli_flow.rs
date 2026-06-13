@@ -2125,7 +2125,7 @@ fn access_subcommand_aliases_manage_lockbox_access() {
         &vault_root,
         &agent_root,
     );
-    run_in(
+    let default_export = run_output_in(
         bin,
         &[
             "vault",
@@ -2137,6 +2137,8 @@ fn access_subcommand_aliases_manage_lockbox_access() {
         &vault_root,
         &agent_root,
     );
+    assert_success(&default_export);
+    assert!(String::from_utf8_lossy(&default_export.stdout).contains("public_key_fingerprint="));
     run_in(
         bin,
         &["vault", "identity", "create", "sharee2"],
@@ -4124,21 +4126,29 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
             args.extend(["--format", format]);
         }
         args.extend(["default", path.to_str().unwrap()]);
-        run_in(bin, &args, &vault_root, &agent_root);
+        let export = run_output_in(bin, &args, &vault_root, &agent_root);
+        assert_success(&export);
+        let export = String::from_utf8_lossy(&export.stdout);
+        assert!(export.contains("identity=default"));
+        assert!(export.contains("public_key_fingerprint="));
 
         let text = String::from_utf8_lossy(&fs::read(&path).unwrap()).to_string();
         if !expected.is_empty() {
             assert!(text.contains(expected), "{name} public export: {text}");
         }
+        let contact_key = import_public_key(&fs::read(&path).unwrap()).unwrap();
+        let contact_fingerprint = encode_hex(&public_key_fingerprint(&contact_key));
 
         run_in(
             bin,
             &[
                 "vault",
                 "contact",
-                "add",
+                "import",
                 &format!("contact-{name}"),
                 path.to_str().unwrap(),
+                "--fingerprint",
+                &contact_fingerprint,
             ],
             &vault_root,
             &agent_root,
@@ -4168,7 +4178,7 @@ fn vault_identity_import_export_formats_are_accepted_by_cli() {
         &[
             "vault",
             "contact",
-            "add",
+            "import",
             "invalid",
             invalid_public.to_str().unwrap(),
         ],
