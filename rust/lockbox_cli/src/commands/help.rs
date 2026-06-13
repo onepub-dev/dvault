@@ -309,7 +309,7 @@ pub(crate) fn command(verbose: bool) -> Command {
             developer_command("keygen", "Generate raw keypair files.")
                 .arg(required("private-key", "Private key output path."))
                 .arg(required("public-key", "Public key output path.")),
-            developer_command("open-key", "Open using a vault private key.")
+            developer_command("open-key", "Open a lockbox using a vault private key.")
                 .arg(
                     Arg::new("args")
                         .value_name("LOCKBOX VAULT_KEY | VAULT_KEY")
@@ -377,7 +377,7 @@ Advanced command options:
 
 Developer and compatibility commands:
   keygen          Generate raw keypair files.
-  open-key        Open using a vault private key.
+  open-key        Open a lockbox using a vault private key.
   visualize       Print internal lockbox structure.
 
 Process variables:
