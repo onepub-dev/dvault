@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::Lockbox;
-use crate::commit_auth::{commit_auth_message, decode_commit_auth};
+use crate::commit_auth::{commit_auth_digest, commit_auth_message, decode_commit_auth, CommitAuth};
 use crate::constants::DEFAULT_MAX_FILE_BYTES;
 use crate::crypto::strong_checksum;
 use crate::file_format::{
@@ -78,10 +78,7 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
     let key = key.as_ref().to_vec();
     let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);
     let scanner = PageScanner::new(&bytes, lockbox_id, &key);
-    let scan = scanner.scan_records();
-    let scanned_segments = collect_scanned_file_segments(&scan.records);
     let mut toc_entries = BTreeMap::new();
-    let mut corrupt_records = scan.corrupt_records;
     let mut toc_recovered = false;
     let mut metadata = RecoveredMetadata::default();
 
@@ -93,6 +90,10 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
             toc_recovered = true;
         }
     }
+
+    let scan = scanner.scan_records();
+    let scanned_segments = collect_scanned_file_segments(&scan.records);
+    let mut corrupt_records = scan.corrupt_records;
 
     if toc_entries.is_empty() {
         for record in &scan.records {
@@ -157,11 +158,11 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
     let key_bytes = key.as_ref().to_vec();
     let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);
     let scanner = PageScanner::new(&bytes, lockbox_id, &key_bytes);
-    let scan = scanner.scan_records();
-    let scanned_segments = collect_scanned_file_segments(&scan.records);
     let metadata = header_commit_root_for_recovery(&scanner, &bytes)
         .map(|commit_root| recover_metadata_from_commit_root(&scanner, &commit_root))
         .unwrap_or_default();
+    let scan = scanner.scan_records();
+    let scanned_segments = collect_scanned_file_segments(&scan.records);
     let mut recovered = Lockbox::create_with_secret_key_and_options(
         crate::SecretVec::try_from_slice(&key_bytes)?,
         lockbox_id,
@@ -235,22 +236,48 @@ fn header_commit_root_for_recovery(
             .then(|| scanner.commit_root_at(header.commit_root_offset).ok())
             .flatten();
     }
-    let auth_payload = scanner
-        .commit_auth_payload_at(header.commit_auth_offset)
-        .ok()?;
-    let auth = decode_commit_auth(&auth_payload).ok()?;
-    let message = commit_auth_message(&auth).ok()?;
-    verify_commit_signatures(&message, &auth.signatures).ok()?;
-    if auth.commit_root_offset != header.commit_root_offset {
-        return None;
+    valid_commit_root_from_auth_chain(scanner, header.commit_auth_offset, header.lockbox_id)
+}
+
+fn valid_commit_root_from_auth_chain(
+    scanner: &PageScanner<'_>,
+    mut auth_offset: u64,
+    lockbox_id: LockboxId,
+) -> Option<crate::commit_root::CommitRoot> {
+    let mut expected_digest = None;
+    while auth_offset != 0 {
+        let auth_payload = scanner.commit_auth_payload_at(auth_offset).ok()?;
+        let digest = commit_auth_digest(&auth_payload);
+        if expected_digest.is_some_and(|expected| digest != expected) {
+            return None;
+        }
+        let auth = decode_commit_auth(&auth_payload).ok()?;
+        if auth.lockbox_id != lockbox_id {
+            return None;
+        }
+        let message = commit_auth_message(&auth).ok()?;
+        verify_commit_signatures(&message, &auth.signatures).ok()?;
+        if let Some(root) = verified_commit_root_from_auth(scanner, &auth) {
+            return Some(root);
+        }
+        expected_digest = Some(auth.previous_auth_digest);
+        auth_offset = auth.previous_auth_offset;
     }
+    None
+}
+
+fn verified_commit_root_from_auth(
+    scanner: &PageScanner<'_>,
+    auth: &CommitAuth,
+) -> Option<crate::commit_root::CommitRoot> {
     let root_payload = scanner
         .commit_root_payload_at(auth.commit_root_offset)
         .ok()?;
     if strong_checksum(&root_payload) != auth.commit_root_digest {
         return None;
     }
-    crate::commit_root::decode_commit_root(&root_payload).ok()
+    let root = crate::commit_root::decode_commit_root(&root_payload).ok()?;
+    (root.sequence == auth.sequence).then_some(root)
 }
 
 #[derive(Default)]
@@ -309,6 +336,7 @@ fn decode_variable_node_into(
             }
         }
         VariableNode::Internal(children) => {
+            drop(payload);
             for child in children {
                 decode_variable_node_into(scanner, child.offset, variables, depth + 1)?;
             }
@@ -361,6 +389,7 @@ fn decode_form_node_into(
             }
         }
         FormNode::Internal(children) => {
+            drop(payload);
             for child in children {
                 decode_form_node_into(scanner, child.offset, definitions, records, depth + 1)?;
             }

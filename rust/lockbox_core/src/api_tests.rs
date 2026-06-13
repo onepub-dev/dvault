@@ -2908,6 +2908,43 @@ fn path_backed_recovery_preserves_variable_paths_and_forms_from_commit_root() {
     let _ = std::fs::remove_file(path);
 }
 
+#[test]
+fn path_backed_recovery_report_counts_variables_after_multiple_commits() {
+    let path = temp_path("recovery-variable-count-multiple-commits");
+    let key = b"test-key";
+    let mut lb = Lockbox::create_path(&path, key).unwrap();
+    lb.set_variable(&variable("/APIO_KEY"), "normal-key")
+        .unwrap();
+    lb.commit().unwrap();
+    drop(lb);
+
+    let mut lb = Lockbox::open_file(
+        &path,
+        LockboxUnlock::ContentKey(SecretVec::try_from_slice(key).unwrap()),
+    )
+    .unwrap();
+    lb.set_secret_variable(&variable("/product/API_KEY"), &password("secret-key"))
+        .unwrap();
+    lb.commit().unwrap();
+    drop(lb);
+
+    let mut lb = Lockbox::open_file(
+        &path,
+        LockboxUnlock::ContentKey(SecretVec::try_from_slice(key).unwrap()),
+    )
+    .unwrap();
+    lb.set_variable(&variable("/product/API_KEY1"), "normal-key-1")
+        .unwrap();
+    lb.commit().unwrap();
+    drop(lb);
+
+    let report = RecoveryScanner::scan_bytes(std::fs::read(&path).unwrap(), key);
+    assert!(report.variables_recovered);
+    assert_eq!(report.variable_count, 3);
+
+    let _ = std::fs::remove_file(path);
+}
+
 fn sample_lockbox() -> Vec<u8> {
     let mut lb = Lockbox::create(KEY);
     lb.add_file_from_reader(&p("/docs/a.txt"), Cursor::new(b"alpha"), false)

@@ -540,46 +540,49 @@ fn decrypt_page_body_secure(
     lockbox_id: LockboxId,
     content_key: &[u8; 32],
 ) -> Result<(u64, u64)> {
-    let header: (u64, u64, [u8; 12], u16, usize, usize) = secure_read_access(|access| {
-        page.with_bytes_in(access, |page| {
-            if page.len() < PAGE_HEADER_LEN {
-                return Err(Error::Truncated);
-            }
-            if &page[0..8] != PAGE_MAGIC {
-                return Err(Error::CorruptRecord);
-            }
-            if u16::from_le_bytes(page[8..10].try_into().unwrap()) != PAGE_VERSION {
-                return Err(Error::CorruptRecord);
-            }
-            let flags = u16::from_le_bytes(page[10..12].try_into().unwrap());
-            if flags & !PAGE_FLAG_CLEAR_TEXT != 0 {
-                return Err(Error::CorruptRecord);
-            }
-            let header_len = u32::from_le_bytes(page[12..16].try_into().unwrap()) as usize;
-            if header_len != PAGE_HEADER_LEN || header_len > page.len() {
-                return Err(Error::CorruptRecord);
-            }
-            if page[48..PAGE_CHECKSUM_START].iter().any(|byte| *byte != 0) {
-                return Err(Error::CorruptRecord);
-            }
-            let expected_digest = strong_checksum(&page[0..PAGE_CHECKSUM_START]);
-            if page[PAGE_CHECKSUM_START..PAGE_HEADER_LEN] != expected_digest {
-                return Err(Error::CorruptRecord);
-            }
-            let stored_body_len = u32::from_le_bytes(page[44..48].try_into().unwrap()) as usize;
-            if header_len + stored_body_len > page.len() {
-                return Err(Error::Truncated);
-            }
-            Ok((
-                u64::from_le_bytes(page[16..24].try_into().unwrap()),
-                u64::from_le_bytes(page[24..32].try_into().unwrap()),
-                page[32..44].try_into().unwrap(),
-                flags,
-                header_len,
-                stored_body_len,
-            ))
-        })
-    })??;
+    let header: (u64, u64, [u8; 12], u16, usize, usize) = {
+        let parsed = secure_read_access(|access| {
+            page.with_bytes_in(access, |page| {
+                if page.len() < PAGE_HEADER_LEN {
+                    return Err(Error::Truncated);
+                }
+                if &page[0..8] != PAGE_MAGIC {
+                    return Err(Error::CorruptRecord);
+                }
+                if u16::from_le_bytes(page[8..10].try_into().unwrap()) != PAGE_VERSION {
+                    return Err(Error::CorruptRecord);
+                }
+                let flags = u16::from_le_bytes(page[10..12].try_into().unwrap());
+                if flags & !PAGE_FLAG_CLEAR_TEXT != 0 {
+                    return Err(Error::CorruptRecord);
+                }
+                let header_len = u32::from_le_bytes(page[12..16].try_into().unwrap()) as usize;
+                if header_len != PAGE_HEADER_LEN || header_len > page.len() {
+                    return Err(Error::CorruptRecord);
+                }
+                if page[48..PAGE_CHECKSUM_START].iter().any(|byte| *byte != 0) {
+                    return Err(Error::CorruptRecord);
+                }
+                let expected_digest = strong_checksum(&page[0..PAGE_CHECKSUM_START]);
+                if page[PAGE_CHECKSUM_START..PAGE_HEADER_LEN] != expected_digest {
+                    return Err(Error::CorruptRecord);
+                }
+                let stored_body_len = u32::from_le_bytes(page[44..48].try_into().unwrap()) as usize;
+                if header_len + stored_body_len > page.len() {
+                    return Err(Error::Truncated);
+                }
+                Ok((
+                    u64::from_le_bytes(page[16..24].try_into().unwrap()),
+                    u64::from_le_bytes(page[24..32].try_into().unwrap()),
+                    page[32..44].try_into().unwrap(),
+                    flags,
+                    header_len,
+                    stored_body_len,
+                ))
+            })
+        })?;
+        parsed?
+    };
     let (page_id, sequence, nonce, flags, header_len, stored_body_len) = header;
     if flags & PAGE_FLAG_CLEAR_TEXT != 0 {
         return Err(Error::CorruptRecord);
@@ -594,30 +597,33 @@ fn decrypt_page_body_secure(
 }
 
 fn decode_page_body_plaintext_in_place<B: PageBuffer>(body: &mut B) -> Result<()> {
-    let (stored_offset, stored_len) = body.with_bytes(|body| {
-        if body.len() < 33 {
-            return Err(Error::CorruptRecord);
-        }
-        if body[0] != PAGE_BODY_VERSION || body[1] != COMPRESSION_NORMAL {
-            return Err(Error::CorruptRecord);
-        }
-        let expected_len = u64::from_le_bytes(body[4..12].try_into().unwrap()) as usize;
-        let compression = &body[16..];
-        let real_len = u64::from_le_bytes(compression[0..8].try_into().unwrap()) as usize;
-        let algorithm = compression[8];
-        let stored_len = u64::from_le_bytes(compression[9..17].try_into().unwrap()) as usize;
-        if algorithm != COMPRESSION_NONE {
-            return Err(Error::CorruptRecord);
-        }
-        if expected_len != real_len || stored_len != real_len {
-            return Err(Error::CorruptRecord);
-        }
-        let stored_offset = 16usize + 17;
-        if stored_offset + stored_len > body.len() {
-            return Err(Error::CorruptRecord);
-        }
-        Ok((stored_offset, stored_len))
-    })??;
+    let (stored_offset, stored_len) = {
+        let parsed = body.with_bytes(|body| {
+            if body.len() < 33 {
+                return Err(Error::CorruptRecord);
+            }
+            if body[0] != PAGE_BODY_VERSION || body[1] != COMPRESSION_NORMAL {
+                return Err(Error::CorruptRecord);
+            }
+            let expected_len = u64::from_le_bytes(body[4..12].try_into().unwrap()) as usize;
+            let compression = &body[16..];
+            let real_len = u64::from_le_bytes(compression[0..8].try_into().unwrap()) as usize;
+            let algorithm = compression[8];
+            let stored_len = u64::from_le_bytes(compression[9..17].try_into().unwrap()) as usize;
+            if algorithm != COMPRESSION_NONE {
+                return Err(Error::CorruptRecord);
+            }
+            if expected_len != real_len || stored_len != real_len {
+                return Err(Error::CorruptRecord);
+            }
+            let stored_offset = 16usize + 17;
+            if stored_offset + stored_len > body.len() {
+                return Err(Error::CorruptRecord);
+            }
+            Ok((stored_offset, stored_len))
+        })?;
+        parsed?
+    };
     body.with_mut_bytes(|bytes| {
         bytes.copy_within(stored_offset..stored_offset + stored_len, 0);
     })?;
@@ -628,28 +634,31 @@ fn decode_page_body_plaintext_in_place<B: PageBuffer>(body: &mut B) -> Result<()
 fn decode_single_object_stream_in_place<B: PageBuffer>(
     stream: &mut B,
 ) -> Result<(PageObjectKind, u64, B)> {
-    let (kind, id, payload_offset, payload_len) = stream.with_bytes(|bytes| {
-        if bytes.len() < 24 {
-            return Err(Error::CorruptRecord);
-        }
-        let count = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-        if count != 1 {
-            return Err(Error::CorruptRecord);
-        }
-        let kind = PageObjectKind::from_u8(bytes[4])?;
-        let version = bytes[5];
-        let flags = u16::from_le_bytes(bytes[6..8].try_into().unwrap());
-        if version != 1 || flags != 0 {
-            return Err(Error::CorruptRecord);
-        }
-        let id = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-        let payload_len = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
-        let payload_offset = 24usize;
-        if payload_offset + payload_len != bytes.len() {
-            return Err(Error::CorruptRecord);
-        }
-        Ok((kind, id, payload_offset, payload_len))
-    })??;
+    let (kind, id, payload_offset, payload_len) = {
+        let parsed = stream.with_bytes(|bytes| {
+            if bytes.len() < 24 {
+                return Err(Error::CorruptRecord);
+            }
+            let count = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+            if count != 1 {
+                return Err(Error::CorruptRecord);
+            }
+            let kind = PageObjectKind::from_u8(bytes[4])?;
+            let version = bytes[5];
+            let flags = u16::from_le_bytes(bytes[6..8].try_into().unwrap());
+            if version != 1 || flags != 0 {
+                return Err(Error::CorruptRecord);
+            }
+            let id = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+            let payload_len = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+            let payload_offset = 24usize;
+            if payload_offset + payload_len != bytes.len() {
+                return Err(Error::CorruptRecord);
+            }
+            Ok((kind, id, payload_offset, payload_len))
+        })?;
+        parsed?
+    };
     stream.with_mut_bytes(|bytes| {
         bytes.copy_within(payload_offset..payload_offset + payload_len, 0);
     })?;

@@ -91,18 +91,27 @@ impl RecoverOptions {
 fn scan_report(lockbox_path: &str, access: &Access) -> CliResult<RecoveryReport> {
     match access {
         Access::ContentKey(key) => {
-            Ok(key.with_bytes(|key| RecoveryScanner::scan_path(Path::new(lockbox_path), key))?)
+            let bytes = fs::read(lockbox_path)
+                .map_err(|err| Error::Io(format!("read lockbox {lockbox_path}: {err}")))?;
+            scan_bytes_with_secret_key(bytes, key)
         }
         Access::CacheOnly => {
             let key = cached_key(lockbox_path)?;
             let bytes = fs::read(lockbox_path)
                 .map_err(|err| Error::Io(format!("read lockbox {lockbox_path}: {err}")))?;
-            Ok(key.with_bytes(|key| RecoveryScanner::scan_bytes(bytes, key))?)
+            scan_bytes_with_secret_key(bytes, &key)
         }
         Access::PromptPassword => {
             Err(Error::InvalidInput("recover requires --key or an open lockbox".to_string()).into())
         }
     }
+}
+
+fn scan_bytes_with_secret_key(bytes: Vec<u8>, key: &SecretVec) -> CliResult<RecoveryReport> {
+    let mut key_bytes = key.with_bytes(|key| key.to_vec())?;
+    let report = RecoveryScanner::scan_bytes(bytes, &key_bytes);
+    key_bytes.fill(0);
+    Ok(report)
 }
 
 fn salvage_bytes(

@@ -3620,6 +3620,21 @@ fn cli_secret_variables_require_explicit_source_and_redact_export() {
     assert!(!missing_secret_get.status.success());
     assert!(String::from_utf8_lossy(&missing_secret_get.stderr).contains("not found"));
 
+    let report = run_output(
+        bin,
+        &[
+            "recover",
+            "--report",
+            "--format",
+            "tsv",
+            lockbox.to_str().unwrap(),
+        ],
+    );
+    assert_success(&report);
+    let report = String::from_utf8_lossy(&report.stdout);
+    assert!(report.contains("variables_recovered\ttrue"));
+    assert!(report.contains("variable_count\t6"));
+
     let token_output = dir.join("api-token.txt");
     run(
         bin,
