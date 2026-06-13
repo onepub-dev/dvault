@@ -77,6 +77,8 @@ pub struct LockboxFileInspection {
     pub key_directory_copy_count: usize,
     /// Public key-slot metadata for access methods stored in the lockbox.
     pub key_slots: Vec<LockboxKeySlot>,
+    /// Whether the public header points at signed owner commit metadata.
+    pub owner_signed: bool,
 }
 
 #[derive(Debug, Default)]
@@ -531,6 +533,7 @@ impl Lockbox {
                 key_slots: best
                     .map(|directory| directory.slots.iter().map(KeySlot::info).collect())
                     .unwrap_or_default(),
+                owner_signed: header.commit_auth_offset != 0,
             });
         }
 
@@ -547,6 +550,7 @@ impl Lockbox {
                 .filter(|directory| directory.lockbox_id == best.lockbox_id)
                 .count(),
             key_slots: best.slots.iter().map(KeySlot::info).collect(),
+            owner_signed: false,
         })
     }
 

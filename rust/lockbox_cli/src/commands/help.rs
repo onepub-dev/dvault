@@ -1307,7 +1307,7 @@ fn vault_command(verbose: bool) -> Command {
                         .after_help(verbose_help(
                             verbose,
                             "Examples:\n  lockbox vault lockbox list\n  lockbox vault lockbox list --format json",
-                            "Context:\n  The lockbox list command reports remembered lockbox paths and whether each file is present, missing, or inaccessible.",
+                            "Context:\n  The lockbox list command reports remembered lockboxes, including file state, signed-owner status, compact file size, lockbox id, and path.",
                         ))
                         .arg(output_format_arg()),
                 )

@@ -3,8 +3,8 @@ use super::context::{
     read_vault_password, remember_default_vault_password, require_arg, CliResult,
 };
 use super::form::{parse_field_spec, print_form_definition_saved};
-use super::output::{output_format_from_args, print_records};
-use lockbox_core::{Error, OwnerSigningPublicKey, RecipientKeyPair, RecipientPublicKey};
+use super::output::{output_format_from_args, print_records, OutputFormat};
+use lockbox_core::{Error, Lockbox, OwnerSigningPublicKey, RecipientKeyPair, RecipientPublicKey};
 use lockbox_share_protocol::{
     contact_fingerprint, normalize_contact_email, ContactShare, ShareClientPool,
     CONTACT_FINGERPRINT_LEN,
@@ -18,7 +18,7 @@ use lockbox_vault::{
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SHARE_RECEIVE_VERIFICATION_ADVICE: &str = concat!(
@@ -1081,21 +1081,123 @@ fn list_contacts(args: &[String]) -> CliResult<()> {
 fn list_known_lockboxes(args: &[String]) -> CliResult<()> {
     let (_, format) = output_format_from_args(args)?;
     let vault = default_vault()?;
-    let mut rows = Vec::new();
+    let mut rows = Vec::<KnownLockboxListRow>::new();
     for lockbox in vault.list_known_lockboxes()? {
-        rows.push(vec![
-            lockbox.path.clone(),
-            known_lockbox_state(&lockbox.path).to_string(),
-            lockbox.lockbox_id.to_string(),
-            lockbox.last_seen_unix_ms.to_string(),
-        ]);
+        rows.push(known_lockbox_list_row(&lockbox));
     }
-    print_records(
-        &["path", "state", "lockbox_id", "last_seen_unix_ms"],
-        rows,
-        format,
-    )?;
+    match format {
+        OutputFormat::Table => print_known_lockbox_table(&rows),
+        OutputFormat::Tsv | OutputFormat::Json => {
+            let rows = rows
+                .into_iter()
+                .map(|row| {
+                    vec![
+                        row.name,
+                        row.state,
+                        row.owner,
+                        row.size,
+                        row.lockbox_id,
+                        row.path,
+                    ]
+                })
+                .collect::<Vec<_>>();
+            print_records(
+                &["name", "state", "owner", "size", "lockbox_id", "path"],
+                rows,
+                format,
+            )?;
+        }
+    }
     Ok(())
+}
+
+struct KnownLockboxListRow {
+    name: String,
+    state: String,
+    owner: String,
+    size: String,
+    lockbox_id: String,
+    path: String,
+}
+
+fn known_lockbox_list_row(lockbox: &lockbox_vault::KnownLockbox) -> KnownLockboxListRow {
+    let path = Path::new(&lockbox.path);
+    let mut owner = "-".to_string();
+    let mut size = "-".to_string();
+    let state = match fs::metadata(path) {
+        Ok(metadata) => {
+            size = human_size(metadata.len());
+            if let Ok(inspection) = Lockbox::inspect_file(path) {
+                owner = if inspection.owner_signed {
+                    "signed".to_string()
+                } else {
+                    "unsigned".to_string()
+                };
+            }
+            "present"
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => "missing",
+        Err(_) => "inaccessible",
+    }
+    .to_string();
+    KnownLockboxListRow {
+        name: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(lockbox.path.as_str())
+            .to_string(),
+        state,
+        owner,
+        size,
+        lockbox_id: lockbox.lockbox_id.to_string(),
+        path: lockbox.path.clone(),
+    }
+}
+
+fn print_known_lockbox_table(rows: &[KnownLockboxListRow]) {
+    if rows.is_empty() {
+        println!("empty");
+        return;
+    }
+    let name_width = column_width("name", rows.iter().map(|row| row.name.as_str()));
+    let state_width = column_width("state", rows.iter().map(|row| row.state.as_str()));
+    let owner_width = column_width("owner", rows.iter().map(|row| row.owner.as_str()));
+    let size_width = column_width("size", rows.iter().map(|row| row.size.as_str()));
+    let id_width = column_width("lockbox_id", rows.iter().map(|row| row.lockbox_id.as_str()));
+    println!(
+        "{:<name_width$}  {:<state_width$}  {:<owner_width$}  {:>size_width$}  {:<id_width$}  path",
+        "name", "state", "owner", "size", "lockbox_id"
+    );
+    for row in rows {
+        println!(
+            "{:<name_width$}  {:<state_width$}  {:<owner_width$}  {:>size_width$}  {:<id_width$}  {}",
+            row.name, row.state, row.owner, row.size, row.lockbox_id, row.path
+        );
+    }
+}
+
+fn column_width<'a>(header: &str, values: impl Iterator<Item = &'a str>) -> usize {
+    values.fold(header.len(), |width, value| width.max(value.len()))
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 7] = ["B", "K", "M", "G", "T", "P", "E"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        return format!("{bytes}B");
+    }
+    if value >= 100.0 {
+        format!("{value:.0}{}", UNITS[unit])
+    } else if value >= 10.0 {
+        format!("{value:.1}{}", UNITS[unit])
+    } else {
+        format!("{value:.2}{}", UNITS[unit])
+    }
 }
 
 fn forget_known_lockbox(args: &[String]) -> CliResult<()> {
@@ -1103,14 +1205,6 @@ fn forget_known_lockbox(args: &[String]) -> CliResult<()> {
     default_vault()?.forget_known_lockbox(path)?;
     println!("Forgot known lockbox: {path}");
     Ok(())
-}
-
-fn known_lockbox_state(path: &str) -> &'static str {
-    match fs::metadata(path) {
-        Ok(_) => "present",
-        Err(err) if err.kind() == io::ErrorKind::NotFound => "missing",
-        Err(_) => "inaccessible",
-    }
 }
 
 fn identity_generation_status(status: IdentityGenerationStatus) -> &'static str {

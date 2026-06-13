@@ -2494,6 +2494,71 @@ fn vault_init_generated_pass_phrase_requires_stored_confirmation() {
 }
 
 #[test]
+fn vault_lockbox_list_reports_owner_size_and_path() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-lockbox-list");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let lockbox = dir.join("listed.lbox");
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &["create", "--password", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+
+    let table = run_output_without_content_key(
+        bin,
+        &["vault", "lockbox", "list"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&table);
+    let table = String::from_utf8_lossy(&table.stdout);
+    let header = table.lines().next().unwrap_or_default();
+    assert_contains_in_order(
+        header,
+        &["name", "state", "owner", "size", "lockbox_id", "path"],
+    );
+    let row = table.lines().nth(1).unwrap_or_default();
+    let columns = row.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(columns[0], "listed.lbox");
+    assert_eq!(columns[1], "present");
+    assert_eq!(columns[2], "signed");
+    assert!(columns[3].len() <= 6, "size was {}", columns[3]);
+    assert_eq!(columns[5], lockbox.to_str().unwrap());
+    assert!(!table.contains("last_seen_unix_ms"));
+
+    let json = run_output_without_content_key(
+        bin,
+        &["vault", "lockbox", "list", "--format", "json"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&json);
+    let json = String::from_utf8_lossy(&json.stdout);
+    assert!(json.contains("\"name\":\"listed.lbox\""));
+    assert!(json.contains("\"owner\":\"signed\""));
+    assert!(json.contains("\"size\":\""));
+    assert!(json.contains("\"path\":\""));
+
+    fs::remove_file(&lockbox).unwrap();
+    let tsv = run_output_without_content_key(
+        bin,
+        &["vault", "lockbox", "list", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&tsv);
+    let tsv = String::from_utf8_lossy(&tsv.stdout);
+    assert!(tsv.contains("listed.lbox\tmissing\t-\t-\t"));
+}
+
+#[test]
 fn vault_init_generated_pass_phrase_accepts_stored_confirmation() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("vault-pass-phrase-generated-yes");
