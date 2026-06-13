@@ -1257,6 +1257,7 @@ name = "lockbox_cli"
 version = "0.1.0-alpha.1"
 dependencies = [
  "clap",
+ "getrandom 0.2.17",
  "libc",
  "lockbox_core",
  "lockbox_key_server",

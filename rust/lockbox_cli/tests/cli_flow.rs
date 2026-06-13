@@ -2104,14 +2104,56 @@ fn vault_init_prompt_mentions_minimum_pass_phrase_length() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.as_mut().unwrap().write_all(b"\n").unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"2\n\n\n").unwrap();
     let output = child.wait_with_output().unwrap();
 
     assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Vault pass phrase:"));
+    assert!(stdout.contains("1. Generate a strong pass phrase"));
+    assert!(stdout.contains("2. Enter my own pass phrase"));
     assert!(stdout.contains("New vault pass phrase (minimum 15 characters):"));
     assert!(stderr.contains("vault pass phrase must be at least 15 characters"));
+    assert!(!vault_root.join("local-vault.lbox").exists());
+}
+
+#[test]
+fn vault_init_can_generate_pass_phrase_and_requires_confirmation() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-pass-phrase-generated");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    let mut child = Command::new(bin)
+        .args(["vault", "init"])
+        .env("LOCKBOX_PASSWORD", "test-lockbox-password")
+        .env_remove("LOCKBOX_VAULT_PASSWORD")
+        .env("LOCKBOX_SESSION_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(&agent_root))
+        .env("LOCKBOX_VAULT_DIR", &vault_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"\nnot-the-generated-phrase\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Generated vault pass phrase:"));
+    assert!(stdout.contains("Store this in your password manager before continuing."));
+    assert!(stdout.contains("Type the generated vault pass phrase to confirm:"));
+    assert!(stderr.contains("pass phrases do not match"));
     assert!(!vault_root.join("local-vault.lbox").exists());
 }
 

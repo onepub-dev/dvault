@@ -11,7 +11,7 @@ use lockbox_vault::{
 };
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -202,6 +202,47 @@ pub(crate) fn read_new_vault_password() -> CliResult<SecretString> {
         validate_new_vault_pass_phrase(&password)?;
         return Ok(password);
     }
+    match read_vault_pass_phrase_mode()?.as_str() {
+        "" | "1" => read_generated_vault_pass_phrase(),
+        "2" => read_manual_vault_pass_phrase(),
+        value => {
+            Err(Error::InvalidInput(format!("unknown vault pass phrase choice: {value}")).into())
+        }
+    }
+}
+
+fn read_vault_pass_phrase_mode() -> CliResult<String> {
+    println!("Vault pass phrase:");
+    println!("  1. Generate a strong pass phrase");
+    println!("  2. Enter my own pass phrase");
+    print!("Choose [1]: ");
+    io::stdout().flush()?;
+    let mut choice = String::new();
+    io::stdin().read_line(&mut choice)?;
+    Ok(choice.trim().to_string())
+}
+
+fn read_generated_vault_pass_phrase() -> CliResult<SecretString> {
+    let phrase = generated_vault_pass_phrase()?;
+    println!();
+    println!("Generated vault pass phrase:");
+    println!();
+    println!("  {phrase}");
+    println!();
+    println!("Store this in your password manager before continuing.");
+    println!();
+    let password = SecretString::try_from_bytes(phrase.as_bytes().to_vec())?;
+    validate_new_vault_pass_phrase(&password)?;
+    let mut confirm = prompt_secret("Type the generated vault pass phrase to confirm: ")?;
+    if password != confirm {
+        confirm.zeroize()?;
+        return Err(Error::InvalidInput("pass phrases do not match".to_string()).into());
+    }
+    confirm.zeroize()?;
+    Ok(password)
+}
+
+fn read_manual_vault_pass_phrase() -> CliResult<SecretString> {
     let password = prompt_secret("New vault pass phrase (minimum 15 characters): ")?;
     validate_new_vault_pass_phrase(&password)?;
     let mut confirm = prompt_secret("Confirm vault pass phrase: ")?;
@@ -211,6 +252,21 @@ pub(crate) fn read_new_vault_password() -> CliResult<SecretString> {
     }
     confirm.zeroize()?;
     Ok(password)
+}
+
+fn generated_vault_pass_phrase() -> CliResult<String> {
+    const ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
+    let mut out = String::with_capacity(24);
+    let mut bytes = [0u8; 20];
+    getrandom::getrandom(&mut bytes).map_err(|err| Error::Io(err.to_string()))?;
+    for (index, byte) in bytes.iter().enumerate() {
+        if index > 0 && index % 4 == 0 {
+            out.push('-');
+        }
+        out.push(ALPHABET[(byte & 0b0001_1111) as usize] as char);
+    }
+    bytes.fill(0);
+    Ok(out)
 }
 
 fn validate_new_vault_pass_phrase(password: &SecretString) -> CliResult<()> {

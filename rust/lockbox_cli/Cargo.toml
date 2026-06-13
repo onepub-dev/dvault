@@ -24,6 +24,7 @@ lockbox_core = { version = "0.1.0-alpha.1", path = "../lockbox_core" }
 lockbox_share_protocol = { version = "0.1.0-alpha.1", path = "../lockbox_share_protocol" }
 lockbox_vault = { version = "0.1.0-alpha.1", path = "../lockbox_vault" }
 
+getrandom = "0.2"
 sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
