@@ -249,6 +249,7 @@ fn init(args: &[String]) -> CliResult<()> {
             let password = read_new_vault_password()?;
             let vault = VaultDirectory::replace_default(&password)?;
             let generated = ensure_default_private_key(&vault)?;
+            let default_forms = vault.seed_default_form_definitions()?;
             set_auto_open_scope(AutoOpenScope::Lockboxes)?;
             remember_default_vault_password(&password)?;
             println!("Vault replaced successfully.");
@@ -257,6 +258,9 @@ fn init(args: &[String]) -> CliResult<()> {
                     "Created default identity: {}",
                     VaultDirectory::DEFAULT_KEY_NAME
                 );
+            }
+            if default_forms > 0 {
+                println!("Default forms: {default_forms}");
             }
             return Ok(());
         }
@@ -289,6 +293,7 @@ fn init(args: &[String]) -> CliResult<()> {
     let password = read_new_vault_password()?;
     let vault = VaultDirectory::unlock_or_create_default(&password)?;
     let generated = ensure_default_private_key(&vault)?;
+    let default_forms = vault.seed_default_form_definitions()?;
     set_auto_open_scope(AutoOpenScope::Lockboxes)?;
     remember_default_vault_password(&password)?;
     println!("Vault created successfully.");
@@ -298,6 +303,9 @@ fn init(args: &[String]) -> CliResult<()> {
     if generated {
         println!();
         println!("Identity: {}", VaultDirectory::DEFAULT_KEY_NAME);
+    }
+    if default_forms > 0 {
+        println!("Default forms: {default_forms}");
     }
     println!();
     println!("Pass phrase reminder:");

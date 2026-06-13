@@ -1,8 +1,8 @@
 use lockbox_core::{
-    Error, FormDefinition, FormFieldDefinition, FormTypeId, ListOptions, Lockbox, LockboxEntryKind,
-    LockboxId, LockboxPath, LockboxProtection, LockboxUnlock, OwnerSigningKeyPair,
-    OwnerSigningPublicKey, RecipientKeyPair, RecipientPublicKey, Result, SecretString, SecretVec,
-    VariableName,
+    Error, FormDefinition, FormFieldDefinition, FormFieldKind, FormTypeId, ListOptions, Lockbox,
+    LockboxEntryKind, LockboxId, LockboxPath, LockboxProtection, LockboxUnlock,
+    OwnerSigningKeyPair, OwnerSigningPublicKey, RecipientKeyPair, RecipientPublicKey, Result,
+    SecretString, SecretVec, VariableName,
 };
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -590,6 +590,29 @@ impl VaultDirectory {
         self.lockbox.borrow().list_form_definitions()
     }
 
+    /// Adds built-in form definitions that are not already present.
+    pub fn seed_default_form_definitions(&self) -> Result<usize> {
+        let existing = self
+            .list_form_definitions()?
+            .into_iter()
+            .map(|definition| definition.alias)
+            .collect::<Vec<_>>();
+        let mut seeded = 0usize;
+        for template in default_form_templates() {
+            if existing.iter().any(|alias| alias == template.alias) {
+                continue;
+            }
+            self.define_form_with_type_id(
+                FormTypeId::new(template.type_id)?,
+                template.alias,
+                template.name,
+                template.fields,
+            )?;
+            seeded += 1;
+        }
+        Ok(seeded)
+    }
+
     /// Stores a lockbox pass phrase in the vault, keyed by lockbox id.
     pub fn remember_lockbox_password(
         &self,
@@ -1128,6 +1151,130 @@ fn private_key_name_from_variable(name: &str) -> Option<Result<String>> {
     Some(decode_name_hex(hex).ok_or_else(|| {
         Error::CorruptVaultRecord(format!("private key record name is not valid hex: {name}"))
     }))
+}
+
+struct DefaultFormTemplate {
+    type_id: &'static str,
+    alias: &'static str,
+    name: &'static str,
+    fields: Vec<FormFieldDefinition>,
+}
+
+fn default_form_templates() -> Vec<DefaultFormTemplate> {
+    vec![
+        DefaultFormTemplate {
+            type_id: "00000000-0000-4000-8000-000000000001",
+            alias: "login",
+            name: "Login",
+            fields: vec![
+                form_field("username", "Username", FormFieldKind::Text, false),
+                form_field("password", "Password", FormFieldKind::Secret, true),
+                form_field("url", "Website", FormFieldKind::Url, false),
+                form_field("otp", "One-time password", FormFieldKind::Otp, false),
+                form_field("notes", "Notes", FormFieldKind::Notes, false),
+            ],
+        },
+        DefaultFormTemplate {
+            type_id: "00000000-0000-4000-8000-000000000002",
+            alias: "payment-card",
+            name: "Payment Card",
+            fields: vec![
+                form_field("cardholder", "Cardholder", FormFieldKind::Text, true),
+                form_field("number", "Card number", FormFieldKind::Secret, true),
+                form_field("expiry", "Expiry", FormFieldKind::Month, false),
+                form_field("cvv", "CVV", FormFieldKind::Secret, false),
+                form_field("pin", "PIN", FormFieldKind::Secret, false),
+                form_field("notes", "Notes", FormFieldKind::Notes, false),
+            ],
+        },
+        DefaultFormTemplate {
+            type_id: "00000000-0000-4000-8000-000000000003",
+            alias: "bank-account",
+            name: "Bank Account",
+            fields: vec![
+                form_field("bank", "Bank", FormFieldKind::Text, false),
+                form_field("account_name", "Account name", FormFieldKind::Text, false),
+                form_field("bsb", "BSB / routing", FormFieldKind::Text, false),
+                form_field(
+                    "account_number",
+                    "Account number",
+                    FormFieldKind::Secret,
+                    true,
+                ),
+                form_field("iban", "IBAN", FormFieldKind::Secret, false),
+                form_field("swift", "SWIFT / BIC", FormFieldKind::Text, false),
+                form_field("notes", "Notes", FormFieldKind::Notes, false),
+            ],
+        },
+        DefaultFormTemplate {
+            type_id: "00000000-0000-4000-8000-000000000004",
+            alias: "identity",
+            name: "Identity Document",
+            fields: vec![
+                form_field("full_name", "Full name", FormFieldKind::Text, true),
+                form_field("date_of_birth", "Date of birth", FormFieldKind::Date, false),
+                form_field("email", "Email", FormFieldKind::Email, false),
+                form_field("phone", "Phone", FormFieldKind::Text, false),
+                form_field(
+                    "document_number",
+                    "Document number",
+                    FormFieldKind::Secret,
+                    false,
+                ),
+                form_field("expiry", "Expiry", FormFieldKind::Date, false),
+                form_field("address", "Address", FormFieldKind::Notes, false),
+                form_field("notes", "Notes", FormFieldKind::Notes, false),
+            ],
+        },
+        DefaultFormTemplate {
+            type_id: "00000000-0000-4000-8000-000000000005",
+            alias: "server",
+            name: "Server",
+            fields: vec![
+                form_field("host", "Host", FormFieldKind::Text, true),
+                form_field("port", "Port", FormFieldKind::Number, false),
+                form_field("username", "Username", FormFieldKind::Text, false),
+                form_field("password", "Password", FormFieldKind::Secret, false),
+                form_field("url", "URL", FormFieldKind::Url, false),
+                form_field("ssh_key", "SSH key", FormFieldKind::Secret, false),
+                form_field("notes", "Notes", FormFieldKind::Notes, false),
+            ],
+        },
+        DefaultFormTemplate {
+            type_id: "00000000-0000-4000-8000-000000000006",
+            alias: "wifi",
+            name: "Wi-Fi Network",
+            fields: vec![
+                form_field("ssid", "SSID", FormFieldKind::Text, true),
+                form_field("password", "Password", FormFieldKind::Secret, false),
+                form_field("security", "Security", FormFieldKind::Text, false),
+                form_field("notes", "Notes", FormFieldKind::Notes, false),
+            ],
+        },
+        DefaultFormTemplate {
+            type_id: "00000000-0000-4000-8000-000000000007",
+            alias: "secure-note",
+            name: "Secure Note",
+            fields: vec![
+                form_field("title", "Title", FormFieldKind::Text, true),
+                form_field("note", "Note", FormFieldKind::Notes, true),
+            ],
+        },
+    ]
+}
+
+fn form_field(
+    id: &'static str,
+    label: &'static str,
+    kind: FormFieldKind,
+    required: bool,
+) -> FormFieldDefinition {
+    FormFieldDefinition {
+        id: id.to_string(),
+        label: label.to_string(),
+        kind,
+        required,
+    }
 }
 
 fn contact_record_path(name: &str) -> Result<LockboxPath> {

@@ -195,6 +195,26 @@ fn vault_directory_stores_local_keys_contacts_and_key_directory_backups() {
     assert_eq!(contacts.len(), 1);
     assert_eq!(contacts[0].name, "alice");
 
+    assert_eq!(vault.seed_default_form_definitions().unwrap(), 7);
+    assert_eq!(vault.seed_default_form_definitions().unwrap(), 0);
+    let form_aliases = vault
+        .list_form_definitions()
+        .unwrap()
+        .into_iter()
+        .map(|definition| definition.alias)
+        .collect::<Vec<_>>();
+    for alias in [
+        "bank-account",
+        "identity",
+        "login",
+        "payment-card",
+        "secure-note",
+        "server",
+        "wifi",
+    ] {
+        assert!(form_aliases.contains(&alias.to_string()), "{alias}");
+    }
+
     let password = SecretString::try_from_bytes(b"pw".to_vec()).unwrap();
     let lockbox_path = root.join("backup-source.lbox");
     let mut lockbox =

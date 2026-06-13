@@ -2305,6 +2305,7 @@ fn password_create_requires_explicit_vault_init() {
     assert!(init.contains("Vault created successfully."));
     assert!(init.contains("Directory:\n  "));
     assert!(init.contains("Identity: default"));
+    assert!(init.contains("Default forms: 7"));
     assert!(init.contains(
         "Pass phrase reminder:\n  Store the vault pass phrase somewhere safe.\n  If it is lost, reVault cannot recover this vault."
     ));
@@ -2323,11 +2324,24 @@ fn password_create_requires_explicit_vault_init() {
             "Vault created successfully.",
             "Directory:",
             "Identity: default",
+            "Default forms: 7",
             "Pass phrase reminder:",
             "If it is lost, reVault cannot recover this vault.",
         ],
     );
     assert!(vault_root.join("local-vault.lbox").exists());
+
+    let default_forms = run_output_without_content_key(
+        bin,
+        &["vault", "form", "definitions", "--format", "tsv"],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&default_forms);
+    let default_forms = String::from_utf8_lossy(&default_forms.stdout);
+    assert!(default_forms.contains("login\t"));
+    assert!(default_forms.contains("payment-card\t"));
+    assert!(default_forms.contains("secure-note\t"));
 
     let auto_open = run_output_without_content_key(
         bin,
