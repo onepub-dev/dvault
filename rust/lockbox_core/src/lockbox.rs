@@ -81,6 +81,15 @@ pub struct LockboxFileInspection {
     pub owner_signed: bool,
 }
 
+/// Owner-signing metadata verified from an opened lockbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockboxOwnerInspection {
+    /// Whether the latest commit has verified owner signatures.
+    pub signed: bool,
+    /// Stable fingerprint for the owner signing public keys, if signed.
+    pub fingerprint: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct CompressionFrameCache {
     pub(crate) entries: BTreeMap<u64, CachedCompressionFrame>,
@@ -505,6 +514,27 @@ impl Lockbox {
     /// Return the stable id embedded in this lockbox.
     pub fn lockbox_id(&self) -> LockboxId {
         self.lockbox_id
+    }
+
+    /// Return verified owner-signing metadata for this opened lockbox.
+    pub fn owner_inspection(&self) -> Result<LockboxOwnerInspection> {
+        if self.commit_auth_offset == 0 {
+            return Ok(LockboxOwnerInspection {
+                signed: false,
+                fingerprint: None,
+            });
+        }
+        let (auth, _) = self.read_and_verify_commit_auth_at(self.commit_auth_offset)?;
+        if auth.signatures.is_empty() {
+            return Ok(LockboxOwnerInspection {
+                signed: false,
+                fingerprint: None,
+            });
+        }
+        Ok(LockboxOwnerInspection {
+            signed: true,
+            fingerprint: Some(owner_signature_fingerprint(&auth.signatures)?),
+        })
     }
 
     /// Inspect public lockbox metadata without decrypting stored contents.
@@ -1357,6 +1387,35 @@ fn record_kind_from_object_kind(kind: PageObjectKind) -> Result<RecordKind> {
         | PageObjectKind::FormLeaf
         | PageObjectKind::FormInternal => Err(Error::CorruptRecord),
     }
+}
+
+fn owner_signature_fingerprint(
+    signatures: &[crate::commit_auth::CommitSignature],
+) -> Result<String> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"lockbox-owner-signing-key-v1");
+    for signature in signatures {
+        bytes.extend_from_slice(&signature.algorithm.to_le_bytes());
+        let key_len = u32::try_from(signature.public_key.len()).map_err(|_| {
+            Error::SecurityLimitExceeded("owner signing key is too large".to_string())
+        })?;
+        bytes.extend_from_slice(&key_len.to_le_bytes());
+        bytes.extend_from_slice(&signature.public_key);
+    }
+    Ok(hex_lower(&crate::crypto::strong_checksum(&bytes)[..16]))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(hex_digit(byte >> 4));
+        out.push(hex_digit(byte & 0x0f));
+    }
+    out
+}
+
+fn hex_digit(value: u8) -> char {
+    char::from(b"0123456789abcdef"[value as usize])
 }
 
 fn entry_record_slots(entry: &TocEntry) -> Vec<(u64, u64)> {

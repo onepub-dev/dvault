@@ -2149,7 +2149,7 @@ fn access_subcommand_aliases_manage_lockbox_access() {
         &vault_root,
         &agent_root,
     );
-    run_in(
+    let second_export = run_output_in(
         bin,
         &[
             "vault",
@@ -2161,14 +2161,21 @@ fn access_subcommand_aliases_manage_lockbox_access() {
         &vault_root,
         &agent_root,
     );
+    assert_success(&second_export);
+    let second_contact_key = import_public_key(&fs::read(&second_public_key).unwrap()).unwrap();
+    let second_contact_fingerprint = encode_hex(&public_key_fingerprint(&second_contact_key));
     run_in(
         bin,
         &[
             "vault",
             "contact",
-            "add",
+            "import",
             "sharee",
             second_public_key.to_str().unwrap(),
+            "--fingerprint",
+            &second_contact_fingerprint,
+            "--fingerprint-channel",
+            "phone-call-to-owner",
         ],
         &vault_root,
         &agent_root,
@@ -2257,6 +2264,11 @@ fn access_subcommand_aliases_manage_lockbox_access() {
     assert_success(&access_json);
     let access_json = String::from_utf8_lossy(&access_json.stdout);
     assert!(access_json.contains("\"name\":\"external\""));
+    assert!(access_json.contains("\"owner\":\""));
+    assert!(!access_json.contains("\"owner\":\"-\""));
+    assert!(access_json.contains("\"owner_signed\":\"yes\""));
+    assert!(access_json.contains("\"created\":\""));
+    assert!(access_json.contains("\"updated\":\""));
 
     let slot_id = access
         .lines()

@@ -57,8 +57,8 @@ pub use key_slot::{
 pub use key_wrap::{RecipientKeyPair, RecipientPublicKey, RecipientWrappedKey};
 pub use list_options::ListOptions;
 pub use lockbox::{
-    ImportStats, Lockbox, LockboxFileInspection, LockboxInspector, LockboxProtection,
-    LockboxUnlock, RecoveryScanner, VariableValueRef,
+    ImportStats, Lockbox, LockboxFileInspection, LockboxInspector, LockboxOwnerInspection,
+    LockboxProtection, LockboxUnlock, RecoveryScanner, VariableValueRef,
 };
 pub use lockbox_id::LockboxId;
 pub use lockbox_path::LockboxPath;

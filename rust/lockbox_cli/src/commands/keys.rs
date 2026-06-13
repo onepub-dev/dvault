@@ -20,6 +20,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
     if args.first().map(String::as_str) == Some("--password") {
@@ -253,6 +254,20 @@ pub(crate) fn list_keys(args: &[String], access: &Access) -> CliResult<()> {
     let (args, format) = output_format_from_args(args)?;
     let lockbox_path = require_arg(&args, 0, "lockbox")?;
     let lb = open_existing(lockbox_path, access)?;
+    let owner = lb.owner_inspection()?;
+    let owner_fingerprint = owner.fingerprint.unwrap_or_else(|| "-".to_string());
+    let owner_signed = if owner.signed { "yes" } else { "no" }.to_string();
+    let metadata = fs::metadata(lockbox_path).ok();
+    let created = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.created().ok())
+        .map(format_system_time_utc)
+        .unwrap_or_else(|| "-".to_string());
+    let updated = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.modified().ok())
+        .map(format_system_time_utc)
+        .unwrap_or_else(|| "-".to_string());
     let mut rows = Vec::new();
     for slot in lb.list_key_slots() {
         rows.push(vec![
@@ -260,9 +275,26 @@ pub(crate) fn list_keys(args: &[String], access: &Access) -> CliResult<()> {
             slot.name.unwrap_or_else(|| "-".to_string()),
             format!("{:?}", slot.protection),
             slot.algorithm.to_string(),
+            owner_fingerprint.clone(),
+            owner_signed.clone(),
+            created.clone(),
+            updated.clone(),
         ]);
     }
-    print_records(&["slot", "name", "protection", "algorithm"], rows, format)?;
+    print_records(
+        &[
+            "slot",
+            "name",
+            "protection",
+            "algorithm",
+            "owner",
+            "owner_signed",
+            "created",
+            "updated",
+        ],
+        rows,
+        format,
+    )?;
     Ok(())
 }
 
@@ -777,6 +809,33 @@ fn parse_duration(value: &str) -> CliResult<u64> {
     amount
         .checked_mul(multiplier)
         .ok_or_else(|| Error::InvalidInput(format!("duration is too large: {value}")).into())
+}
+
+fn format_system_time_utc(time: SystemTime) -> String {
+    let Ok(duration) = time.duration_since(UNIX_EPOCH) else {
+        return "-".to_string();
+    };
+    let seconds = duration.as_secs() as i64;
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    format!("{year:04}/{month:02}/{day:02} {hour:02}:{minute:02} UTC")
+}
+
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2).div_euclid(153);
+    let day = doy - (153 * mp + 2).div_euclid(5) + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
 }
 
 #[cfg(unix)]
