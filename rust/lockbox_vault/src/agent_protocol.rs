@@ -617,6 +617,13 @@ mod tests {
         let lockbox_id = LockboxId::from_bytes([1; 16]);
         let key = SecretVec::try_from_slice(b"abc").unwrap();
         let request = encode_put(lockbox_id, &key, Some("/tmp/a.lbox"), Some(30)).unwrap();
+        request
+            .with_bytes(|request| {
+                assert!(!request
+                    .windows(b"616263".len())
+                    .any(|window| window == b"616263"));
+            })
+            .unwrap();
         match parse_request(&request).unwrap() {
             AgentRequest::Put(id, parsed_key, path, ttl_seconds) => {
                 assert_eq!(id, lockbox_id.to_string());
