@@ -1193,7 +1193,7 @@ fn vault_command(verbose: bool) -> Command {
                 .disable_help_subcommand(true)
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault contact list\n  lockbox vault contact receive <share-code> alice\n  lockbox vault contact import alice ./alice.pub --fingerprint <hex>\n  lockbox vault contact remove alice",
+                    "Examples:\n  lockbox vault contact list\n  lockbox vault contact receive <share-code> alice\n  lockbox vault contact import alice ./alice.pub --fingerprint <hex> --fingerprint-channel phone-call-to-owner\n  lockbox vault contact remove alice",
                     "Context:\n  Contacts are saved public keys for other people or systems. A contact can be added to a lockbox access list, but cannot open a lockbox by itself; opening requires the matching private identity.",
                 ))
                 .subcommand_required(true)
@@ -1214,8 +1214,8 @@ fn vault_command(verbose: bool) -> Command {
                         .about("Import a contact public key after fingerprint verification.")
                         .after_help(verbose_help(
                             verbose,
-                            "Examples:\n  lockbox vault contact import alice ./alice.pub --fingerprint <hex>\n  lockbox vault contact import --overwrite alice ./alice-new.pub --fingerprint <hex>",
-                            "Context:\n  Contact import saves someone else's public key only after the full public-key fingerprint matches. Ask the key owner for the fingerprint over a second channel before importing the key.",
+                            "Examples:\n  lockbox vault contact import alice ./alice.pub --fingerprint <hex> --fingerprint-channel phone-call-to-owner\n  lockbox vault contact import --overwrite alice ./alice-new.pub --fingerprint <hex> --fingerprint-channel sms-to-owner",
+                            "Context:\n  Contact import saves someone else's public key only after the full public-key fingerprint matches. Ask the key owner for the fingerprint over a receiver-initiated second channel before importing the key. Email and owner-initiated messages are rejected.",
                         ))
                         .arg(
                             Arg::new("overwrite")
@@ -1230,6 +1230,12 @@ fn vault_command(verbose: bool) -> Command {
                                 .value_name("HEX")
                                 .help("Full public-key fingerprint from the key owner. Prompts when omitted."),
                         )
+                        .arg(
+                            Arg::new("fingerprint-channel")
+                                .long("fingerprint-channel")
+                                .value_name("CHANNEL")
+                                .help("How the fingerprint was received: phone-call-to-owner, sms-to-owner, or in-person. Prompts when omitted."),
+                        )
                         .arg(required("name", "Contact name."))
                         .arg(required("public-key", "Public key path.")),
                 )
@@ -1243,9 +1249,9 @@ fn vault_command(verbose: bool) -> Command {
                             concat!(
                                 "Context:\n  Receive saves the shared public key and signing key as a local contact. ",
                                 "The key server must have verified the publisher email first. Enter the ",
-                                "full fingerprint received through a second trusted channel. Short PINs are ",
+                                "full fingerprint received through a receiver-initiated second channel. Short PINs are ",
                                 "only accidental-error checks and are too small to authenticate a public key ",
-                                "against substitution.",
+                                "against substitution. Email and owner-initiated messages are rejected.",
                             ),
                         ))
                         .arg(key_server_arg())
@@ -1255,6 +1261,12 @@ fn vault_command(verbose: bool) -> Command {
                                 .long("fingerprint")
                                 .value_name("HEX")
                                 .help("Contact fingerprint from a trusted second channel. Prompts when omitted."),
+                        )
+                        .arg(
+                            Arg::new("fingerprint-channel")
+                                .long("fingerprint-channel")
+                                .value_name("CHANNEL")
+                                .help("How the fingerprint was received: phone-call-to-owner, sms-to-owner, or in-person. Prompts when omitted."),
                         )
                         .arg(
                             Arg::new("overwrite")

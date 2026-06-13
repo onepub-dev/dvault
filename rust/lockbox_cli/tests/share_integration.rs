@@ -49,6 +49,8 @@ fn cli_publish_and_receive_with_two_servers() {
             &cluster.topology_url(),
             "--fingerprint",
             &publish.contact_fingerprint,
+            "--fingerprint-channel",
+            "phone-call-to-owner",
         ],
         &vault_root,
         &agent_root,

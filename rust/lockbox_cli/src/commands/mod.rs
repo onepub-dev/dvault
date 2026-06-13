@@ -590,6 +590,12 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     "import" => {
                         push_flag(&mut args, contact_sub, "overwrite", "--overwrite");
                         push_option(&mut args, contact_sub, "fingerprint", "--fingerprint");
+                        push_option(
+                            &mut args,
+                            contact_sub,
+                            "fingerprint-channel",
+                            "--fingerprint-channel",
+                        );
                         args.push(value(contact_sub, "name"));
                         args.push(value(contact_sub, "public-key"));
                     }
@@ -597,6 +603,12 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     "receive" | "fetch" => {
                         push_share_transport_options(&mut args, contact_sub);
                         push_option(&mut args, contact_sub, "fingerprint", "--fingerprint");
+                        push_option(
+                            &mut args,
+                            contact_sub,
+                            "fingerprint-channel",
+                            "--fingerprint-channel",
+                        );
                         push_flag(&mut args, contact_sub, "overwrite", "--overwrite");
                         args.push(value(contact_sub, "share-code"));
                         push_optional(&mut args, contact_sub, "contact-name");

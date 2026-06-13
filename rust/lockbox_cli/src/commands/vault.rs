@@ -29,6 +29,15 @@ const SHARE_FINGERPRINT_SECURITY_NOTE: &str = concat!(
     "use the full fingerprint; short PINs are only accidental-error checks ",
     "and are too small to authenticate a public key against substitution"
 );
+const FINGERPRINT_CHANNEL_PROMPT: &str = concat!(
+    "How did you receive the fingerprint?\n",
+    "  1) email\n",
+    "  2) phone call from the key owner\n",
+    "  3) phone call to the key owner\n",
+    "  4) text/SMS message from the key owner\n",
+    "  5) text/SMS message to the key owner\n",
+    "  6) in person"
+);
 
 pub(crate) fn run(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault command")?;
@@ -403,6 +412,7 @@ fn contact_import(args: &[String]) -> CliResult<()> {
         .map(Ok)
         .unwrap_or_else(|| prompt_line("Public key fingerprint from key owner: "))?;
     let expected_fingerprint = decode_fingerprint_hex(&expected_fingerprint)?;
+    let fingerprint_channel = verify_fingerprint_channel(options.fingerprint_channel.as_deref())?;
     let computed_fingerprint = public_key_fingerprint(&recipient);
     if expected_fingerprint != computed_fingerprint {
         return Err(Error::InvalidInput(format!(
@@ -419,6 +429,7 @@ fn contact_import(args: &[String]) -> CliResult<()> {
         format_hex_pairs(&computed_fingerprint)
     );
     println!("fingerprint_verified=yes");
+    println!("fingerprint_channel={fingerprint_channel}");
     Ok(())
 }
 
@@ -426,6 +437,7 @@ fn contact_import(args: &[String]) -> CliResult<()> {
 struct ContactImportOptions {
     overwrite: bool,
     fingerprint: Option<String>,
+    fingerprint_channel: Option<String>,
     positionals: Vec<String>,
 }
 
@@ -440,6 +452,11 @@ impl ContactImportOptions {
                     index += 1;
                     options.fingerprint =
                         Some(require_arg(args, index, "--fingerprint value")?.to_string());
+                }
+                "--fingerprint-channel" => {
+                    index += 1;
+                    options.fingerprint_channel =
+                        Some(require_arg(args, index, "--fingerprint-channel value")?.to_string());
                 }
                 other if other.starts_with('-') => {
                     return Err(Error::InvalidInput(format!(
@@ -536,6 +553,7 @@ fn share_receive(args: &[String]) -> CliResult<()> {
         .map(Ok)
         .unwrap_or_else(|| prompt_line("Full fingerprint from trusted second channel: "))?;
     let expected_fingerprint = decode_fingerprint_hex(&expected_fingerprint)?;
+    let fingerprint_channel = verify_fingerprint_channel(options.fingerprint_channel.as_deref())?;
     let pool = share_client_pool(&options)?;
     let fetched = pool.fetch(&share_code)?;
     let verification = fetched.email_verification.as_ref().ok_or_else(|| {
@@ -585,6 +603,7 @@ fn share_receive(args: &[String]) -> CliResult<()> {
         format_hex_pairs(&computed_fingerprint)
     );
     println!("fingerprint_verified=yes");
+    println!("fingerprint_channel={fingerprint_channel}");
     println!("fingerprint_security={SHARE_FINGERPRINT_SECURITY_NOTE}");
     println!("email_verification_email={}", verification.email);
     println!("email_verification_status=verified");
@@ -608,6 +627,7 @@ struct ShareCliOptions {
     max_fetches: Option<u16>,
     email: Option<String>,
     fingerprint: Option<String>,
+    fingerprint_channel: Option<String>,
     overwrite: bool,
     positionals: Vec<String>,
 }
@@ -644,6 +664,11 @@ impl ShareCliOptions {
                     index += 1;
                     options.fingerprint =
                         Some(require_arg(args, index, "--fingerprint value")?.to_string());
+                }
+                "--fingerprint-channel" => {
+                    index += 1;
+                    options.fingerprint_channel =
+                        Some(require_arg(args, index, "--fingerprint-channel value")?.to_string());
                 }
                 "--overwrite" => options.overwrite = true,
                 other => options.positionals.push(other.to_string()),
@@ -817,6 +842,51 @@ fn decode_fingerprint_hex(value: &str) -> CliResult<Vec<u8>> {
         .into());
     }
     Ok(fingerprint)
+}
+
+fn verify_fingerprint_channel(value: Option<&str>) -> CliResult<&'static str> {
+    let selected = match value {
+        Some(value) => value.to_string(),
+        None => {
+            println!("{FINGERPRINT_CHANNEL_PROMPT}");
+            prompt_line("Fingerprint channel: ")?
+        }
+    };
+    let normalized = selected
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '_', '/'], "-");
+    match normalized.as_str() {
+        "1" | "email" | "e-mail" => Err(Error::InvalidInput(
+            "fingerprint channel rejected: email cannot be used because publisher email is already verified by the key server".to_string(),
+        )
+        .into()),
+        "2" | "phone-call-from-owner" | "call-from-owner" | "owner-called"
+        | "phone-call-from-key-owner" => Err(Error::InvalidInput(
+            "fingerprint channel rejected: the receiver must initiate the fingerprint check"
+                .to_string(),
+        )
+        .into()),
+        "3" | "phone-call-to-owner" | "call-to-owner" | "called-owner"
+        | "phone-call-to-key-owner" => Ok("phone-call-to-owner"),
+        "4" | "text-from-owner" | "sms-from-owner" | "text-message-from-owner"
+        | "sms-message-from-owner" | "text-from-key-owner" | "sms-from-key-owner" => {
+            Err(Error::InvalidInput(
+                "fingerprint channel rejected: the receiver must initiate the fingerprint check"
+                    .to_string(),
+            )
+            .into())
+        }
+        "5" | "text-to-owner" | "sms-to-owner" | "text-message-to-owner"
+        | "sms-message-to-owner" | "text-to-key-owner" | "sms-to-key-owner" => {
+            Ok("sms-to-owner")
+        }
+        "6" | "in-person" | "inperson" | "face-to-face" => Ok("in-person"),
+        _ => Err(Error::InvalidInput(format!(
+            "unknown fingerprint channel: {selected}; use phone-call-to-owner, sms-to-owner, or in-person"
+        ))
+        .into()),
+    }
 }
 
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
@@ -1173,7 +1243,7 @@ fn set_private_key_permissions(_path: &str) -> CliResult<()> {
 mod tests {
     use super::{
         contact_name_from_email, decode_fingerprint_hex, format_hex_pairs, format_unix_ms_utc,
-        SHARE_RECEIVE_VERIFICATION_ADVICE,
+        verify_fingerprint_channel, SHARE_RECEIVE_VERIFICATION_ADVICE,
     };
 
     #[test]
@@ -1208,6 +1278,32 @@ mod tests {
         let short = decode_fingerprint_hex("123456").unwrap_err().to_string();
         assert!(short.contains("short PINs"));
         assert!(short.contains("authenticate a public key"));
+    }
+
+    #[test]
+    fn fingerprint_channel_requires_receiver_initiated_second_channel() {
+        assert_eq!(
+            verify_fingerprint_channel(Some("phone-call-to-owner")).unwrap(),
+            "phone-call-to-owner"
+        );
+        assert_eq!(
+            verify_fingerprint_channel(Some("5")).unwrap(),
+            "sms-to-owner"
+        );
+        assert_eq!(
+            verify_fingerprint_channel(Some("in person")).unwrap(),
+            "in-person"
+        );
+
+        let email = verify_fingerprint_channel(Some("email"))
+            .unwrap_err()
+            .to_string();
+        assert!(email.contains("email cannot be used"));
+
+        let owner_initiated = verify_fingerprint_channel(Some("sms-from-owner"))
+            .unwrap_err()
+            .to_string();
+        assert!(owner_initiated.contains("receiver must initiate"));
     }
 
     #[test]
