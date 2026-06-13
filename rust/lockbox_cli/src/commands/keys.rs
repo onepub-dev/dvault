@@ -244,9 +244,10 @@ pub(crate) fn add_access(args: &[String], access: &Access) -> CliResult<()> {
         )
     })?;
     let mut lb = open_existing(lockbox_path, access)?;
-    lb.add_recipient_named(name, &recipient.public_key)?;
+    let slot_id = lb.add_recipient_named(name.clone(), &recipient.public_key)?;
     lb.commit()?;
     mirror_key_directory(&lb, lockbox_path)?;
+    default_vault()?.remember_access_slot_label(lb.lockbox_id(), slot_id, name)?;
     Ok(())
 }
 
@@ -258,6 +259,7 @@ pub(crate) fn list_keys(args: &[String], access: &Access) -> CliResult<()> {
     let owner_fingerprint = owner.fingerprint.unwrap_or_else(|| "-".to_string());
     let owner_signed = if owner.signed { "yes" } else { "no" }.to_string();
     let metadata = fs::metadata(lockbox_path).ok();
+    let labels = access_slot_labels_by_slot(lb.lockbox_id());
     let created = metadata
         .as_ref()
         .and_then(|metadata| metadata.created().ok())
@@ -270,9 +272,14 @@ pub(crate) fn list_keys(args: &[String], access: &Access) -> CliResult<()> {
         .unwrap_or_else(|| "-".to_string());
     let mut rows = Vec::new();
     for slot in lb.list_key_slots() {
+        let name = labels
+            .get(&slot.id)
+            .cloned()
+            .or(slot.name)
+            .unwrap_or_else(|| "-".to_string());
         rows.push(vec![
             slot.id.to_string(),
-            slot.name.unwrap_or_else(|| "-".to_string()),
+            name,
             format!("{:?}", slot.protection),
             slot.algorithm.to_string(),
             owner_fingerprint.clone(),
@@ -300,8 +307,9 @@ pub(crate) fn list_keys(args: &[String], access: &Access) -> CliResult<()> {
 
 pub(crate) fn remove_access(args: &[String], access: &Access) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
-    let slot_id = require_arg(args, 1, "slot id")?.parse::<u64>()?;
+    let target = require_arg(args, 1, "slot id or local access name")?;
     let mut lb = open_existing(lockbox_path, access)?;
+    let slot_id = resolve_access_remove_target(&lb, target)?;
     if let Err(err) = lb.delete_key(slot_id) {
         if matches!(
             &err,
@@ -316,6 +324,11 @@ pub(crate) fn remove_access(args: &[String], access: &Access) -> CliResult<()> {
     }
     lb.commit()?;
     mirror_key_directory(&lb, lockbox_path)?;
+    let _ = default_vault().and_then(|vault| {
+        vault
+            .forget_access_slot_label(lb.lockbox_id(), slot_id)
+            .map(|_| ())
+    });
     Ok(())
 }
 
@@ -436,15 +449,44 @@ fn refresh_targets_for_lockbox(
 }
 
 fn matching_recipient_slot_ids(lockbox: &Lockbox, identity: &str) -> Vec<u64> {
+    let labels = access_slot_labels_by_slot(lockbox.lockbox_id());
     lockbox
         .list_key_slots()
         .into_iter()
         .filter(|slot| {
             slot.protection == LockboxKeySlotProtection::Recipient
-                && slot.name.as_deref() == Some(identity)
+                && labels.get(&slot.id).is_some_and(|name| name == identity)
         })
         .map(|slot| slot.id)
         .collect()
+}
+
+fn access_slot_labels_by_slot(lockbox_id: lockbox_core::LockboxId) -> BTreeMap<u64, String> {
+    default_vault()
+        .and_then(|vault| vault.list_access_slot_labels(lockbox_id))
+        .map(|labels| {
+            labels
+                .into_iter()
+                .map(|label| (label.slot_id, label.name))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn resolve_access_remove_target(lockbox: &Lockbox, target: &str) -> CliResult<u64> {
+    if let Ok(slot_id) = target.parse::<u64>() {
+        return Ok(slot_id);
+    }
+    let labels = default_vault()?.find_access_slot_labels(lockbox.lockbox_id(), target)?;
+    match labels.as_slice() {
+        [label] => Ok(label.slot_id),
+        [] => Err(cli_error(format!(
+            "no local access label named {target}; use `lockbox access list` and remove by slot id"
+        ))),
+        _ => Err(cli_error(format!(
+            "multiple local access labels named {target}; remove by slot id"
+        ))),
+    }
 }
 
 fn print_refresh_plan(
@@ -570,9 +612,15 @@ fn refresh_lockbox_identity(
         return Ok(false);
     }
     let new_slot_id = lb.add_recipient_named(identity.to_string(), public_key)?;
+    default_vault()?.remember_access_slot_label(lb.lockbox_id(), new_slot_id, identity)?;
     for slot_id in old_slot_ids {
         if slot_id != new_slot_id {
             lb.delete_key(slot_id)?;
+            let _ = default_vault().and_then(|vault| {
+                vault
+                    .forget_access_slot_label(lb.lockbox_id(), slot_id)
+                    .map(|_| ())
+            });
         }
     }
     lb.commit()?;

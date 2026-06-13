@@ -59,6 +59,15 @@ pub struct KnownLockbox {
     pub last_seen_unix_ms: u64,
 }
 
+/// Local-only label for one access slot in a remembered lockbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessSlotLabel {
+    pub lockbox_id: LockboxId,
+    pub slot_id: u64,
+    pub name: String,
+    pub updated_at_unix_ms: u64,
+}
+
 /// One generation of a vault identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityGeneration {
@@ -540,6 +549,67 @@ impl VaultDirectory {
     /// deleted or modified.
     pub fn forget_known_lockbox(&self, path: impl AsRef<Path>) -> Result<()> {
         self.delete_record_if_exists(&known_lockbox_record_path(path.as_ref())?)
+    }
+
+    /// Remember a local name for one lockbox access slot.
+    ///
+    /// This mapping is stored only inside the encrypted local vault. It is not
+    /// written to the shared lockbox, so it does not disclose recipients to
+    /// third parties who inspect the lockbox file.
+    pub fn remember_access_slot_label(
+        &self,
+        lockbox_id: LockboxId,
+        slot_id: u64,
+        name: impl Into<String>,
+    ) -> Result<()> {
+        let label = AccessSlotLabel {
+            lockbox_id,
+            slot_id,
+            name: name.into(),
+            updated_at_unix_ms: unix_ms(SystemTime::now()),
+        };
+        self.put_record_replace(
+            &access_slot_label_record_path(lockbox_id, slot_id)?,
+            &encode_access_slot_label(&label),
+        )
+    }
+
+    /// Lists local access-slot labels remembered for one lockbox.
+    pub fn list_access_slot_labels(&self, lockbox_id: LockboxId) -> Result<Vec<AccessSlotLabel>> {
+        let root = access_slot_label_root(lockbox_id);
+        let mut out = Vec::new();
+        for slot_id in self.list_record_names(&root, ".lbas")? {
+            let slot_id = slot_id.parse::<u64>().map_err(|_| {
+                Error::CorruptVaultRecord(format!("access slot label id {slot_id} is not numeric"))
+            })?;
+            out.push(decode_access_slot_label(&self.get_record(
+                &access_slot_label_record_path(lockbox_id, slot_id)?,
+            )?)?);
+        }
+        out.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.slot_id.cmp(&right.slot_id))
+        });
+        Ok(out)
+    }
+
+    /// Finds local slot labels for `name` in one lockbox.
+    pub fn find_access_slot_labels(
+        &self,
+        lockbox_id: LockboxId,
+        name: &str,
+    ) -> Result<Vec<AccessSlotLabel>> {
+        Ok(self
+            .list_access_slot_labels(lockbox_id)?
+            .into_iter()
+            .filter(|label| label.name == name)
+            .collect())
+    }
+
+    /// Forget one local access-slot label.
+    pub fn forget_access_slot_label(&self, lockbox_id: LockboxId, slot_id: u64) -> Result<()> {
+        self.delete_record_if_exists(&access_slot_label_record_path(lockbox_id, slot_id)?)
     }
 
     /// Creates or revises a reusable form definition stored in the vault.
@@ -1324,6 +1394,17 @@ fn known_lockbox_record_path(path: impl AsRef<Path>) -> Result<LockboxPath> {
     LockboxPath::new(format!("/known_lockboxes/{encoded}.lkl"))
 }
 
+fn access_slot_label_root(lockbox_id: LockboxId) -> String {
+    format!("/access_slots/{}", crate::encode_hex(lockbox_id.as_bytes()))
+}
+
+fn access_slot_label_record_path(lockbox_id: LockboxId, slot_id: u64) -> Result<LockboxPath> {
+    LockboxPath::new(format!(
+        "{}/{slot_id}.lbas",
+        access_slot_label_root(lockbox_id)
+    ))
+}
+
 fn vault_structure_version_record_path() -> Result<LockboxPath> {
     LockboxPath::new(VAULT_STRUCTURE_VERSION_PATH)
 }
@@ -1430,6 +1511,46 @@ fn decode_known_lockbox(bytes: &[u8]) -> Result<KnownLockbox> {
         lockbox_id,
         path,
         last_seen_unix_ms,
+    })
+}
+
+fn encode_access_slot_label(label: &AccessSlotLabel) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"LBAS");
+    put_u16(&mut out, 1);
+    out.extend_from_slice(label.lockbox_id.as_bytes());
+    put_u64(&mut out, label.slot_id);
+    put_string(&mut out, &label.name);
+    put_u64(&mut out, label.updated_at_unix_ms);
+    out
+}
+
+fn decode_access_slot_label(bytes: &[u8]) -> Result<AccessSlotLabel> {
+    let mut reader = BinaryReader::new(bytes);
+    if reader.bytes(4)? != b"LBAS" {
+        return Err(Error::CorruptVaultRecord(
+            "access slot label record has invalid magic".to_string(),
+        ));
+    }
+    let version = reader.u16()?;
+    if version != 1 {
+        return Err(Error::CorruptVaultRecord(format!(
+            "access slot label version {version} is not supported"
+        )));
+    }
+    let id = reader.bytes(16)?;
+    let lockbox_id = LockboxId::from_bytes(id.try_into().map_err(|_| {
+        Error::CorruptVaultRecord("access slot label lockbox id has invalid length".to_string())
+    })?);
+    let slot_id = reader.u64()?;
+    let name = reader.string()?;
+    let updated_at_unix_ms = reader.u64()?;
+    reader.finish()?;
+    Ok(AccessSlotLabel {
+        lockbox_id,
+        slot_id,
+        name,
+        updated_at_unix_ms,
     })
 }
 

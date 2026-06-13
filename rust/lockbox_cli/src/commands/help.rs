@@ -950,7 +950,7 @@ fn access_command(verbose: bool) -> Command {
     sharing_command("access", "Manage who can open a lockbox.")
         .after_help(verbose_help(
             verbose,
-            "Examples:\n  lockbox access list secrets.lbox\n  lockbox access add secrets.lbox alice\n  lockbox access remove secrets.lbox 2",
+            "Examples:\n  lockbox access list secrets.lbox\n  lockbox access add secrets.lbox alice\n  lockbox access remove secrets.lbox alice\n  lockbox access remove secrets.lbox 2",
             "Context:\n  Access entries are stored on a lockbox and describe which identities or contacts may open it. Use this command when sharing a lockbox or rotating/removing access.",
         ))
         .subcommand_required(true)
@@ -995,15 +995,15 @@ fn access_command(verbose: bool) -> Command {
                 .visible_alias("rm")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox access remove secrets.lbox 2\n  lockbox access rm secrets.lbox 2",
-                    "Context:\n  Access remove deletes one open slot from the lockbox. reVault prevents removing the last usable access entry because that could make the lockbox inaccessible.",
+                    "Examples:\n  lockbox access remove secrets.lbox alice\n  lockbox access remove secrets.lbox 2\n  lockbox access rm secrets.lbox 2",
+                    "Context:\n  Access remove deletes one open slot from the lockbox. Pass a local identity/contact name when this vault remembers which slot was added for that name, or pass the slot id from access list. reVault prevents removing the last usable access entry because that could make the lockbox inaccessible.",
                 ))
                 .arg(
                     Arg::new("args")
-                        .value_name("LOCKBOX SLOT_ID | SLOT_ID")
+                        .value_name("LOCKBOX NAME_OR_SLOT_ID | NAME_OR_SLOT_ID")
                         .num_args(1..=2)
                         .action(ArgAction::Append)
-                        .help("With an active lockbox, pass only the access slot id."),
+                        .help("With an active lockbox, pass only the local access name or slot id."),
                 ),
         )
         .subcommand(

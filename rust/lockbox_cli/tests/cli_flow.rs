@@ -336,6 +336,17 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(access_list_verbose_help.contains("Recipient names are not stored"));
     assert!(access_list_verbose_help.contains("cannot identify or correlate"));
 
+    let access_remove_help = run_output(bin, &["access", "remove", "--help"]);
+    assert_success(&access_remove_help);
+    let access_remove_help = String::from_utf8_lossy(&access_remove_help.stdout);
+    assert!(access_remove_help.contains("NAME_OR_SLOT_ID"));
+
+    let access_remove_verbose_help = run_output(bin, &["access", "remove", "--help", "--verbose"]);
+    assert_success(&access_remove_verbose_help);
+    let access_remove_verbose_help = String::from_utf8_lossy(&access_remove_verbose_help.stdout);
+    assert!(access_remove_verbose_help.contains("local identity/contact name"));
+    assert!(access_remove_verbose_help.contains("pass the slot id"));
+
     let access_add_verbose_help = run_output(bin, &["access", "add", "--help", "--verbose"]);
     assert_success(&access_add_verbose_help);
     let access_add_verbose_help = String::from_utf8_lossy(&access_add_verbose_help.stdout);
@@ -2390,9 +2401,8 @@ fn access_subcommand_aliases_manage_lockbox_access() {
     assert_success(&access);
     let access = String::from_utf8_lossy(&access.stdout);
     assert!(access.lines().any(|line| !line.trim().is_empty()));
-    assert!(access.contains("\t-\tRecipient\t"));
-    assert!(!access.contains("sharee"));
-    assert!(access.matches("\t-\tRecipient\t").count() >= 2);
+    assert!(access.contains("\texternal\tRecipient\t"));
+    assert!(access.matches("\tsharee\tRecipient\t").count() >= 2);
 
     let access_json = run_output_in(
         bin,
@@ -2408,13 +2418,38 @@ fn access_subcommand_aliases_manage_lockbox_access() {
     );
     assert_success(&access_json);
     let access_json = String::from_utf8_lossy(&access_json.stdout);
-    assert!(!access_json.contains("external"));
-    assert!(access_json.contains("\"name\":\"-\""));
+    assert!(access_json.contains("\"name\":\"external\""));
+    assert!(access_json.contains("\"name\":\"sharee\""));
     assert!(access_json.contains("\"owner\":\""));
     assert!(!access_json.contains("\"owner\":\"-\""));
     assert!(access_json.contains("\"owner_signed\":\"yes\""));
     assert!(access_json.contains("\"created\":\""));
     assert!(access_json.contains("\"updated\":\""));
+
+    let ambiguous = run_output_in(
+        bin,
+        &["access", "remove", lockbox.to_str().unwrap(), "sharee"],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!ambiguous.status.success());
+    assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("multiple local access labels"));
+
+    run_in(
+        bin,
+        &["access", "remove", lockbox.to_str().unwrap(), "external"],
+        &vault_root,
+        &agent_root,
+    );
+    let access = run_output_in(
+        bin,
+        &["access", "ls", "--format", "tsv", lockbox.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&access);
+    let access = String::from_utf8_lossy(&access.stdout);
+    assert!(!access.contains("external"));
 
     let slot_id = access
         .lines()
