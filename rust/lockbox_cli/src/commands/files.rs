@@ -368,9 +368,12 @@ fn join_lockbox_path(lockbox_root: &LockboxPath, relative: &Path) -> CliResult<L
 }
 
 fn confirm_remove(path: &str) -> CliResult<bool> {
-    eprint!("Remove lockbox entry '{path}'? Type yes to confirm: ");
+    eprint!("Remove lockbox entry '{path}'? Type y or yes to confirm: ");
     io::stderr().flush()?;
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
-    Ok(answer.trim() == "yes")
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }

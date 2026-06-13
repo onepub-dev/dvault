@@ -1122,7 +1122,7 @@ fn remove_requires_confirmation_and_reports_count() {
     );
     assert_success(&refused);
     assert!(String::from_utf8_lossy(&refused.stderr)
-        .contains("Remove lockbox entry '/docs/remove.txt'?"));
+        .contains("Remove lockbox entry '/docs/remove.txt'? Type y or yes to confirm:"));
     assert!(String::from_utf8_lossy(&refused.stdout).contains("No entries removed."));
 
     let listing = run_output(bin, &["list", "--recursive", lockbox.to_str().unwrap()]);
@@ -1132,7 +1132,7 @@ fn remove_requires_confirmation_and_reports_count() {
     let removed = run_output_with_stdin(
         bin,
         &["rm", lockbox.to_str().unwrap(), "/docs/remove.txt"],
-        "yes\n",
+        "y\n",
     );
     assert_success(&removed);
     assert!(String::from_utf8_lossy(&removed.stdout).contains("Removed 1 file"));
