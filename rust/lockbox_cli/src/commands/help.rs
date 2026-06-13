@@ -552,8 +552,8 @@ fn variables_command(verbose: bool) -> Command {
             .about("Print all non-secret variable values in an importable format.")
             .after_help(verbose_help(
                 verbose,
-                "Examples:\n  eval \"$(lockbox variables export secrets.lbox)\"\n  lockbox variables export secrets.lbox /production\n  lockbox variables export --format posix secrets.lbox > variables.sh\n  lockbox variables export --format powershell secrets.lbox | Invoke-Expression\n\nFormats:\n  posix       NAME='value' lines for sh, bash, and zsh. Default.\n  powershell  $env:NAME = 'value' lines for PowerShell.\n  cmd         set \"NAME=value\" lines for cmd.exe.\n  json        One JSON object per line with name and value fields.\n\n`variables export` writes to stdout. Use shell redirection to write it to a file.",
-                "Context:\n  Variables export is intended for shell startup, CI setup, or scripting. It only includes non-secret values; use explicit `variables get --secret` for secret values so they are never exported in bulk by accident. When exporting a path such as /production, only direct child names are emitted, so /production/API_KEY becomes API_KEY and nested values are skipped.",
+                "Examples:\n  eval \"$(lockbox variables export secrets.lbox)\"\n  lockbox variables export secrets.lbox /production\n  lockbox variables export secrets.lbox '**/API_KEY'\n  lockbox variables export --format posix secrets.lbox > variables.sh\n  lockbox variables export --format powershell secrets.lbox | Invoke-Expression\n\nFormats:\n  posix       NAME='value' lines for sh, bash, and zsh. Default.\n  powershell  $env:NAME = 'value' lines for PowerShell.\n  cmd         set \"NAME=value\" lines for cmd.exe.\n  json        One JSON object per line with name and value fields.\n\n`variables export` writes to stdout. Use shell redirection to write it to a file.",
+                "Context:\n  Variables export is intended for shell startup, CI setup, or scripting. It only includes non-secret values; use explicit `variables get --secret` for secret values so they are never exported in bulk by accident. The optional filter follows the same path or glob pattern rules as variables list. Grouped names are flattened with underscores for shell-safe output.",
             ))
             .arg(
                 Arg::new("format")
@@ -564,10 +564,10 @@ fn variables_command(verbose: bool) -> Command {
             )
             .arg(
                 Arg::new("args")
-                    .value_name("LOCKBOX PATH | PATH")
+                    .value_name("LOCKBOX PATTERN | PATTERN")
                     .num_args(0..=2)
                     .action(ArgAction::Append)
-                    .help("With an active lockbox, pass only the optional variable path."),
+                    .help("With an active lockbox, pass only the optional pattern."),
             ),
     )
     .subcommand(

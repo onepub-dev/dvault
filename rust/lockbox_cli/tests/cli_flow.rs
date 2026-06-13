@@ -168,6 +168,11 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(env_set_verbose_help.contains("Choose one value source"));
     assert!(env_set_verbose_help.contains("Secret values cannot use --value"));
 
+    let env_export_help = run_output(bin, &["variables", "export", "--help"]);
+    assert_success(&env_export_help);
+    let env_export_help = String::from_utf8_lossy(&env_export_help.stdout);
+    assert!(env_export_help.contains("LOCKBOX PATTERN | PATTERN"));
+
     let env_get_help = run_output(bin, &["variables", "get", "--help"]);
     assert_success(&env_get_help);
     let env_get_help = String::from_utf8_lossy(&env_get_help.stdout);
@@ -3560,9 +3565,27 @@ fn cli_secret_variables_require_explicit_source_and_redact_export() {
     );
     assert_success(&production_export);
     let production_export = String::from_utf8_lossy(&production_export.stdout);
-    assert!(production_export.contains("APP_MODE='prod-path'"));
-    assert!(!production_export.contains("DATABASE_URL"));
+    assert!(production_export.contains("production_APP_MODE='prod-path'"));
+    assert!(
+        production_export.contains("production_database_DATABASE_URL='postgres://localhost/app'")
+    );
     assert!(!production_export.contains("staging-path"));
+
+    let app_mode_export = run_output(
+        bin,
+        &[
+            "variables",
+            "export",
+            lockbox.to_str().unwrap(),
+            "**/APP_MODE",
+        ],
+    );
+    assert_success(&app_mode_export);
+    let app_mode_export = String::from_utf8_lossy(&app_mode_export.stdout);
+    assert!(app_mode_export.contains("APP_MODE='prod'"));
+    assert!(app_mode_export.contains("production_APP_MODE='prod-path'"));
+    assert!(app_mode_export.contains("staging_APP_MODE='staging-path'"));
+    assert!(!app_mode_export.contains("DATABASE_URL"));
 
     let powershell_export = run_output(
         bin,

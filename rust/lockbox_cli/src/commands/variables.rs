@@ -51,7 +51,7 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
             let lb = open_existing(lockbox_path, access)?;
             lb.visit_variables(|name, value| match value {
                 VariableValueRef::Normal(value) => {
-                    if let Some(name) = request.export_name(name.as_str()) {
+                    if let Some(name) = request.export_name(name) {
                         println!("{}", request.format.format_assignment(&name, value));
                     }
                     Ok(())
@@ -424,14 +424,14 @@ enum VariableExportFormat {
 }
 
 struct VariableExportRequest {
-    path: Option<String>,
+    pattern: Option<VariableNamePattern>,
     format: VariableExportFormat,
 }
 
 impl VariableExportRequest {
     fn parse(args: &[String]) -> CliResult<Self> {
-        let mut path = None;
-        let mut saw_path = false;
+        let mut pattern = None;
+        let mut saw_pattern = false;
         let mut format = VariableExportFormat::Posix;
         let mut index = 0;
         while index < args.len() {
@@ -441,9 +441,9 @@ impl VariableExportRequest {
                     format =
                         VariableExportFormat::parse_value(args.get(index).map(String::as_str))?;
                 }
-                value if !saw_path => {
-                    path = Some(validate_export_path(value)?);
-                    saw_path = true;
+                value if !saw_pattern => {
+                    pattern = Some(VariableNamePattern::new(value)?);
+                    saw_pattern = true;
                 }
                 _ => {
                     return Err(Error::InvalidInput(
@@ -454,26 +454,18 @@ impl VariableExportRequest {
             }
             index += 1;
         }
-        Ok(Self { path, format })
+        Ok(Self { pattern, format })
     }
 
-    fn export_name(&self, name: &str) -> Option<String> {
-        let Some(path) = self.path.as_deref() else {
-            return export_all_name(name);
-        };
-        if path == "/" {
-            let name = name.strip_prefix('/')?;
-            if name.contains('/') {
-                return None;
-            }
-            return Some(name.to_string());
-        }
-        let rest = name.strip_prefix(path)?;
-        let rest = rest.strip_prefix('/')?;
-        if rest.contains('/') {
+    fn export_name(&self, name: &VariableName) -> Option<String> {
+        if self
+            .pattern
+            .as_ref()
+            .is_some_and(|pattern| !name.matches_pattern(pattern))
+        {
             return None;
         }
-        Some(rest.to_string())
+        export_all_name(name.as_str())
     }
 }
 
@@ -512,14 +504,6 @@ impl VariableExportFormat {
             ),
         }
     }
-}
-
-fn validate_export_path(path: &str) -> CliResult<String> {
-    if path == "/" {
-        return Ok(path.to_string());
-    }
-    let name = VariableName::new(path)?;
-    Ok(name.as_str().to_string())
 }
 
 fn set_source(target: &mut Option<ValueSource>, source: ValueSource) -> CliResult<()> {
