@@ -508,7 +508,7 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             )?);
             push_option(&mut args, sub, "format", "--format");
         }
-        "rm" => {
+        "remove" | "rm" => {
             args.extend(optional_lockbox_positionals(
                 positional_values(sub, "args"),
                 1,

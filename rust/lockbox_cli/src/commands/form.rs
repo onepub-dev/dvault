@@ -26,7 +26,7 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
         "get" => get(&args[1..], access),
         "show" => inspect(&args[1..], access),
         "list" => list(&args[1..], access),
-        "rm" => remove(&args[1..], access),
+        "remove" | "rm" => remove(&args[1..], access),
         _ => Err(Error::InvalidInput(format!("unknown form command: {subcommand}")).into()),
     }
 }

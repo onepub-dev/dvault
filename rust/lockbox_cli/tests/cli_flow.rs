@@ -100,7 +100,7 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(form_help.contains("capture"));
     assert!(form_help.contains("add"));
     assert!(form_help.contains("show"));
-    assert!(form_help.contains("rm"));
+    assert!(form_help.contains("remove"));
 
     let form_define_help = run_output(bin, &["form", "define", "--help"]);
     assert_success(&form_define_help);
@@ -681,8 +681,23 @@ fn form_definitions_and_records_flow() {
             "login",
         ],
     );
-    run(bin, &["form", "rm", &lockbox, "/work/remove-me"]);
+    run(bin, &["form", "remove", &lockbox, "/work/remove-me"]);
     let removed = run_output(bin, &["form", "show", &lockbox, "/work/remove-me"]);
+    assert!(!removed.status.success());
+
+    run(
+        bin,
+        &[
+            "form",
+            "add",
+            &lockbox,
+            "/work/remove-alias",
+            "--type",
+            "login",
+        ],
+    );
+    run(bin, &["form", "rm", &lockbox, "/work/remove-alias"]);
+    let removed = run_output(bin, &["form", "show", &lockbox, "/work/remove-alias"]);
     assert!(!removed.status.success());
 
     run(
@@ -3480,7 +3495,7 @@ fn session_active_lockbox_applies_to_lockbox_argument_variants() {
     );
     run_in(
         bin,
-        &["form", "rm", "/work/github"],
+        &["form", "remove", "/work/github"],
         &vault_root,
         &agent_root,
     );

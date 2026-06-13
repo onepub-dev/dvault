@@ -867,7 +867,8 @@ fn form_command(verbose: bool) -> Command {
                 ),
         )
         .subcommand(
-            Command::new("rm")
+            Command::new("remove")
+                .visible_alias("rm")
                 .about("Remove one form record.")
                 .arg(
                     Arg::new("args")
