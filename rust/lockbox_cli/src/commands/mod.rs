@@ -148,6 +148,9 @@ fn read_worker_policy(matches: &ArgMatches) -> CliResult<WorkerPolicy> {
 
 fn create_args(matches: &ArgMatches) -> Vec<String> {
     let mut args = Vec::new();
+    if matches.get_flag("password") {
+        args.push("--password".to_string());
+    }
     if let Some(recipient) = matches.get_one::<String>("for") {
         args.push("--recipient".to_string());
         args.push(recipient.clone());

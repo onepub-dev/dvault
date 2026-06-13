@@ -39,12 +39,20 @@ pub(crate) fn command(verbose: bool) -> Command {
             archive_command("create", "Create a new encrypted lockbox.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox vault init\n  lockbox create secrets.lbox\n  lockbox create --for alice secrets.lbox",
-                    "Context:\n  Use create when starting a new encrypted archive. By default it prompts for a new lockbox password. Password and shared lockboxes use the local vault for key recovery metadata, so initialize the vault before creating important lockboxes.",
+                    "Examples:\n  lockbox vault init\n  lockbox create secrets.lbox\n  lockbox create --password secrets.lbox\n  lockbox create --for alice secrets.lbox",
+                    "Context:\n  Use create when starting a new encrypted archive. By default it creates a lockbox for the vault's default identity. Use --password when you need a password-protected lockbox.",
                 ))
+                .arg(
+                    Arg::new("password")
+                        .long("password")
+                        .conflicts_with("for")
+                        .action(ArgAction::SetTrue)
+                        .help("Create a password-protected lockbox."),
+                )
                 .arg(
                     Arg::new("for")
                         .long("for")
+                        .conflicts_with("password")
                         .value_name("IDENTITY_OR_CONTACT")
                         .help("Create the lockbox for one of your identities or a saved contact."),
                 )
@@ -547,7 +555,7 @@ fn form_command(verbose: bool) -> Command {
                 )
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form define secrets.lbox login --name Login --field username:text:required:User --field password:secret:required:Password\n\nField form:\n  FIELD[:KIND[:required[:LABEL]]]\n\nKinds:\n  text, secret, password, url, email, date, month, notes, number, otp",
+                    "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form define secrets.lbox login --name Login --field username:text:required:User --field password:secret:required:Password\n\nField form:\n  FIELD[:KIND[:required[:LABEL]]]\n\nKinds:\n  text, secret, password, url, email, date, month, notes, number",
                     "Context:\n  Define creates a new form definition for a new alias. If the alias already resolves to exactly one definition, define appends a new revision. If an imported shared lockbox has conflicting aliases, pass --definition-id to revise the intended definition explicitly.",
                 ))
                 .arg(required("lockbox", "Lockbox path."))

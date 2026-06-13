@@ -11,8 +11,9 @@ use lockbox_core::{
     RecipientPublicKey,
 };
 use lockbox_vault::{
-    auto_open_scope, encode_hex, export_private_key, list as list_open_lockboxes, local_vault,
-    AutoOpenScope, KeyFormat, NoopStore, SecretVec, Vault,
+    auto_open_scope, default_vault_path, encode_hex, export_private_key,
+    get_platform_vault_password, list as list_open_lockboxes, local_vault, AutoOpenScope,
+    KeyFormat, NoopStore, SecretString, SecretVec, Vault, VaultDirectory,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -21,6 +22,18 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
+    if args.first().map(String::as_str) == Some("--password") {
+        let lockbox_path = create_path(require_arg(args, 1, "lockbox")?)?;
+        ensure_new_lockbox_path(&lockbox_path)?;
+        ensure_default_vault_initialized()?;
+        let _vault = default_vault()?;
+        println!("Creating lockbox: {}", lockbox_path.display());
+        let password = read_new_password()?;
+        let lb = local_vault().create_lockbox_with_password(&lockbox_path, &password)?;
+        remember_lockbox_password_if_enabled(&lb, &password)?;
+        mirror_key_directory(&lb, &lockbox_path)?;
+        return Ok(());
+    }
     if args.first().map(String::as_str) == Some("--recipient") {
         let recipient_name = require_arg(args, 1, "recipient")?;
         let lockbox_path = create_path(require_arg(args, 2, "lockbox")?)?;
@@ -52,10 +65,14 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
         }
         Access::PromptPassword => {
             ensure_default_vault_initialized()?;
-            let _vault = default_vault()?;
-            let password = read_new_password()?;
-            let lb = local_vault().create_lockbox_with_password(&lockbox_path, &password)?;
-            remember_lockbox_password_if_enabled(&lb, &password)?;
+            let recipient = load_recipient_from_arg(VaultDirectory::DEFAULT_KEY_NAME)?;
+            let lb = Vault::new(NoopStore).create_lockbox(
+                &lockbox_path,
+                LockboxProtection::RecipientPublicKey {
+                    name: recipient.name,
+                    recipient: recipient.public_key,
+                },
+            )?;
             mirror_key_directory(&lb, &lockbox_path)?;
         }
         Access::CacheOnly => {
@@ -67,6 +84,13 @@ pub(crate) fn create(args: &[String], access: &Access) -> CliResult<()> {
 
 pub(crate) fn open(args: &[String]) -> CliResult<()> {
     let options = OpenOptions::parse(args)?;
+    if matches!(options.password_source, PasswordSource::Prompt) {
+        if let Some(lb) = open_with_vault_identity(&options)? {
+            mirror_key_directory(&lb, &options.lockbox_path)?;
+            println!("Lockbox opened: {}", options.lockbox_path);
+            return Ok(());
+        }
+    }
     let password = options.read_password()?;
     let lb = if let Some(ttl_seconds) = options.ttl_seconds {
         local_vault().unlock_lockbox_with_password_for_duration(
@@ -81,6 +105,60 @@ pub(crate) fn open(args: &[String]) -> CliResult<()> {
     remember_lockbox_password_if_enabled(&lb, &password)?;
     println!("Lockbox opened: {}", options.lockbox_path);
     Ok(())
+}
+
+fn open_with_vault_identity(options: &OpenOptions) -> CliResult<Option<Lockbox>> {
+    let Some(vault) = default_vault_noninteractive()? else {
+        return Ok(None);
+    };
+    let mut identities = vault.list_private_keys()?;
+    if let Some(index) = identities
+        .iter()
+        .position(|name| name == VaultDirectory::DEFAULT_KEY_NAME)
+    {
+        let default = identities.remove(index);
+        identities.insert(0, default);
+    }
+    for identity in identities {
+        let Ok(keypair) = vault.load_private_key(&identity) else {
+            continue;
+        };
+        let unlocked = if let Some(ttl_seconds) = options.ttl_seconds {
+            local_vault().unlock_lockbox_for_duration(
+                &options.lockbox_path,
+                LockboxUnlock::RecipientKeyPair(keypair),
+                ttl_seconds,
+            )
+        } else {
+            local_vault().unlock_lockbox(
+                &options.lockbox_path,
+                LockboxUnlock::RecipientKeyPair(keypair),
+            )
+        };
+        match unlocked {
+            Ok(lockbox) => return Ok(Some(lockbox)),
+            Err(Error::Io(message)) => return Err(Error::Io(message).into()),
+            Err(_) => {}
+        }
+    }
+    Ok(None)
+}
+
+fn default_vault_noninteractive() -> CliResult<Option<VaultDirectory>> {
+    let password = match SecretString::try_from_env("LOCKBOX_VAULT_PASSWORD")? {
+        Some(password) => Some(password),
+        None => get_platform_vault_password().ok().flatten(),
+    };
+    let Some(password) = password else {
+        return Ok(None);
+    };
+    if !default_vault_path()?.exists() {
+        return Ok(None);
+    }
+    match VaultDirectory::unlock_or_create_default(&password) {
+        Ok(vault) => Ok(Some(vault)),
+        Err(_) => Ok(None),
+    }
 }
 
 fn remember_lockbox_password_if_enabled(
@@ -562,7 +640,9 @@ impl OpenOptions {
         }
         let lockbox_path = positional
             .first()
-            .cloned()
+            .map(|path| create_path(path))
+            .transpose()?
+            .map(|path| path.to_string_lossy().into_owned())
             .ok_or_else(|| Error::InvalidInput("missing lockbox".to_string()))?;
         if positional.len() > 1 {
             return Err(Error::InvalidInput(format!(

@@ -184,16 +184,28 @@ fn backup(args: &[String]) -> CliResult<()> {
         .cloned()
         .collect::<Vec<_>>();
     let output = require_arg(&args, 0, "backup output")?;
-    let manifest = backup_default_vault(output, overwrite)?;
-    println!("backup={output}");
-    println!("vault_file={}", manifest.vault_file_name);
-    println!("vault_size={}", manifest.vault_size);
-    println!("vault_sha256={}", manifest.vault_sha256);
+    let _manifest = backup_default_vault(output, overwrite)?;
+    println!("Backup completed successfully.");
     println!(
-        "created_at_utc={}",
-        format_unix_ms_utc(manifest.created_at_unix_ms)
+        "Vault path: {}",
+        absolute_path(&default_vault_path()?)?.display()
+    );
+    println!(
+        "Backup path: {}",
+        absolute_path(&PathBuf::from(output))?.display()
     );
     Ok(())
+}
+
+fn absolute_path(path: &std::path::Path) -> CliResult<PathBuf> {
+    if let Ok(path) = fs::canonicalize(path) {
+        return Ok(path);
+    }
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
 }
 
 fn restore(args: &[String]) -> CliResult<()> {

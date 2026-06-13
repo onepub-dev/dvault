@@ -637,7 +637,6 @@ fn parse_field_kind(value: &str) -> CliResult<FormFieldKind> {
         "month" => Ok(FormFieldKind::Month),
         "notes" => Ok(FormFieldKind::Notes),
         "number" => Ok(FormFieldKind::Number),
-        "otp" => Ok(FormFieldKind::Otp),
         _ => Err(Error::InvalidInput(format!("unsupported form field kind: {value}")).into()),
     }
 }

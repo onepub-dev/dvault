@@ -103,12 +103,32 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(form_define_help.contains("--definition-id <DEFINITION_ID>"));
     assert!(!form_define_help.contains("--type-id"));
 
+    let form_define_verbose_help = run_output(bin, &["form", "define", "--help", "--verbose"]);
+    assert_success(&form_define_verbose_help);
+    let form_define_verbose_help = String::from_utf8_lossy(&form_define_verbose_help.stdout);
+    assert!(!form_define_verbose_help.contains("otp"));
+
     let form_define_error = run_output(bin, &["form", "define", "test.lbox"]);
     assert!(!form_define_error.status.success());
     let form_define_error = String::from_utf8_lossy(&form_define_error.stderr);
     assert!(form_define_error.contains("Example:"));
     assert!(form_define_error.contains("lockbox form define secrets.lbox login"));
     assert!(form_define_error.contains("[alias]"));
+
+    let form_otp_error = run_output(
+        bin,
+        &[
+            "form",
+            "define",
+            "test.lbox",
+            "login",
+            "--field",
+            "code:otp",
+        ],
+    );
+    assert!(!form_otp_error.status.success());
+    assert!(String::from_utf8_lossy(&form_otp_error.stderr)
+        .contains("unsupported form field kind: otp"));
 
     let form_set_help = run_output(bin, &["form", "set", "--help"]);
     assert_success(&form_set_help);
@@ -1273,7 +1293,7 @@ fn doctor_lockbox_reports_closed_metadata_and_unlock_guidance() {
     run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
     run_without_content_key(
         bin,
-        &["create", lockbox.to_str().unwrap()],
+        &["create", "--password", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
@@ -1696,6 +1716,17 @@ fn create_defaults_lbox_extension_and_reports_before_prompting() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("Creating lockbox:"));
     assert!(String::from_utf8_lossy(&output.stdout).contains("project.lbox"));
 
+    let listing = run_output_without_lockbox_password(
+        bin,
+        &["list", created.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    )
+    .output()
+    .unwrap();
+    assert_success(&listing);
+    assert_eq!(String::from_utf8_lossy(&listing.stdout).trim(), "empty");
+
     let original = fs::read(&created).unwrap();
     let duplicate = run_output_without_content_key(
         bin,
@@ -1947,7 +1978,7 @@ fn password_create_requires_explicit_vault_init() {
 
     let create_without_vault = run_output_without_content_key(
         bin,
-        &["create", lockbox.to_str().unwrap()],
+        &["create", "--password", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
@@ -2218,9 +2249,16 @@ fn vault_backup_and_restore_round_trip_encrypted_vault() {
     );
     assert_success(&backed_up);
     let backed_up = String::from_utf8_lossy(&backed_up.stdout);
-    assert!(backed_up.contains("backup="));
-    assert!(backed_up.contains("vault_sha256="));
+    assert!(backed_up.contains("Backup completed successfully."));
+    assert!(backed_up.contains("Vault path: "));
+    assert!(backed_up.contains("local-vault.lbox"));
+    assert!(backed_up.contains("Backup path: "));
     assert!(backup.exists());
+    let backup_path = backup.canonicalize().unwrap();
+    assert!(backed_up.contains(backup_path.to_str().unwrap()));
+    assert!(!backed_up.contains("backup="));
+    assert!(!backed_up.contains("vault_sha256="));
+    assert!(!backed_up.contains("created_at_utc="));
 
     fs::remove_file(vault_root.join("local-vault.lbox")).unwrap();
 
@@ -2491,7 +2529,7 @@ fn session_and_close_report_empty_cache_and_already_closed_state() {
     run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
     run_without_content_key(
         bin,
-        &["create", lockbox.to_str().unwrap()],
+        &["create", "--password", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
@@ -2549,7 +2587,7 @@ fn session_activate_sets_default_lockbox_for_list() {
     run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
     run_without_content_key(
         bin,
-        &["create", lockbox.to_str().unwrap()],
+        &["create", "--password", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
@@ -2593,7 +2631,7 @@ fn auto_open_lockboxes_uses_remembered_password() {
 
     run_without_content_key(
         bin,
-        &["create", lockbox.to_str().unwrap()],
+        &["create", "--password", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
@@ -2631,11 +2669,12 @@ fn unlock_accepts_password_sources_and_session_duration() {
     let vault_root = dir.join("vault");
     let agent_root = dir.join("agent");
     let lockbox = dir.join("session.lbox");
+    let lockbox_without_extension = dir.join("session");
 
     run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
     run_without_content_key(
         bin,
-        &["create", lockbox.to_str().unwrap()],
+        &["create", "--password", lockbox.to_str().unwrap()],
         &vault_root,
         &agent_root,
     );
@@ -2647,7 +2686,7 @@ fn unlock_accepts_password_sources_and_session_duration() {
             "open",
             "--password-env",
             "LBX_TEST_PASSWORD",
-            lockbox.to_str().unwrap(),
+            lockbox_without_extension.to_str().unwrap(),
         ],
         &vault_root,
         &agent_root,

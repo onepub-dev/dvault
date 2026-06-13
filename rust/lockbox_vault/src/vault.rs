@@ -62,15 +62,7 @@ impl<S: ContentKeyStore> Vault<S> {
         password: &SecretString,
         ttl_seconds: u64,
     ) -> Result<Lockbox> {
-        let path = path.as_ref();
-        let unlocked = unlock_path_or_backup_with_password(path, password)?;
-        self.store.put_content_key_for_path_with_ttl(
-            unlocked.lockbox_id,
-            unlocked.try_clone_key()?,
-            path,
-            ttl_seconds,
-        )?;
-        open_unlocked_path(unlocked, path)
+        self.unlock_lockbox_for_duration(path, LockboxUnlock::Password(password), ttl_seconds)
     }
 
     /// Creates a lockbox with the supplied protection mode.
@@ -162,6 +154,50 @@ impl<S: ContentKeyStore> Vault<S> {
                     unlocked.lockbox_id,
                     unlocked.try_clone_key()?,
                     path,
+                )?;
+                open_unlocked_path(unlocked, path)
+            }
+        }
+    }
+
+    /// Unlocks a lockbox with explicit unlock material and caches its content
+    /// key for the requested number of seconds.
+    pub fn unlock_lockbox_for_duration(
+        &self,
+        path: impl AsRef<Path>,
+        unlock: LockboxUnlock<'_>,
+        ttl_seconds: u64,
+    ) -> Result<Lockbox> {
+        let path = path.as_ref();
+        match unlock {
+            LockboxUnlock::ContentKey(key) => {
+                let store_key = key.try_clone()?;
+                let lockbox = open_lockbox_file(path, LockboxUnlock::ContentKey(key))?;
+                self.store.put_content_key_for_path_with_ttl(
+                    lockbox.lockbox_id(),
+                    store_key,
+                    path,
+                    ttl_seconds,
+                )?;
+                Ok(lockbox)
+            }
+            LockboxUnlock::Password(password) => {
+                let unlocked = unlock_path_or_backup_with_password(path, password)?;
+                self.store.put_content_key_for_path_with_ttl(
+                    unlocked.lockbox_id,
+                    unlocked.try_clone_key()?,
+                    path,
+                    ttl_seconds,
+                )?;
+                open_unlocked_path(unlocked, path)
+            }
+            LockboxUnlock::RecipientKeyPair(recipient) => {
+                let unlocked = unlock_path_or_backup_with_recipient(path, &recipient)?;
+                self.store.put_content_key_for_path_with_ttl(
+                    unlocked.lockbox_id,
+                    unlocked.try_clone_key()?,
+                    path,
+                    ttl_seconds,
                 )?;
                 open_unlocked_path(unlocked, path)
             }
