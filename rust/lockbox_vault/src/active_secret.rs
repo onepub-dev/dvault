@@ -72,13 +72,14 @@ impl ActiveSecretRegistry {
             ));
             return;
         }
-        let process = self.processes.remove(&token).expect("process existed");
-        log_agent_event(format!(
-            "secret activity unregistered pid={} kind={} age_ms={}",
-            process.pid,
-            process.kind.as_str(),
-            elapsed_ms(process.started_at)
-        ));
+        if let Some(process) = self.processes.remove(&token) {
+            log_agent_event(format!(
+                "secret activity unregistered pid={} kind={} age_ms={}",
+                process.pid,
+                process.kind.as_str(),
+                elapsed_ms(process.started_at)
+            ));
+        }
         self.release_inhibitor_if_idle();
     }
 

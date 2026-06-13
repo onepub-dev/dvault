@@ -319,6 +319,8 @@ fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCredentials> {
 
     let mut credential = std::mem::MaybeUninit::<libc::ucred>::uninit();
     let mut credential_len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `stream.as_raw_fd()` is a valid Unix socket descriptor, and the
+    // output buffer points to initialized storage large enough for `ucred`.
     let result = unsafe {
         libc::getsockopt(
             stream.as_raw_fd(),
@@ -337,10 +339,11 @@ fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCredentials> {
             "peer credential response was truncated",
         ));
     }
+    // SAFETY: `getsockopt` succeeded and reported a full `ucred` payload.
     let credential = unsafe { credential.assume_init() };
     Ok(PeerCredentials {
-        uid: credential.uid as u32,
-        gid: credential.gid as u32,
+        uid: credential.uid,
+        gid: credential.gid,
     })
 }
 
@@ -357,6 +360,8 @@ fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCredentials> {
 
     let mut euid = 0 as libc::uid_t;
     let mut egid = 0 as libc::gid_t;
+    // SAFETY: `stream.as_raw_fd()` is a valid Unix socket descriptor, and the
+    // uid/gid output pointers are valid for writes during this call.
     let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut euid, &mut egid) };
     if result != 0 {
         return Err(io::Error::last_os_error());
@@ -385,10 +390,12 @@ fn peer_credentials(_stream: &UnixStream) -> io::Result<PeerCredentials> {
 }
 
 fn current_effective_uid() -> u32 {
+    // SAFETY: `geteuid` has no preconditions and returns the current process euid.
     unsafe { libc::geteuid() as u32 }
 }
 
 fn current_effective_gid() -> u32 {
+    // SAFETY: `getegid` has no preconditions and returns the current process egid.
     unsafe { libc::getegid() as u32 }
 }
 

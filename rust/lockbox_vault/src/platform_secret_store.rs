@@ -164,7 +164,10 @@ fn auto_open_scope_path() -> Result<PathBuf> {
 
 fn write_auto_open_scope(scope: AutoOpenScope) -> Result<()> {
     let path = auto_open_scope_path()?;
-    create_private_dir(path.parent().expect("scope file has a parent"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::Configuration("auto-open scope path has no parent".to_string()))?;
+    create_private_dir(parent)?;
     fs::write(path, format!("{}\n", scope.as_str())).map_err(|err| Error::Io(err.to_string()))
 }
 
@@ -181,7 +184,10 @@ fn parse_auto_open_scope(value: &str) -> Result<AutoOpenScope> {
 
 fn write_disabled_marker() -> Result<()> {
     let path = disabled_marker_path()?;
-    create_private_dir(path.parent().expect("marker has a parent"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::Configuration("disabled marker path has no parent".to_string()))?;
+    create_private_dir(parent)?;
     fs::write(path, b"disabled\n").map_err(|err| Error::Io(err.to_string()))
 }
 

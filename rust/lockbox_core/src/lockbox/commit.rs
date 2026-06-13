@@ -1,4 +1,5 @@
 use super::Lockbox;
+use crate::checked::read_u32_le;
 use crate::commit_auth::{commit_auth_digest, commit_auth_message, encode_commit_auth, CommitAuth};
 use crate::commit_root::{encode_commit_root, CommitRoot};
 use crate::file_format::{
@@ -23,6 +24,7 @@ impl Lockbox {
         self.bytes()
     }
 
+    #[cfg(test)]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.try_to_bytes()
             .expect("failed to materialize lockbox bytes")
@@ -274,8 +276,8 @@ impl Lockbox {
         if header.get(0..8) != Some(crate::page::PAGE_MAGIC.as_slice()) {
             return Err(Error::CorruptRecord);
         }
-        let header_len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
-        let stored_body_len = u32::from_le_bytes(header[44..48].try_into().unwrap()) as usize;
+        let header_len = read_u32_le(&header[12..16])? as usize;
+        let stored_body_len = read_u32_le(&header[44..48])? as usize;
         let stored_len = header_len
             .checked_add(stored_body_len)
             .ok_or(Error::CorruptRecord)?;

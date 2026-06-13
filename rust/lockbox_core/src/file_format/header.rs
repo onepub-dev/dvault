@@ -1,3 +1,4 @@
+use crate::checked::{array_16, read_u16_le, read_u32_le, read_u64_le};
 use crate::constants::{HEADER_LEN, HEADER_MAGIC};
 use crate::crypto::strong_checksum;
 use crate::lockbox_id::LockboxId;
@@ -46,24 +47,25 @@ pub(crate) fn read_header(bytes: &[u8]) -> Result<LockboxHeader> {
     if &bytes[0..8] != HEADER_MAGIC {
         return Err(Error::CorruptHeader);
     }
-    if u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != HEADER_VERSION {
+    if read_u16_le(&bytes[8..10]).map_err(|_| Error::CorruptHeader)? != HEADER_VERSION {
         return Err(Error::CorruptHeader);
     }
-    if u16::from_le_bytes(bytes[10..12].try_into().unwrap()) != 0 {
+    if read_u16_le(&bytes[10..12]).map_err(|_| Error::CorruptHeader)? != 0 {
         return Err(Error::CorruptHeader);
     }
-    if u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize != HEADER_LEN {
+    if read_u32_le(&bytes[12..16]).map_err(|_| Error::CorruptHeader)? as usize != HEADER_LEN {
         return Err(Error::CorruptHeader);
     }
     let expected = strong_checksum(&bytes[0..HEADER_CHECKSUM_START]);
     if bytes[HEADER_CHECKSUM_START..HEADER_LEN] != expected {
         return Err(Error::CorruptHeader);
     }
-    let commit_root_offset = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
-    let sequence = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
-    let key_directory_offset = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
-    let lockbox_id = LockboxId::from_bytes(bytes[40..56].try_into().unwrap());
-    let commit_auth_offset = u64::from_le_bytes(bytes[56..64].try_into().unwrap());
+    let commit_root_offset = read_u64_le(&bytes[16..24]).map_err(|_| Error::CorruptHeader)?;
+    let sequence = read_u64_le(&bytes[24..32]).map_err(|_| Error::CorruptHeader)?;
+    let key_directory_offset = read_u64_le(&bytes[32..40]).map_err(|_| Error::CorruptHeader)?;
+    let lockbox_id =
+        LockboxId::from_bytes(array_16(&bytes[40..56]).map_err(|_| Error::CorruptHeader)?);
+    let commit_auth_offset = read_u64_le(&bytes[56..64]).map_err(|_| Error::CorruptHeader)?;
     Ok(LockboxHeader {
         commit_root_offset,
         sequence,

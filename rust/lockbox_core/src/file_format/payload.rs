@@ -1,3 +1,4 @@
+use crate::checked::read_u16_le;
 use crate::compression::{
     decode_compression_frame, encode_compression_frame, MAX_DECOMPRESSED_COMPRESSION_FRAME_BYTES,
 };
@@ -31,7 +32,7 @@ fn decode_file_payload(payload: &[u8]) -> Result<(String, u32, Vec<u8>)> {
     if payload.len() < 14 {
         return Err(Error::CorruptRecord);
     }
-    let path_len = u16::from_le_bytes(payload[0..2].try_into().unwrap()) as usize;
+    let path_len = read_u16_le(&payload[0..2])? as usize;
     if payload.len() < 2 + path_len + 4 + 8 {
         return Err(Error::CorruptRecord);
     }
@@ -234,7 +235,7 @@ pub(crate) fn decode_symlink_payload(payload: &[u8]) -> Result<(LockboxPath, Loc
     if payload.len() < 4 {
         return Err(Error::CorruptRecord);
     }
-    let path_len = u16::from_le_bytes(payload[0..2].try_into().unwrap()) as usize;
+    let path_len = read_u16_le(&payload[0..2])? as usize;
     if payload.len() < 2 + path_len + 2 {
         return Err(Error::CorruptRecord);
     }
@@ -242,11 +243,7 @@ pub(crate) fn decode_symlink_payload(payload: &[u8]) -> Result<(LockboxPath, Loc
         String::from_utf8(payload[2..2 + path_len].to_vec()).map_err(|_| Error::CorruptRecord)?;
     let path = LockboxPath::from_stored(&path, false)?;
     let target_len_start = 2 + path_len;
-    let target_len = u16::from_le_bytes(
-        payload[target_len_start..target_len_start + 2]
-            .try_into()
-            .unwrap(),
-    ) as usize;
+    let target_len = read_u16_le(&payload[target_len_start..target_len_start + 2])? as usize;
     let target_start = target_len_start + 2;
     if payload.len() != target_start + target_len {
         return Err(Error::CorruptRecord);

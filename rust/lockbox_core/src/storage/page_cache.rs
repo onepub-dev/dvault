@@ -1,4 +1,5 @@
 use crate::cache_options::{cache_limit_bytes, CacheLimit, CacheStats};
+use crate::checked::read_u32_le;
 use crate::fast_hash::FastBuildHasher;
 use crate::lockbox_id::LockboxId;
 use crate::page::{
@@ -135,8 +136,8 @@ impl PageCache {
         if header.get(0..8) != Some(PAGE_MAGIC.as_slice()) {
             return Err(Error::CorruptRecord);
         }
-        let header_len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
-        let stored_body_len = u32::from_le_bytes(header[44..48].try_into().unwrap()) as usize;
+        let header_len = read_u32_le(&header[12..16])? as usize;
+        let stored_body_len = read_u32_le(&header[44..48])? as usize;
         let read_len = header_len
             .checked_add(stored_body_len)
             .ok_or(Error::CorruptRecord)?;
@@ -524,7 +525,9 @@ impl PageCache {
             self.recent.push_back(offset);
             return true;
         }
-        let removed = self.pages.remove(&offset).expect("page existed");
+        let Some(removed) = self.pages.remove(&offset) else {
+            return true;
+        };
         self.used_bytes = self.used_bytes.saturating_sub(removed.weight);
         true
     }

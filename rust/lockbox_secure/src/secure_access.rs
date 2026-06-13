@@ -24,7 +24,10 @@ pub fn read_access<R>(f: impl FnOnce(&SecureReadAccess<'_>) -> R) -> R {
     ACTIVE_READ_ACCESS.with(|active| {
         if active.borrow().is_some() {
             let borrowed = active.borrow();
-            return f(borrowed.as_ref().expect("active read access"));
+            let Some(access) = borrowed.as_ref() else {
+                std::process::abort();
+            };
+            return f(access);
         }
 
         *active.borrow_mut() = Some(SecureReadAccess {
@@ -47,7 +50,10 @@ pub fn read_access<R>(f: impl FnOnce(&SecureReadAccess<'_>) -> R) -> R {
 
         {
             let borrowed = active.borrow();
-            f(borrowed.as_ref().expect("active read access"))
+            let Some(access) = borrowed.as_ref() else {
+                std::process::abort();
+            };
+            f(access)
         }
     })
 }

@@ -1,3 +1,4 @@
+use crate::checked::{read_u32_le, read_u64_le};
 use crate::free_slot::FreeSlot;
 use crate::{Error, Result};
 
@@ -61,7 +62,7 @@ pub(crate) fn decode_free_index_leaf(payload: &[u8]) -> Result<Vec<FreeSlot>> {
     if payload[1] != 0 || payload[2..4].iter().any(|byte| *byte != 0) {
         return Err(Error::CorruptRecord);
     }
-    let count = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
+    let count = read_u32_le(&payload[4..8])? as usize;
     let expected_len = 8usize
         .checked_add(count.checked_mul(16).ok_or(Error::CorruptRecord)?)
         .ok_or(Error::CorruptRecord)?;
@@ -72,8 +73,8 @@ pub(crate) fn decode_free_index_leaf(payload: &[u8]) -> Result<Vec<FreeSlot>> {
     let mut slots = Vec::with_capacity(count);
     let mut previous_end = 0u64;
     for index in 0..count {
-        let slot_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        let slot_len = u64::from_le_bytes(payload[offset + 8..offset + 16].try_into().unwrap());
+        let slot_offset = read_u64_le(&payload[offset..offset + 8])?;
+        let slot_len = read_u64_le(&payload[offset + 8..offset + 16])?;
         offset += 16;
         if slot_len == 0 {
             return Err(Error::CorruptRecord);
@@ -99,7 +100,7 @@ pub(crate) fn decode_free_index_internal(payload: &[u8]) -> Result<Vec<FreeIndex
     if payload[1] != 1 || payload[2..4].iter().any(|byte| *byte != 0) {
         return Err(Error::CorruptRecord);
     }
-    let count = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
+    let count = read_u32_le(&payload[4..8])? as usize;
     let expected_len = 8usize
         .checked_add(count.checked_mul(16).ok_or(Error::CorruptRecord)?)
         .ok_or(Error::CorruptRecord)?;
@@ -110,8 +111,8 @@ pub(crate) fn decode_free_index_internal(payload: &[u8]) -> Result<Vec<FreeIndex
     let mut children = Vec::with_capacity(count);
     let mut previous_first = None;
     for _ in 0..count {
-        let first_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        let child_offset = u64::from_le_bytes(payload[offset + 8..offset + 16].try_into().unwrap());
+        let first_offset = read_u64_le(&payload[offset..offset + 8])?;
+        let child_offset = read_u64_le(&payload[offset + 8..offset + 16])?;
         offset += 16;
         if child_offset == 0 || previous_first.is_some_and(|previous| first_offset <= previous) {
             return Err(Error::CorruptRecord);

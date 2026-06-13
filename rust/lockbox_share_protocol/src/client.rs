@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -219,6 +219,10 @@ impl From<payload::PayloadError> for ClientError {
     }
 }
 
+fn share_state_poisoned<T>(_err: PoisonError<T>) -> ClientError {
+    ClientError::Topology("share client state lock was poisoned".to_string())
+}
+
 impl ShareClient<HttpTransport> {
     pub fn new(server_url: &str) -> Result<Self, ClientError> {
         Ok(Self {
@@ -248,8 +252,7 @@ impl ShareClientPool<HttpTransport> {
     }
 
     pub fn with_timeout(self, timeout: Duration) -> Self {
-        {
-            let mut state = self.state.lock().unwrap();
+        if let Ok(mut state) = self.state.lock() {
             for client in &mut state.clients {
                 client.transport.timeout = timeout;
             }
@@ -263,8 +266,7 @@ impl ShareClientPool<HttpTransport> {
         initial_backoff: Duration,
         max_backoff: Duration,
     ) -> Self {
-        {
-            let mut state = self.state.lock().unwrap();
+        if let Ok(mut state) = self.state.lock() {
             for client in &mut state.clients {
                 client.retry_policy = RetryPolicy {
                     attempts: attempts.max(1),
@@ -306,7 +308,7 @@ impl ShareClientPool<HttpTransport> {
         let topology = topology::decode_topology(&bytes)?;
         let pool = Self::from_topology(&topology)?;
         {
-            let mut state = pool.state.lock().unwrap();
+            let mut state = pool.state.lock().map_err(share_state_poisoned)?;
             let mut topology_server_urls = topology_urls_from_servers(&topology.servers);
             if let Some(topology_url) = topology_url_from_share_url(topology_url) {
                 topology_server_urls.push(topology_url);
@@ -376,8 +378,7 @@ impl<T: Transport> ShareClientPool<T> {
     }
 
     pub fn with_max_response_bytes(self, max_response_bytes: usize) -> Self {
-        {
-            let mut state = self.state.lock().unwrap();
+        if let Ok(mut state) = self.state.lock() {
             for client in &mut state.clients {
                 client.max_response_bytes = max_response_bytes;
             }
@@ -448,13 +449,13 @@ impl<T: Transport> ShareClientPool<T> {
     }
 
     pub fn delete(&self, share_code: &str, delete_token: &[u8]) -> Result<bool, ClientError> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot()?;
         if snapshot.clients.is_empty() {
             return Err(ClientError::Url(
                 "at least one key server url is required".to_string(),
             ));
         }
-        let mut snapshot = self.discover_topology_if_stale(&snapshot);
+        let mut snapshot = self.discover_topology_if_stale(&snapshot)?;
         let mut last_error = None;
         for _ in 0..2 {
             let topology_version = snapshot.topology_version.if_version_for_request();
@@ -479,11 +480,11 @@ impl<T: Transport> ShareClientPool<T> {
                     Err(err) => return Err(err),
                 }
             }
-            let current = self.snapshot();
+            let current = self.snapshot()?;
             if !self.refresh_topology_from_peers(&current) {
                 break;
             }
-            snapshot = self.snapshot();
+            snapshot = self.snapshot()?;
         }
         match last_error {
             Some(ClientError::Server {
@@ -504,13 +505,13 @@ impl<T: Transport> ShareClientPool<T> {
         ) -> Result<TopologyAwareResponse<R>, ClientError>,
         retry: impl Fn(&ClientError) -> bool,
     ) -> Result<R, ClientError> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot()?;
         if snapshot.clients.is_empty() {
             return Err(ClientError::Url(
                 "at least one key server url is required".to_string(),
             ));
         }
-        let mut snapshot = self.discover_topology_if_stale(&snapshot);
+        let mut snapshot = self.discover_topology_if_stale(&snapshot)?;
         let mut last_error = None;
         for _ in 0..2 {
             let topology_version = snapshot.topology_version.if_version_for_request();
@@ -528,11 +529,11 @@ impl<T: Transport> ShareClientPool<T> {
                     Err(err) => return Err(err),
                 }
             }
-            let current = self.snapshot();
+            let current = self.snapshot()?;
             if !self.refresh_topology_from_peers(&current) {
                 break;
             }
-            snapshot = self.snapshot();
+            snapshot = self.snapshot()?;
         }
         Err(last_error.unwrap_or_else(|| {
             ClientError::Url("at least one key server url is required".to_string())
@@ -540,7 +541,9 @@ impl<T: Transport> ShareClientPool<T> {
     }
 
     fn selection_offset(&self) -> usize {
-        let snapshot = self.snapshot();
+        let Ok(snapshot) = self.snapshot() else {
+            return 0;
+        };
         if snapshot.clients.len() <= 1 {
             return 0;
         }
@@ -559,13 +562,13 @@ impl<T: Transport> ShareClientPool<T> {
         ) -> Result<TopologyAwareResponse<R>, ClientError>,
         retry: impl Fn(&ClientError) -> bool,
     ) -> Result<R, ClientError> {
-        let snapshot = self.snapshot();
+        let snapshot = self.snapshot()?;
         if snapshot.clients.is_empty() {
             return Err(ClientError::Url(
                 "at least one key server url is required".to_string(),
             ));
         }
-        let mut snapshot = self.discover_topology_if_stale(&snapshot);
+        let mut snapshot = self.discover_topology_if_stale(&snapshot)?;
         let mut last_error = None;
         for _ in 0..2 {
             let topology_version = snapshot.topology_version.if_version_for_request();
@@ -582,19 +585,19 @@ impl<T: Transport> ShareClientPool<T> {
                     Err(err) => return Err(err),
                 }
             }
-            let current = self.snapshot();
+            let current = self.snapshot()?;
             if !self.refresh_topology_from_peers(&current) {
                 break;
             }
-            snapshot = self.snapshot();
+            snapshot = self.snapshot()?;
         }
         Err(last_error.unwrap_or_else(|| {
             ClientError::Url("at least one key server url is required".to_string())
         }))
     }
 
-    fn snapshot(&self) -> TopologyStateSnapshot<T> {
-        self.state.lock().unwrap().snapshot()
+    fn snapshot(&self) -> Result<TopologyStateSnapshot<T>, ClientError> {
+        Ok(self.state.lock().map_err(share_state_poisoned)?.snapshot())
     }
 
     fn clients_for_code(
@@ -644,7 +647,7 @@ impl<T: Transport> ShareClientPool<T> {
 
     fn apply_topology_update(&self, topology: ClusterTopology) -> Result<(), ClientError> {
         let topology = dedupe_topology(topology);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().map_err(share_state_poisoned)?;
         if topology.version != 0 {
             if topology.version <= state.topology_version {
                 return Ok(());
@@ -733,17 +736,17 @@ impl<T: Transport> ShareClientPool<T> {
     fn discover_topology_if_stale(
         &self,
         snapshot: &TopologyStateSnapshot<T>,
-    ) -> TopologyStateSnapshot<T> {
-        if !snapshot.topology.is_some() {
-            return snapshot.clone();
+    ) -> Result<TopologyStateSnapshot<T>, ClientError> {
+        if snapshot.topology.is_none() {
+            return Ok(snapshot.clone());
         }
         if !self.is_topology_stale(snapshot) {
-            return snapshot.clone();
+            return Ok(snapshot.clone());
         }
         if self.refresh_topology_from_peers(snapshot) {
             return self.snapshot();
         }
-        snapshot.clone()
+        Ok(snapshot.clone())
     }
 }
 

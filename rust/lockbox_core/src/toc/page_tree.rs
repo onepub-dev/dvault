@@ -1,3 +1,4 @@
+use crate::checked::{read_u16_le, read_u32_le, read_u64_le};
 use crate::constants::{DEFAULT_METADATA_MAX_PAGE_BODY_BYTES, HEADER_LEN};
 use crate::{Error, Result};
 
@@ -58,7 +59,7 @@ pub(crate) fn decode_page_tree_children(
     if payload.len() < CHILD_COUNT_BYTES {
         return Err(Error::CorruptRecord);
     }
-    let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let count = read_u32_le(&payload[0..4])? as usize;
     if count == 0 || count > (payload.len() - CHILD_COUNT_BYTES) / 10 {
         return Err(Error::CorruptRecord);
     }
@@ -68,7 +69,7 @@ pub(crate) fn decode_page_tree_children(
         if offset + 2 > payload.len() {
             return Err(Error::CorruptRecord);
         }
-        let key_len = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap()) as usize;
+        let key_len = read_u16_le(&payload[offset..offset + 2])? as usize;
         offset += 2;
         if offset + key_len + 8 > payload.len() {
             return Err(Error::CorruptRecord);
@@ -77,7 +78,7 @@ pub(crate) fn decode_page_tree_children(
             .map_err(|_| Error::CorruptRecord)?;
         validate_key(&first_key)?;
         offset += key_len;
-        let child_offset = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        let child_offset = read_u64_le(&payload[offset..offset + 8])?;
         if child_offset < HEADER_LEN as u64 {
             return Err(Error::CorruptRecord);
         }

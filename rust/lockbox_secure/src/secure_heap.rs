@@ -347,10 +347,13 @@ impl SecureHeap {
 }
 
 pub(crate) fn lock_secure_heap() -> MutexGuard<'static, SecureHeap> {
-    GLOBAL_HEAP
+    match GLOBAL_HEAP
         .get_or_init(|| Mutex::new(SecureHeap::new()))
         .lock()
-        .expect("secure heap mutex poisoned")
+    {
+        Ok(heap) => heap,
+        Err(_) => std::process::abort(),
+    }
 }
 
 pub(crate) fn lock_secure_heap_for_mutation() -> Result<MutexGuard<'static, SecureHeap>> {

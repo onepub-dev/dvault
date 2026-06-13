@@ -1,3 +1,4 @@
+use crate::checked::read_u64_le;
 use crate::{Error, Result};
 
 const COMMIT_ROOT_VERSION: u8 = 4;
@@ -42,19 +43,19 @@ pub(crate) fn decode_commit_root(payload: &[u8]) -> Result<CommitRoot> {
         return Err(Error::CorruptRecord);
     }
     let mut offset = 8usize;
-    let sequence = read_u64(payload, &mut offset);
-    let toc_root_offset = read_u64(payload, &mut offset);
-    let variable_root_offset = read_u64(payload, &mut offset);
-    let form_root_offset = read_u64(payload, &mut offset);
-    let free_index_root_offset = read_u64(payload, &mut offset);
-    let key_directory_offset = read_u64(payload, &mut offset);
+    let sequence = read_u64(payload, &mut offset)?;
+    let toc_root_offset = read_u64(payload, &mut offset)?;
+    let variable_root_offset = read_u64(payload, &mut offset)?;
+    let form_root_offset = read_u64(payload, &mut offset)?;
+    let free_index_root_offset = read_u64(payload, &mut offset)?;
+    let key_directory_offset = read_u64(payload, &mut offset)?;
     let key_directory_mirror_offsets = [
-        read_u64(payload, &mut offset),
-        read_u64(payload, &mut offset),
+        read_u64(payload, &mut offset)?,
+        read_u64(payload, &mut offset)?,
     ];
-    let key_directory_generation = read_u64(payload, &mut offset);
-    let previous_commit_root_offset = read_u64(payload, &mut offset);
-    let flags = read_u64(payload, &mut offset);
+    let key_directory_generation = read_u64(payload, &mut offset)?;
+    let previous_commit_root_offset = read_u64(payload, &mut offset)?;
+    let flags = read_u64(payload, &mut offset)?;
     if toc_root_offset == 0 {
         return Err(Error::CorruptRecord);
     }
@@ -72,10 +73,10 @@ pub(crate) fn decode_commit_root(payload: &[u8]) -> Result<CommitRoot> {
     })
 }
 
-fn read_u64(payload: &[u8], offset: &mut usize) -> u64 {
-    let value = u64::from_le_bytes(payload[*offset..*offset + 8].try_into().unwrap());
+fn read_u64(payload: &[u8], offset: &mut usize) -> Result<u64> {
+    let value = read_u64_le(&payload[*offset..*offset + 8])?;
     *offset += 8;
-    value
+    Ok(value)
 }
 
 #[cfg(test)]

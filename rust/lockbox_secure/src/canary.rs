@@ -33,7 +33,9 @@ fn canary_seed() -> u64 {
     static SEED: OnceLock<u64> = OnceLock::new();
     *SEED.get_or_init(|| {
         let mut bytes = [0u8; 8];
-        getrandom::getrandom(&mut bytes).expect("secure canary seed random source failed");
+        if getrandom::getrandom(&mut bytes).is_err() {
+            std::process::abort();
+        }
         u64::from_le_bytes(bytes)
     })
 }

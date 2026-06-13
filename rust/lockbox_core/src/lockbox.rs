@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::checked::read_u32_le;
 use crate::commit_auth::{commit_auth_digest, commit_auth_message, decode_commit_auth, CommitAuth};
 use crate::commit_root::decode_commit_root;
 use crate::compression_frame_manifest::CompressionFrameSlice;
@@ -292,9 +293,7 @@ impl Lockbox {
             dirty_key_directory: false,
             lockbox_id,
             read_only: false,
-            owner_signing_key: Some(
-                OwnerSigningKeyPair::generate().expect("system random source failed"),
-            ),
+            owner_signing_key: OwnerSigningKeyPair::generate().ok(),
             key_slots: Vec::new(),
             toc_entries: BTreeMap::new(),
             toc_root: None,
@@ -1261,7 +1260,7 @@ impl Lockbox {
                 let Ok(header) = self.storage.read_at(offset, crate::page::PAGE_HEADER_LEN) else {
                     break;
                 };
-                let stored_body_len = u32::from_le_bytes(header[44..48].try_into().unwrap()) as u64;
+                let stored_body_len = read_u32_le(&header[44..48])? as u64;
                 let stored_len = crate::page::PAGE_HEADER_LEN as u64 + stored_body_len;
                 if offset + stored_len > len {
                     break;

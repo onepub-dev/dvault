@@ -82,12 +82,14 @@ fn recover_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> RecoveryReport {
     let mut toc_recovered = false;
     let mut metadata = RecoveredMetadata::default();
 
-    if let Some(commit_root) = header_commit_root_for_recovery(&scanner, &bytes) {
+    if let Some((commit_root, public_header_root)) =
+        header_commit_root_for_recovery(&scanner, &bytes)
+    {
         metadata = recover_metadata_from_commit_root(&scanner, &commit_root);
         if let Ok(decoded) = decode_toc_btree_from_offset(&scanner, commit_root.toc_root_offset, 0)
         {
             toc_entries = decoded;
-            toc_recovered = true;
+            toc_recovered = public_header_root;
         }
     }
 
@@ -159,7 +161,7 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
     let lockbox_id = lockbox_id_from_bytes_unchecked(&bytes);
     let scanner = PageScanner::new(&bytes, lockbox_id, &key_bytes);
     let metadata = header_commit_root_for_recovery(&scanner, &bytes)
-        .map(|commit_root| recover_metadata_from_commit_root(&scanner, &commit_root))
+        .map(|(commit_root, _)| recover_metadata_from_commit_root(&scanner, &commit_root))
         .unwrap_or_default();
     let scan = scanner.scan_records();
     let scanned_segments = collect_scanned_file_segments(&scan.records);
@@ -229,14 +231,21 @@ fn salvage_bytes(bytes: Vec<u8>, key: impl AsRef<[u8]>) -> Result<Lockbox> {
 fn header_commit_root_for_recovery(
     scanner: &PageScanner<'_>,
     bytes: &[u8],
-) -> Option<crate::commit_root::CommitRoot> {
+) -> Option<(crate::commit_root::CommitRoot, bool)> {
     let header = read_header(bytes).ok()?;
     if header.commit_auth_offset == 0 {
         return (header.commit_root_offset > 0)
             .then(|| scanner.commit_root_at(header.commit_root_offset).ok())
-            .flatten();
+            .flatten()
+            .map(|root| (root, true));
     }
-    valid_commit_root_from_auth_chain(scanner, header.commit_auth_offset, header.lockbox_id)
+    let root =
+        valid_commit_root_from_auth_chain(scanner, header.commit_auth_offset, header.lockbox_id)?;
+    let public_header_root = (header.commit_root_offset > 0)
+        .then(|| scanner.commit_root_at(header.commit_root_offset).ok())
+        .flatten()
+        .is_some_and(|public_root| public_root == root);
+    Some((root, public_header_root))
 }
 
 fn valid_commit_root_from_auth_chain(

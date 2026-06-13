@@ -402,8 +402,12 @@ impl<'a> Reader<'a> {
                 "recipient key is truncated".to_string(),
             ));
         }
-        let len = u32::from_le_bytes(self.bytes[self.offset..self.offset + 4].try_into().unwrap())
-            as usize;
+        let len = u32::from_le_bytes([
+            self.bytes[self.offset],
+            self.bytes[self.offset + 1],
+            self.bytes[self.offset + 2],
+            self.bytes[self.offset + 3],
+        ]) as usize;
         self.offset += 4;
         if self.offset + len > self.bytes.len() {
             return Err(Error::InvalidKeyMaterial(

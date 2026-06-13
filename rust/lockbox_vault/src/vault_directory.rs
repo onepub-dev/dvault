@@ -485,12 +485,15 @@ impl VaultDirectory {
         lockbox_id: LockboxId,
         key_directory: &[u8],
     ) -> Result<()> {
-        self.put_record_replace(&key_directory_backup_record_path(lockbox_id), key_directory)
+        self.put_record_replace(
+            &key_directory_backup_record_path(lockbox_id)?,
+            key_directory,
+        )
     }
 
     /// Loads the key-directory backup for `lockbox_id`.
     pub fn load_key_directory_backup(&self, lockbox_id: LockboxId) -> Result<Vec<u8>> {
-        self.get_record(&key_directory_backup_record_path(lockbox_id))
+        self.get_record(&key_directory_backup_record_path(lockbox_id)?)
     }
 
     /// Counts key-directory backups stored in this vault.
@@ -498,7 +501,7 @@ impl VaultDirectory {
         Ok(self
             .lockbox
             .borrow()
-            .list(recursive_list("/key_directories"))?
+            .list(recursive_list("/key_directories")?)?
             .filter_map(Result::ok)
             .filter(|entry| entry.kind == LockboxEntryKind::File)
             .count())
@@ -697,7 +700,7 @@ impl VaultDirectory {
 
     fn list_record_names(&self, root: &str, extension: &str) -> Result<Vec<String>> {
         let mut out = Vec::new();
-        for entry in self.lockbox.borrow().list(recursive_list(root))? {
+        for entry in self.lockbox.borrow().list(recursive_list(root)?)? {
             let entry = entry?;
             if entry.kind != LockboxEntryKind::File || !entry.path.ends_with(extension) {
                 continue;
@@ -739,7 +742,7 @@ impl VaultDirectory {
     }
 
     fn read_structure_version(&self) -> Result<Option<u32>> {
-        let path = vault_structure_version_record_path();
+        let path = vault_structure_version_record_path()?;
         {
             let lockbox = self.lockbox.borrow();
             if lockbox.stat(&path).is_none() {
@@ -751,7 +754,7 @@ impl VaultDirectory {
 
     fn write_structure_version(&self, version: u32) -> Result<()> {
         let bytes = format!("{version}\n");
-        self.put_record_replace(&vault_structure_version_record_path(), bytes.as_bytes())
+        self.put_record_replace(&vault_structure_version_record_path()?, bytes.as_bytes())
     }
 
     fn store_private_key_current_only(&self, name: &str, keypair: &RecipientKeyPair) -> Result<()> {
@@ -1103,11 +1106,11 @@ impl Drop for VaultFileLock {
     }
 }
 
-fn recursive_list(path: &str) -> ListOptions {
-    let path = LockboxPath::new(path).expect("vault record roots are valid lockbox paths");
+fn recursive_list(path: &str) -> Result<ListOptions> {
+    let path = LockboxPath::new(path)?;
     let mut options = ListOptions::new(&path);
     options.recursive = true;
-    options
+    Ok(options)
 }
 
 fn private_key_variable_name(name: &str) -> Result<VariableName> {
@@ -1302,9 +1305,8 @@ fn identity_email_record_path(name: &str) -> Result<LockboxPath> {
     ))
 }
 
-fn key_directory_backup_record_path(lockbox_id: LockboxId) -> LockboxPath {
+fn key_directory_backup_record_path(lockbox_id: LockboxId) -> Result<LockboxPath> {
     LockboxPath::new(format!("/key_directories/{lockbox_id}.keydir"))
-        .expect("key directory backup path is a valid lockbox path")
 }
 
 fn lockbox_password_variable_name(lockbox_id: LockboxId) -> Result<VariableName> {
@@ -1322,9 +1324,8 @@ fn known_lockbox_record_path(path: impl AsRef<Path>) -> Result<LockboxPath> {
     LockboxPath::new(format!("/known_lockboxes/{encoded}.lkl"))
 }
 
-fn vault_structure_version_record_path() -> LockboxPath {
+fn vault_structure_version_record_path() -> Result<LockboxPath> {
     LockboxPath::new(VAULT_STRUCTURE_VERSION_PATH)
-        .expect("vault structure version path is a valid lockbox path")
 }
 
 fn decode_structure_version(bytes: &[u8]) -> Result<u32> {

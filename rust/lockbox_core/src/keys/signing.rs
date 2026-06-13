@@ -284,16 +284,21 @@ impl<'a> Reader<'a> {
     }
 
     fn u16(&mut self) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+        let bytes = self.take(2)?;
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
     fn bytes(&mut self) -> Result<Vec<u8>> {
-        let len = u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as usize;
+        let bytes = self.take(4)?;
+        let len = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
         Ok(self.take(len)?.to_vec())
     }
 
     fn array32(&mut self) -> Result<[u8; 32]> {
-        Ok(self.take(32)?.try_into().unwrap())
+        let bytes = self.take(32)?;
+        let mut out = [0_u8; 32];
+        out.copy_from_slice(bytes);
+        Ok(out)
     }
 
     fn array32_bytes(&mut self) -> Result<[u8; 32]> {

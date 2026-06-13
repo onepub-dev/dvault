@@ -510,7 +510,9 @@ fn parse_topology_route(value: &str) -> Result<TopologyRoute, Box<dyn std::error
     if ids.is_empty() {
         return Err("route must include a primary server id".into());
     }
-    let (primary_id, failover_ids) = ids.split_first().unwrap();
+    let Some((primary_id, failover_ids)) = ids.split_first() else {
+        return Err("route must include a primary server id".into());
+    };
     Ok(TopologyRoute {
         owner_id: parse_server_id(owner_id)?,
         primary_id: *primary_id,
