@@ -57,11 +57,11 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .help("Create the lockbox for one of your identities or a saved contact."),
                 )
                 .arg(required("lockbox", "Lockbox path.")),
-            archive_command("open", "Open a lockbox for later commands.")
+            archive_command("open", "Open the lockbox for later commands.")
                 .after_help(verbose_help(
                     verbose,
                     "Examples:\n  lockbox open secrets.lbox\n  lockbox open --duration 30m secrets.lbox\n  LOCKBOX_PASSWORD=secret lockbox open secrets.lbox\n  printf '%s\\n' \"$LOCKBOX_PASSWORD\" | lockbox open --password-stdin secrets.lbox",
-                    "Context:\n  Open prompts for the lockbox password, stores temporary open access in the session agent, and lets later commands read or modify the lockbox without prompting again. Use --duration when the session should expire sooner than the default.",
+                    "Context:\n  Opens the lockbox for later commands. Close the lockbox when you have finished working with it. On supported platforms, the Lockbox Session Agent will automatically close the lockbox after 30 minutes.",
                 ))
                 .arg(
                     Arg::new("duration")

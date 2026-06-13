@@ -382,11 +382,18 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let unlock_help = run_output(bin, &["open", "--help"]);
     assert_success(&unlock_help);
     let unlock_help = String::from_utf8_lossy(&unlock_help.stdout);
+    assert!(unlock_help.contains("Open the lockbox for later commands."));
     assert!(unlock_help.contains("--duration <DURATION>"));
     assert!(unlock_help.contains("--password-env <NAME>"));
     assert!(unlock_help.contains("--password-file <FILE>"));
     assert!(unlock_help.contains("--password-stdin"));
     assert!(!unlock_help.contains("--list"));
+
+    let unlock_verbose_help = run_output(bin, &["open", "--help", "--verbose"]);
+    assert_success(&unlock_verbose_help);
+    let unlock_verbose_help = String::from_utf8_lossy(&unlock_verbose_help.stdout);
+    assert!(unlock_verbose_help.contains("Close the lockbox when you have finished working"));
+    assert!(unlock_verbose_help.contains("automatically close the lockbox after 30 minutes"));
 }
 
 #[test]
