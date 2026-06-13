@@ -102,8 +102,8 @@ pub(crate) fn command(verbose: bool) -> Command {
             archive_command("recover", "Recover readable entries from a damaged lockbox.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox recover damaged.lbox --output recovered.lbox\n  lockbox recover --report --format table damaged.lbox",
-                    "Context:\n  Recover scans a damaged lockbox and writes a new lockbox containing readable entries. Use --report or --dry-run first when you want to inspect what can be recovered without writing an output file.",
+                    "Examples:\n  lockbox recover damaged.lbox\n  lockbox recover damaged.lbox --output recovered.lbox\n  lockbox recover --dry-run --format table damaged.lbox",
+                    "Context:\n  Recover scans a damaged lockbox and writes a new lockbox containing readable entries. By default the recovered file is written next to the original as <name>.recovered.lbox. Use --dry-run first when you want to inspect what can be recovered without writing an output file.",
                 ))
                 .arg(optional(
                     "lockbox",
@@ -114,29 +114,20 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .long("output")
                         .short('o')
                         .value_name("RECOVERED_LOCKBOX")
-                        .required_unless_present_any(["report", "dry-run"])
                         .help("Write recovered entries to this new lockbox."),
                 )
                 .arg(
                     Arg::new("overwrite")
                         .long("overwrite")
-                        .requires("output")
                         .action(ArgAction::SetTrue)
                         .help("Replace the recovered lockbox output file if it already exists."),
-                )
-                .arg(
-                    Arg::new("report")
-                        .long("report")
-                        .action(ArgAction::SetTrue)
-                        .conflicts_with_all(["output", "overwrite"])
-                        .help("Print a recovery report without writing a recovered lockbox."),
                 )
                 .arg(
                     Arg::new("dry-run")
                         .long("dry-run")
                         .action(ArgAction::SetTrue)
-                        .conflicts_with_all(["output", "overwrite", "report"])
-                        .help("Alias for --report."),
+                        .conflicts_with_all(["output", "overwrite"])
+                        .help("Print a recovery report without writing a recovered lockbox."),
                 )
                 .arg(output_format_arg()),
             file_command("add", "Add a file or directory to a lockbox.")

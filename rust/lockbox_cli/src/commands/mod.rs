@@ -192,9 +192,7 @@ fn recover_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     let mut args = vec![optional_lockbox_value(matches, "lockbox")?];
     push_option(&mut args, matches, "output", "--output");
     push_flag(&mut args, matches, "overwrite", "--overwrite");
-    if matches.get_flag("report") || matches.get_flag("dry-run") {
-        args.push("--report".to_string());
-    }
+    push_flag(&mut args, matches, "dry-run", "--dry-run");
     push_option(&mut args, matches, "format", "--format");
     Ok(args)
 }

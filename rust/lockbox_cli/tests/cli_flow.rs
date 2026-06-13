@@ -408,6 +408,13 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let close_verbose_help = String::from_utf8_lossy(&close_verbose_help.stdout);
     assert!(close_verbose_help.contains("Closes the given lockbox or the active lockbox"));
     assert!(close_verbose_help.contains("automatically close the lockbox after 30 minutes"));
+
+    let recover_help = run_output(bin, &["recover", "--help"]);
+    assert_success(&recover_help);
+    let recover_help = String::from_utf8_lossy(&recover_help.stdout);
+    assert!(recover_help.contains("lockbox recover damaged.lbox"));
+    assert!(recover_help.contains("--dry-run"));
+    assert!(!recover_help.contains("--report"));
 }
 
 #[test]
@@ -733,7 +740,7 @@ fn form_definitions_and_records_flow() {
     assert!(visualize.contains("variables recovered: true"));
     assert!(visualize.contains("forms recovered: true"));
 
-    let report = run_output(bin, &["recover", "--report", &lockbox]);
+    let report = run_output(bin, &["recover", "--dry-run", &lockbox]);
     assert_success(&report);
     let report = String::from_utf8_lossy(&report.stdout);
     assert!(report.contains("variables_recovered"));
@@ -1971,7 +1978,7 @@ fn recover_reports_and_writes_recovered_lockbox() {
         bin,
         &[
             "recover",
-            "--report",
+            "--dry-run",
             "--format",
             "json",
             damaged.to_str().unwrap(),
@@ -1979,6 +1986,15 @@ fn recover_reports_and_writes_recovered_lockbox() {
     );
     assert_success(&report);
     assert!(String::from_utf8_lossy(&report.stdout).contains("\"field\":\"intact_file_count\""));
+
+    let default_recovered = dir.join("damaged.recovered.lbox");
+    let default_output = run_output(bin, &["recover", damaged.to_str().unwrap()]);
+    assert_success(&default_output);
+    assert!(damaged.exists());
+    assert!(default_recovered.exists());
+    assert!(String::from_utf8_lossy(&default_output.stdout)
+        .contains(default_recovered.to_str().unwrap()));
+    fs::remove_file(&default_recovered).unwrap();
 
     let output = run_output(
         bin,
@@ -2003,6 +2019,41 @@ fn recover_reports_and_writes_recovered_lockbox() {
             "--format",
             "tsv",
             recovered.to_str().unwrap(),
+        ],
+    );
+    assert_success(&listing);
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("/docs/a.txt"));
+
+    let in_place = dir.join("damaged-in-place.lbox");
+    let in_place_backup = dir.join("damaged-in-place.lbox.damaged");
+    fs::copy(&damaged, &in_place).unwrap();
+    let in_place_output = run_output(
+        bin,
+        &[
+            "recover",
+            in_place.to_str().unwrap(),
+            "--output",
+            in_place.to_str().unwrap(),
+            "--overwrite",
+            "--format",
+            "tsv",
+        ],
+    );
+    assert_success(&in_place_output);
+    assert!(in_place.exists());
+    assert!(in_place_backup.exists());
+    let in_place_output = String::from_utf8_lossy(&in_place_output.stdout);
+    assert!(in_place_output.contains("output\t"));
+    assert!(in_place_output.contains("damaged_original\t"));
+
+    let listing = run_output(
+        bin,
+        &[
+            "list",
+            "--recursive",
+            "--format",
+            "tsv",
+            in_place.to_str().unwrap(),
         ],
     );
     assert_success(&listing);
@@ -3557,7 +3608,7 @@ fn session_active_lockbox_applies_to_lockbox_argument_variants() {
 
     let report = run_output_in(
         bin,
-        &["recover", "--report", "--format", "json"],
+        &["recover", "--dry-run", "--format", "json"],
         &vault_root,
         &agent_root,
     );
@@ -4138,7 +4189,7 @@ fn cli_secret_variables_require_explicit_source_and_redact_export() {
         bin,
         &[
             "recover",
-            "--report",
+            "--dry-run",
             "--format",
             "tsv",
             lockbox.to_str().unwrap(),

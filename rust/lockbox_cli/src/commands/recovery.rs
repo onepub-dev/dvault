@@ -4,11 +4,11 @@ use lockbox_core::vault_bridge::VaultUnlock;
 use lockbox_core::{Error, RecoveryReport, RecoveryScanner, SecretVec};
 use lockbox_vault::get as get_cached_content_key;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
     let options = RecoverOptions::parse(args)?;
-    if options.report_only {
+    if options.dry_run {
         let report = scan_report(&options.lockbox_path, access)?;
         print_report(&report, options.format)?;
         return Ok(());
@@ -16,18 +16,34 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
 
     let output = options
         .output
-        .as_deref()
-        .ok_or_else(|| Error::InvalidInput("recover requires --output or --report".to_string()))?;
-    if Path::new(output).exists() && !options.overwrite {
-        return Err(Error::AlreadyExists(output.to_string()).into());
+        .clone()
+        .unwrap_or_else(|| default_recovered_path(&options.lockbox_path));
+    let output_path = Path::new(&output);
+    let input_path = Path::new(&options.lockbox_path);
+    let in_place = same_existing_path(input_path, output_path);
+    if output_path.exists() && !options.overwrite {
+        return Err(Error::AlreadyExists(output).into());
     }
     let bytes = fs::read(&options.lockbox_path)
         .map_err(|err| Error::Io(format!("read lockbox {}: {err}", options.lockbox_path)))?;
     let recovered = salvage_bytes(&options.lockbox_path, bytes, access)?;
-    fs::write(output, recovered.try_to_bytes()?)
+    let damaged_original = if in_place {
+        let backup = next_damaged_backup_path(input_path);
+        fs::rename(input_path, &backup).map_err(|err| {
+            Error::Io(format!(
+                "move damaged lockbox {} to {}: {err}",
+                options.lockbox_path,
+                backup.display()
+            ))
+        })?;
+        Some(backup)
+    } else {
+        None
+    };
+    fs::write(&output, recovered.try_to_bytes()?)
         .map_err(|err| Error::Io(format!("write recovered lockbox {output}: {err}")))?;
-    let report = scan_report(output, access)?;
-    let rows = report_rows(&report, Some(output));
+    let report = scan_report(&output, access)?;
+    let rows = report_rows(&report, Some(&output), damaged_original.as_deref());
     print_records(&["field", "value"], rows, options.format)?;
     Ok(())
 }
@@ -36,7 +52,7 @@ struct RecoverOptions {
     lockbox_path: String,
     output: Option<String>,
     overwrite: bool,
-    report_only: bool,
+    dry_run: bool,
     format: OutputFormat,
 }
 
@@ -46,7 +62,7 @@ impl RecoverOptions {
         let mut positional = Vec::new();
         let mut output = None;
         let mut overwrite = false;
-        let mut report_only = false;
+        let mut dry_run = false;
         let mut index = 0usize;
         while index < args.len() {
             match args[index].as_str() {
@@ -57,7 +73,13 @@ impl RecoverOptions {
                     })?);
                 }
                 "--overwrite" => overwrite = true,
-                "--report" => report_only = true,
+                "--dry-run" => dry_run = true,
+                "--report" => {
+                    return Err(Error::InvalidInput(
+                        "--report has been removed; use --dry-run".to_string(),
+                    )
+                    .into());
+                }
                 value => positional.push(value.to_string()),
             }
             index += 1;
@@ -73,16 +95,22 @@ impl RecoverOptions {
             ))
             .into());
         }
-        if report_only && output.is_some() {
+        if dry_run && output.is_some() {
             return Err(
-                Error::InvalidInput("--report cannot be used with --output".to_string()).into(),
+                Error::InvalidInput("--dry-run cannot be used with --output".to_string()).into(),
             );
+        }
+        if dry_run && overwrite {
+            return Err(Error::InvalidInput(
+                "--dry-run cannot be used with --overwrite".to_string(),
+            )
+            .into());
         }
         Ok(Self {
             lockbox_path,
             output,
             overwrite,
-            report_only,
+            dry_run,
             format,
         })
     }
@@ -145,10 +173,14 @@ fn cached_key(lockbox_path: &str) -> CliResult<SecretVec> {
 }
 
 fn print_report(report: &RecoveryReport, format: OutputFormat) -> CliResult<()> {
-    print_records(&["field", "value"], report_rows(report, None), format)
+    print_records(&["field", "value"], report_rows(report, None, None), format)
 }
 
-fn report_rows(report: &RecoveryReport, output: Option<&str>) -> Vec<Vec<String>> {
+fn report_rows(
+    report: &RecoveryReport,
+    output: Option<&str>,
+    damaged_original: Option<&Path>,
+) -> Vec<Vec<String>> {
     let mut rows = vec![
         vec![
             "intact_file_count".to_string(),
@@ -190,5 +222,48 @@ fn report_rows(report: &RecoveryReport, output: Option<&str>) -> Vec<Vec<String>
     if let Some(output) = output {
         rows.push(vec!["output".to_string(), output.to_string()]);
     }
+    if let Some(damaged_original) = damaged_original {
+        rows.push(vec![
+            "damaged_original".to_string(),
+            damaged_original.display().to_string(),
+        ]);
+    }
     rows
+}
+
+fn default_recovered_path(lockbox_path: &str) -> String {
+    let path = Path::new(lockbox_path);
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("lockbox");
+    parent
+        .join(format!("{stem}.recovered.lbox"))
+        .display()
+        .to_string()
+}
+
+fn same_existing_path(left: &Path, right: &Path) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+fn next_damaged_backup_path(input_path: &Path) -> PathBuf {
+    let parent = input_path.parent().unwrap_or_else(|| Path::new(""));
+    let file_name = input_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("lockbox.lbox");
+    let mut candidate = parent.join(format!("{file_name}.damaged"));
+    let mut index = 1usize;
+    while candidate.exists() {
+        candidate = parent.join(format!("{file_name}.damaged.{index}"));
+        index += 1;
+    }
+    candidate
 }
