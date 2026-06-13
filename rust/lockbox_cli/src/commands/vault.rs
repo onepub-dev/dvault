@@ -136,7 +136,7 @@ fn lockbox_command(args: &[String]) -> CliResult<()> {
 fn form_command(args: &[String]) -> CliResult<()> {
     match args.first().map(String::as_str) {
         Some("define") => form_define(&args[1..]),
-        Some("definitions" | "types") => form_definitions(&args[1..]),
+        Some("definitions") => form_definitions(&args[1..]),
         Some(command) => Err(Error::InvalidInput(format!("unknown vault form command: {command}")).into()),
         None => Err(Error::InvalidInput(
             "missing vault form command; use `lockbox vault form define` or `lockbox vault form definitions`"

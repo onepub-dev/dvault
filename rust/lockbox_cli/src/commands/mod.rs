@@ -426,7 +426,7 @@ fn form_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                 }
             }
         }
-        "definitions" | "types" => {
+        "definitions" => {
             args.extend(optional_lockbox_positionals(
                 positional_values(sub, "args"),
                 0,
@@ -645,7 +645,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                             }
                         }
                     }
-                    "definitions" | "types" => {
+                    "definitions" => {
                         push_option(&mut args, form_sub, "format", "--format");
                     }
                     _ => {

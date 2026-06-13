@@ -645,8 +645,7 @@ fn form_definitions_and_records_flow() {
     assert!(definitions.contains("Login"));
 
     let legacy_types = run_output(bin, &["form", "types", &lockbox]);
-    assert_success(&legacy_types);
-    assert!(String::from_utf8_lossy(&legacy_types.stdout).contains("login"));
+    assert!(!legacy_types.status.success());
 
     let interactive = run_output_with_stdin(
         bin,
@@ -1156,6 +1155,10 @@ fn vault_form_definitions_can_be_used_and_captured() {
     );
     assert_success(&vault_definitions);
     assert!(String::from_utf8_lossy(&vault_definitions.stdout).contains("login"));
+
+    let legacy_types =
+        run_output_without_content_key(bin, &["vault", "form", "types"], &vault_root, &agent_root);
+    assert!(!legacy_types.status.success());
 
     run_without_content_key(
         bin,

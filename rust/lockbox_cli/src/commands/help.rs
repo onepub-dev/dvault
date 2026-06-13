@@ -641,7 +641,6 @@ fn form_command(verbose: bool) -> Command {
         .subcommand(
             Command::new("definitions")
                 .about("List form definitions.")
-                .visible_alias("types")
                 .arg(output_format_arg())
                 .arg(
                     Arg::new("args")
@@ -1179,7 +1178,6 @@ fn vault_command(verbose: bool) -> Command {
                 .subcommand(
                     Command::new("definitions")
                         .about("List reusable form definitions.")
-                        .visible_alias("types")
                         .arg(output_format_arg()),
                 ),
         )
