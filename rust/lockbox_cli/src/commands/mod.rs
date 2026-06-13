@@ -558,13 +558,15 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                     push_many(&mut args, identity_sub, "args");
                 }
                 "import" => {
+                    push_option(&mut args, identity_sub, "public", "--public");
+                    push_option(&mut args, identity_sub, "private", "--private");
                     args.push(value(identity_sub, "name"));
-                    args.push(value(identity_sub, "private-key"));
-                    push_optional(&mut args, identity_sub, "public-key-output");
                 }
-                "export" | "export-private" => {
+                "export" => {
                     push_option(&mut args, identity_sub, "format", "--format");
-                    push_many(&mut args, identity_sub, "args");
+                    push_option(&mut args, identity_sub, "public", "--public");
+                    push_option(&mut args, identity_sub, "private", "--private");
+                    push_optional(&mut args, identity_sub, "name");
                 }
                 "remove" | "rm" => {
                     push_flag(&mut args, identity_sub, "force", "--force");
