@@ -86,9 +86,9 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_success(&env_verbose_help);
     let env_verbose_help = String::from_utf8_lossy(&env_verbose_help.stdout);
     assert!(env_verbose_help.contains("Context:"));
-    assert!(env_verbose_help.contains("Normal values are printed by `variables get`"));
-    assert!(env_verbose_help.contains("Secret values are encrypted the same way"));
-    assert!(env_verbose_help.contains("require `variables get --secret` to print"));
+    assert!(env_verbose_help.contains("Variables let you store name/value pairs securely"));
+    assert!(env_verbose_help.contains("set the variable using the --secret flag"));
+    assert!(env_verbose_help.contains("additional level of security"));
 
     let form_help = run_output(bin, &["form", "--help"]);
     assert_success(&form_help);

@@ -412,7 +412,7 @@ fn variables_command(verbose: bool) -> Command {
     .after_help(verbose_help(
         verbose,
         "Examples:\n  lockbox variables set secrets.lbox APP_MODE production\n  lockbox variables get secrets.lbox APP_MODE\n  lockbox variables export secrets.lbox",
-        "Context:\n  Variables are named data stored inside a lockbox. Normal values are printed by `variables get` and included by `variables export`. Secret values are encrypted the same way, but are redacted from `variables export` and require `variables get --secret` to print.",
+        "Context:\n  Variables let you store name/value pairs securely in your lockbox. For secrets, such as an API key, set the variable using the --secret flag to ensure an additional level of security is applied to those values.",
     ))
     .subcommand_required(true)
     .arg_required_else_help(true)
