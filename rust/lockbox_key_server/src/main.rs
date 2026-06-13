@@ -45,21 +45,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some("bench-store") => {
             let config = config_from_args(args.collect())?;
+            require_dev_command(&config, "bench-store")?;
             store::bench_store(config)?;
         }
         Some("bench-http") => {
             let config = config_from_args(args.collect())?;
+            require_dev_command(&config, "bench-http")?;
             bench_http(config)?;
         }
         Some("bench-http-fetch") => {
             let config = config_from_args(args.collect())?;
+            require_dev_command(&config, "bench-http-fetch")?;
             bench_http_fetch(config)?;
         }
         Some("bench-http-flow") => {
             let config = config_from_args(args.collect())?;
+            require_dev_command(&config, "bench-http-flow")?;
             bench_http_flow(config)?;
         }
-        Some("--help") | Some("-h") | Some("help") => print_help(),
+        Some("--help") | Some("-h") | Some("help") => print_help(args.any(|arg| arg == "--dev")),
         Some(other) => {
             return Err(format!("unknown command `{other}`").into());
         }
@@ -67,20 +71,42 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn print_help() {
+fn require_dev_command(
+    config: &ServerConfig,
+    command: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !config.developer_mode {
+        return Err(format!("command `{command}` requires --dev").into());
+    }
+    Ok(())
+}
+
+fn print_help(dev: bool) {
     println!("Usage:");
-    println!("  lockbox_key_server run [--config PATH] [--bind ADDR] [--state-dir PATH]");
+    println!("  lockbox_key_server run [--config PATH] [--bind ADDR] [--dev]");
     println!("  lockbox_key_server install [--force-config]");
     println!("  lockbox_key_server uninstall [--purge-data]");
     println!("  lockbox_key_server status");
     println!("  lockbox_key_server resync-peer [--config PATH] --peer-url URL");
-    println!("  lockbox_key_server bench-store [--state-dir PATH]");
-    println!("  lockbox_key_server bench-http [--state-dir PATH]");
-    println!("  lockbox_key_server bench-http-fetch [--state-dir PATH]");
-    println!("  lockbox_key_server bench-http-flow [--state-dir PATH]");
+    if dev {
+        println!("  lockbox_key_server bench-store [--dev options]");
+        println!("  lockbox_key_server bench-http [--dev options]");
+        println!("  lockbox_key_server bench-http-fetch [--dev options]");
+        println!("  lockbox_key_server bench-http-flow [--dev options]");
+    }
     println!();
     println!("Options:");
     println!("  --config PATH         Read server config file");
+    println!("  --bind ADDR          Bind address for the HTTP server");
+    println!("  --dev                Enable developer/test command-line overrides");
+    println!("  --peer-url URL        Peer /v1/replicate URL for resync-peer");
+    if !dev {
+        println!("  --help --dev          Show developer/test overrides");
+        return;
+    }
+    println!();
+    println!("Developer/test options:");
+    println!("  --state-dir PATH      Directory used for persisted share store state");
     println!("  --server-id N          Server routing id, 0..35 (0..9, a..z), default 0");
     println!("  --cluster-id ID        Public topology cluster id");
     println!("  --public-url URL       Public /v1/share URL for this server");
@@ -94,7 +120,6 @@ fn print_help() {
     println!("  --route OWNER=PRIMARY[,FAILOVER...]  Add owner routing rule");
     println!("  --replication-token TOKEN  Shared peer replication token");
     println!("  --replication-peer-url URL  Peer /v1/replicate URL");
-    println!("  --peer-url URL        Peer /v1/replicate URL for resync-peer");
     println!("  --origin-epoch N      Local replication epoch");
     println!("  --promoted-owner N    Serve replicated shares for owner id N");
     println!("  --requests N           Benchmark request count");
@@ -133,9 +158,17 @@ fn split_peer_url_args(
 
 fn config_from_args(args: Vec<String>) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let mut config = ServerConfig::default();
+    let dev_options = args.iter().any(|arg| arg == "--dev");
     let mut index = 0;
     while index < args.len() {
-        match args[index].as_str() {
+        let option = args[index].as_str();
+        if dev_only_option(option) && !dev_options {
+            return Err(format!(
+                "option `{option}` requires --dev; put server configuration in --config PATH"
+            )
+            .into());
+        }
+        match option {
             "--bind" => {
                 index += 1;
                 config.bind_addr = args
@@ -151,7 +184,7 @@ fn config_from_args(args: Vec<String>) -> Result<ServerConfig, Box<dyn std::erro
                 index += 1;
                 apply_config_file(&mut config, args.get(index).ok_or("missing value")?)?;
             }
-            "--developer" => config.developer_mode = true,
+            "--dev" => config.developer_mode = true,
             "--server-id" => {
                 index += 1;
                 config.server_id =
@@ -314,7 +347,7 @@ fn config_from_args(args: Vec<String>) -> Result<ServerConfig, Box<dyn std::erro
                     .parse()?;
             }
             "--help" | "-h" => {
-                print_help();
+                print_help(dev_options);
                 std::process::exit(0);
             }
             other => return Err(format!("unknown option `{other}`").into()),
@@ -322,6 +355,36 @@ fn config_from_args(args: Vec<String>) -> Result<ServerConfig, Box<dyn std::erro
         index += 1;
     }
     Ok(config)
+}
+
+fn dev_only_option(option: &str) -> bool {
+    matches!(
+        option,
+        "--state-dir"
+            | "--server-id"
+            | "--cluster-id"
+            | "--public-url"
+            | "--topology-version"
+            | "--topology-token"
+            | "--topology-server"
+            | "--topology-stale-after-ms"
+            | "--topology-heartbeat-interval-ms"
+            | "--route"
+            | "--replication-token"
+            | "--replication-peer-url"
+            | "--origin-epoch"
+            | "--promoted-owner"
+            | "--requests"
+            | "--payload-bytes"
+            | "--concurrency"
+            | "--preload-shares"
+            | "--compact-min-bytes"
+            | "--rate-limit-per-minute"
+            | "--rate-limit-burst"
+            | "--verification-email-command"
+            | "--verification-email-rate-limit-per-hour"
+            | "--verification-email-ip-rate-limit-per-hour"
+    )
 }
 
 fn apply_config_file(
@@ -478,4 +541,52 @@ fn parse_server_id(value: &str) -> Result<u8, Box<dyn std::error::Error>> {
         return Err(format!("server id must be 0..35: {id}").into());
     }
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{config_from_args, require_dev_command};
+    use std::path::PathBuf;
+
+    #[test]
+    fn config_cli_rejects_hidden_server_options_without_dev() {
+        let err = config_from_args(vec![
+            "--state-dir".to_string(),
+            "/tmp/lockbox-key-server-test".to_string(),
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("requires --dev"));
+        assert!(err.contains("--config PATH"));
+    }
+
+    #[test]
+    fn config_cli_allows_hidden_server_options_with_dev() {
+        let config = config_from_args(vec![
+            "--dev".to_string(),
+            "--state-dir".to_string(),
+            "/tmp/lockbox-key-server-test".to_string(),
+            "--server-id".to_string(),
+            "a".to_string(),
+        ])
+        .unwrap();
+        assert!(config.developer_mode);
+        assert_eq!(
+            config.state_dir,
+            PathBuf::from("/tmp/lockbox-key-server-test")
+        );
+        assert_eq!(config.server_id, 10);
+    }
+
+    #[test]
+    fn benchmark_commands_require_dev_mode() {
+        let config = config_from_args(Vec::new()).unwrap();
+        let err = require_dev_command(&config, "bench-store")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "command `bench-store` requires --dev");
+
+        let config = config_from_args(vec!["--dev".to_string()]).unwrap();
+        require_dev_command(&config, "bench-store").unwrap();
+    }
 }
