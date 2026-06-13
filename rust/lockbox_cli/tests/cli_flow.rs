@@ -1484,7 +1484,7 @@ fn cli_env_rename_and_visualize_flow() {
             "/archive/docs",
         ],
     );
-    run(
+    let var_set = run_output(
         bin,
         &[
             "var",
@@ -1494,6 +1494,8 @@ fn cli_env_rename_and_visualize_flow() {
             "postgres://localhost/app",
         ],
     );
+    assert_success(&var_set);
+    assert!(String::from_utf8_lossy(&var_set.stdout).contains("Variable set: /DATABASE_URL"));
 
     let listing = run_output(bin, &["list", lockbox.to_str().unwrap(), "/archive/docs"]);
     assert_success(&listing);
@@ -3424,7 +3426,7 @@ fn cli_secret_variables_require_explicit_source_and_redact_export() {
     let secret_file = dir.join("secret.txt");
     fs::write(&secret_file, "file-secret").unwrap();
 
-    run(
+    let app_mode_set = run_output(
         bin,
         &[
             "variables",
@@ -3435,6 +3437,8 @@ fn cli_secret_variables_require_explicit_source_and_redact_export() {
             "prod",
         ],
     );
+    assert_success(&app_mode_set);
+    assert!(String::from_utf8_lossy(&app_mode_set.stdout).contains("Variable set: /APP_MODE"));
     run(
         bin,
         &[
@@ -3446,7 +3450,7 @@ fn cli_secret_variables_require_explicit_source_and_redact_export() {
             "",
         ],
     );
-    run(
+    let secret_set = run_output(
         bin,
         &[
             "variables",
@@ -3458,6 +3462,10 @@ fn cli_secret_variables_require_explicit_source_and_redact_export() {
             secret_file.to_str().unwrap(),
         ],
     );
+    assert_success(&secret_set);
+    let secret_set = String::from_utf8_lossy(&secret_set.stdout);
+    assert!(secret_set.contains("Variable set: /API_TOKEN"));
+    assert!(!secret_set.contains("file-secret"));
     run(
         bin,
         &[

@@ -115,6 +115,7 @@ fn set_variable(lockbox_path: &str, args: &[String], access: &Access) -> CliResu
         }
     }
     lb.commit()?;
+    println!("Variable set: {}", request.name.as_str());
     Ok(())
 }
 
