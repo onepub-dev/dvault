@@ -80,6 +80,6 @@ pub use sleep_watcher::{agent_sleep_support, AgentSleepSupport};
 pub use vault::{local_vault, LocalVault, Vault};
 pub use vault_directory::{
     backup_default_vault, default_vault_dir, default_vault_path, restore_default_vault,
-    IdentityGeneration, IdentityGenerationStatus, IdentityHistory, KnownLockbox,
-    StoredTrustedRecipient, VaultBackupManifest, VaultDirectory, CURRENT_VAULT_STRUCTURE_VERSION,
+    IdentityGeneration, IdentityGenerationStatus, IdentityHistory, KnownLockbox, StoredContact,
+    VaultBackupManifest, VaultDirectory, CURRENT_VAULT_STRUCTURE_VERSION,
 };

@@ -394,11 +394,11 @@ pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<ResolvedRecipient>
         }
         return Ok(ResolvedRecipient {
             name: Some(name.to_string()),
-            public_key: vault.load_trusted_recipient(name)?,
+            public_key: vault.load_contact(name)?,
         });
     }
     let is_identity = vault.private_key_exists(arg)?;
-    let is_contact = vault.trusted_recipient_exists(arg)?;
+    let is_contact = vault.contact_exists(arg)?;
     match (is_identity, is_contact) {
         (true, true) => Err(cli_error(format!(
             "ambiguous access target: {arg} matches both an identity and a contact. Use identity:{arg} or contact:{arg}."
@@ -409,7 +409,7 @@ pub(crate) fn load_recipient_from_arg(arg: &str) -> CliResult<ResolvedRecipient>
         }),
         (false, true) => Ok(ResolvedRecipient {
             name: Some(arg.to_string()),
-            public_key: vault.load_trusted_recipient(arg)?,
+            public_key: vault.load_contact(arg)?,
         }),
         (false, false) => Err(cli_error(format!(
             "identity or contact not found: {arg}. Use a saved identity, saved contact, or pass a name with a public key file."

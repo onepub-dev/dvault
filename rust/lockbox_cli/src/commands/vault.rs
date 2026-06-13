@@ -398,11 +398,11 @@ fn contact_add(args: &[String]) -> CliResult<()> {
     let name = require_arg(&args, 0, "contact name")?;
     let public_path = require_arg(&args, 1, "public key path")?;
     let vault = default_vault()?;
-    if vault.trusted_recipient_exists(name)? && !overwrite {
+    if vault.contact_exists(name)? && !overwrite {
         return Err(Error::AlreadyExists(format!("contact {name}")).into());
     }
     let recipient = import_public_key(&fs::read(public_path)?)?;
-    vault.store_trusted_recipient(name, &recipient)?;
+    vault.store_contact(name, &recipient)?;
     Ok(())
 }
 
@@ -522,11 +522,11 @@ fn share_receive(args: &[String]) -> CliResult<()> {
     let recipient = RecipientPublicKey::from_bytes(&contact.public_key)?;
     let signing_public = OwnerSigningPublicKey::from_bytes(&contact.signing_public_key)?;
     let vault = default_vault()?;
-    if vault.trusted_recipient_exists(&contact_name)? && !options.overwrite {
+    if vault.contact_exists(&contact_name)? && !options.overwrite {
         return Err(Error::AlreadyExists(format!("contact {contact_name}")).into());
     }
-    vault.store_trusted_recipient(&contact_name, &recipient)?;
-    vault.store_trusted_recipient_signing_key(&contact_name, &signing_public)?;
+    vault.store_contact(&contact_name, &recipient)?;
+    vault.store_contact_signing_key(&contact_name, &signing_public)?;
     println!("contact={contact_name}");
     println!("identity={}", contact.identity);
     println!("share_code={share_code}");
@@ -867,7 +867,7 @@ fn rotate_key(args: &[String]) -> CliResult<()> {
 
 fn remove_contact(args: &[String]) -> CliResult<()> {
     let name = require_arg(args, 0, "contact name")?;
-    default_vault()?.delete_trusted_recipient(name)?;
+    default_vault()?.delete_contact(name)?;
     Ok(())
 }
 
@@ -944,7 +944,7 @@ fn list_contacts(args: &[String]) -> CliResult<()> {
     let (_, format) = output_format_from_args(args)?;
     let vault = default_vault()?;
     let mut rows = Vec::new();
-    for recipient in vault.list_trusted_recipients()? {
+    for recipient in vault.list_contacts()? {
         rows.push(vec![recipient.name]);
     }
     print_records(&["name"], rows, format)?;

@@ -1039,7 +1039,7 @@ fn vault_command_aliases_and_noask_execute_real_flows() {
         &agent_root,
     );
     assert_success(&list);
-    assert!(String::from_utf8_lossy(&list.stdout).contains("friend"));
+    assert_eq!(String::from_utf8_lossy(&list.stdout).trim(), "friend");
 
     run_without_content_key(
         bin,

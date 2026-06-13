@@ -171,7 +171,7 @@ fn vault_open_populates_cache_for_password_lockbox() {
 }
 
 #[test]
-fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backups() {
+fn vault_directory_stores_local_keys_contacts_and_key_directory_backups() {
     let root = unique_dir("directory");
     let vault_password = SecretString::try_from_bytes(b"vault-password".to_vec()).unwrap();
     let vault = VaultDirectory::unlock_or_create(&root, &vault_password).unwrap();
@@ -190,12 +190,10 @@ fn vault_directory_stores_local_keys_trusted_recipients_and_key_directory_backup
         keypair.private_key_record().unwrap()
     );
 
-    vault
-        .store_trusted_recipient("alice", &keypair.public_key())
-        .unwrap();
-    let trusted = vault.list_trusted_recipients().unwrap();
-    assert_eq!(trusted.len(), 1);
-    assert_eq!(trusted[0].name, "alice");
+    vault.store_contact("alice", &keypair.public_key()).unwrap();
+    let contacts = vault.list_contacts().unwrap();
+    assert_eq!(contacts.len(), 1);
+    assert_eq!(contacts[0].name, "alice");
 
     let password = SecretString::try_from_bytes(b"pw".to_vec()).unwrap();
     let lockbox_path = root.join("backup-source.lbox");
@@ -404,24 +402,19 @@ fn vault_directory_public_crud_helpers_flow() {
 
     let recipient = keypair.public_key();
     let signing = OwnerSigningKeyPair::generate().unwrap().public_key();
-    assert!(!vault.trusted_recipient_exists("alice").unwrap());
-    vault.store_trusted_recipient("alice", &recipient).unwrap();
-    vault
-        .store_trusted_recipient_signing_key("alice", &signing)
-        .unwrap();
-    assert!(vault.trusted_recipient_exists("alice").unwrap());
-    assert_eq!(vault.load_trusted_recipient("alice").unwrap(), recipient);
-    assert_eq!(
-        vault.load_trusted_recipient_signing_key("alice").unwrap(),
-        signing
-    );
-    let recipients = vault.list_trusted_recipients().unwrap();
+    assert!(!vault.contact_exists("alice").unwrap());
+    vault.store_contact("alice", &recipient).unwrap();
+    vault.store_contact_signing_key("alice", &signing).unwrap();
+    assert!(vault.contact_exists("alice").unwrap());
+    assert_eq!(vault.load_contact("alice").unwrap(), recipient);
+    assert_eq!(vault.load_contact_signing_key("alice").unwrap(), signing);
+    let recipients = vault.list_contacts().unwrap();
     assert_eq!(recipients.len(), 1);
     assert_eq!(recipients[0].name, "alice");
     assert_eq!(recipients[0].key, recipient);
-    vault.delete_trusted_recipient("alice").unwrap();
-    assert!(!vault.trusted_recipient_exists("alice").unwrap());
-    assert!(vault.load_trusted_recipient_signing_key("alice").is_err());
+    vault.delete_contact("alice").unwrap();
+    assert!(!vault.contact_exists("alice").unwrap());
+    assert!(vault.load_contact_signing_key("alice").is_err());
 
     assert_eq!(vault.key_directory_backup_count().unwrap(), 0);
     let password = SecretString::try_from_bytes(b"pw".to_vec()).unwrap();

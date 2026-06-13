@@ -35,9 +35,9 @@ thread_local! {
 /// Current on-disk structure version for records stored inside the local vault.
 pub const CURRENT_VAULT_STRUCTURE_VERSION: u32 = 1;
 
-/// Trusted recipient entry stored in a `VaultDirectory`.
+/// Contact entry stored in a `VaultDirectory`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoredTrustedRecipient {
+pub struct StoredContact {
     /// User-assigned recipient name.
     pub name: String,
 
@@ -106,7 +106,7 @@ pub struct VaultBackupManifest {
 /// Password-protected local vault file for native reVault metadata.
 ///
 /// A `VaultDirectory` stores its data in `local-vault.lbox` under a private
-/// directory. It can hold recipient private keys, trusted recipient public keys,
+/// directory. It can hold recipient private keys, contact public keys,
 /// and key-directory backups used by `Vault` recovery fallback paths.
 #[derive(Debug)]
 pub struct VaultDirectory {
@@ -424,61 +424,52 @@ impl VaultDirectory {
         OwnerSigningKeyPair::from_private_key_record(bytes)
     }
 
-    /// Stores a trusted recipient public key under `name`.
+    /// Stores a contact public key under `name`.
     ///
     /// Names must contain only ASCII letters, digits, `-`, or `_`.
-    pub fn store_trusted_recipient(&self, name: &str, key: &RecipientPublicKey) -> Result<()> {
-        self.put_record(&trusted_recipient_record_path(name)?, &key.to_bytes())
+    pub fn store_contact(&self, name: &str, key: &RecipientPublicKey) -> Result<()> {
+        self.put_record(&contact_record_path(name)?, &key.to_bytes())
     }
 
-    /// Stores the trusted signing public key associated with a contact.
-    pub fn store_trusted_recipient_signing_key(
-        &self,
-        name: &str,
-        key: &OwnerSigningPublicKey,
-    ) -> Result<()> {
-        self.put_record_replace(
-            &trusted_recipient_signing_record_path(name)?,
-            &key.to_bytes(),
-        )
+    /// Stores the contact signing public key associated with a contact.
+    pub fn store_contact_signing_key(&self, name: &str, key: &OwnerSigningPublicKey) -> Result<()> {
+        self.put_record_replace(&contact_signing_record_path(name)?, &key.to_bytes())
     }
 
-    /// Loads a trusted recipient public key by name.
-    pub fn load_trusted_recipient(&self, name: &str) -> Result<RecipientPublicKey> {
-        RecipientPublicKey::from_bytes(&self.get_record(&trusted_recipient_record_path(name)?)?)
+    /// Loads a contact public key by name.
+    pub fn load_contact(&self, name: &str) -> Result<RecipientPublicKey> {
+        RecipientPublicKey::from_bytes(&self.get_record(&contact_record_path(name)?)?)
     }
 
-    /// Loads the trusted signing public key associated with a contact.
-    pub fn load_trusted_recipient_signing_key(&self, name: &str) -> Result<OwnerSigningPublicKey> {
-        OwnerSigningPublicKey::from_bytes(
-            &self.get_record(&trusted_recipient_signing_record_path(name)?)?,
-        )
+    /// Loads the contact signing public key associated with a contact.
+    pub fn load_contact_signing_key(&self, name: &str) -> Result<OwnerSigningPublicKey> {
+        OwnerSigningPublicKey::from_bytes(&self.get_record(&contact_signing_record_path(name)?)?)
     }
 
-    /// Returns whether a trusted recipient exists under `name`.
-    pub fn trusted_recipient_exists(&self, name: &str) -> Result<bool> {
+    /// Returns whether a contact exists under `name`.
+    pub fn contact_exists(&self, name: &str) -> Result<bool> {
         Ok(self
             .lockbox
             .borrow()
-            .stat(&trusted_recipient_record_path(name)?)
+            .stat(&contact_record_path(name)?)
             .is_some())
     }
 
-    /// Deletes the trusted recipient stored under `name`, if present.
-    pub fn delete_trusted_recipient(&self, name: &str) -> Result<()> {
-        self.delete_record_if_exists(&trusted_recipient_signing_record_path(name)?)?;
-        self.delete_record_if_exists(&trusted_recipient_record_path(name)?)
+    /// Deletes the contact stored under `name`, if present.
+    pub fn delete_contact(&self, name: &str) -> Result<()> {
+        self.delete_record_if_exists(&contact_signing_record_path(name)?)?;
+        self.delete_record_if_exists(&contact_record_path(name)?)
     }
 
-    /// Lists trusted recipients stored in this vault.
-    pub fn list_trusted_recipients(&self) -> Result<Vec<StoredTrustedRecipient>> {
+    /// Lists contacts stored in this vault.
+    pub fn list_contacts(&self) -> Result<Vec<StoredContact>> {
         let mut out = Vec::new();
-        for name in self.list_record_names("/trusted_recipients", ".pub")? {
+        for name in self.list_record_names("/contacts", ".pub")? {
             if name.ends_with(".signing") {
                 continue;
             }
-            out.push(StoredTrustedRecipient {
-                key: self.load_trusted_recipient(&name)?,
+            out.push(StoredContact {
+                key: self.load_contact(&name)?,
                 name,
             });
         }
@@ -1139,16 +1130,13 @@ fn private_key_name_from_variable(name: &str) -> Option<Result<String>> {
     }))
 }
 
-fn trusted_recipient_record_path(name: &str) -> Result<LockboxPath> {
-    LockboxPath::new(format!(
-        "/trusted_recipients/{}.pub",
-        validate_record_name(name)?
-    ))
+fn contact_record_path(name: &str) -> Result<LockboxPath> {
+    LockboxPath::new(format!("/contacts/{}.pub", validate_record_name(name)?))
 }
 
-fn trusted_recipient_signing_record_path(name: &str) -> Result<LockboxPath> {
+fn contact_signing_record_path(name: &str) -> Result<LockboxPath> {
     LockboxPath::new(format!(
-        "/trusted_recipients/{}.signing.pub",
+        "/contacts/{}.signing.pub",
         validate_record_name(name)?
     ))
 }
