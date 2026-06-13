@@ -133,6 +133,34 @@ impl VaultDirectory {
         Self::replace(default_vault_dir()?, password)
     }
 
+    /// Changes the pass phrase for the default vault directory.
+    pub fn change_default_password(
+        old_password: &SecretString,
+        new_password: &SecretString,
+    ) -> Result<()> {
+        Self::change_password(default_vault_dir()?, old_password, new_password)
+    }
+
+    /// Changes the pass phrase for a vault directory.
+    pub fn change_password(
+        root: impl AsRef<Path>,
+        old_password: &SecretString,
+        new_password: &SecretString,
+    ) -> Result<()> {
+        let root = root.as_ref().to_path_buf();
+        let path = root.join(VAULT_FILE_NAME);
+        if !path.exists() {
+            return Err(Error::VaultUnavailable(
+                "local vault is not initialized; run `lockbox vault init` first".to_string(),
+            ));
+        }
+        let _guard = VaultFileLock::acquire(&root)?;
+        let mut lockbox = Lockbox::open_file(&path, LockboxUnlock::Password(old_password))?;
+        lockbox.replace_password(old_password, new_password)?;
+        set_private_file_permissions(&path)?;
+        Ok(())
+    }
+
     /// Replaces the vault directory at `root` using `password`.
     pub fn replace(root: impl AsRef<Path>, password: &SecretString) -> Result<Self> {
         let root = root.as_ref().to_path_buf();

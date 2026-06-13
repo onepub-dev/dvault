@@ -1,6 +1,6 @@
 use super::context::{
-    cli_error, default_vault, read_new_vault_password, read_vault_password,
-    remember_default_vault_password, require_arg, CliResult,
+    cli_error, default_vault, read_new_vault_password, read_replacement_vault_password,
+    read_vault_password, remember_default_vault_password, require_arg, CliResult,
 };
 use super::output::{output_format_from_args, print_records};
 use lockbox_core::{Error, OwnerSigningPublicKey, RecipientKeyPair, RecipientPublicKey};
@@ -29,6 +29,7 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
     let command = require_arg(args, 0, "vault command")?;
     match command {
         "init" => init(&args[1..]),
+        "passphrase" => change_passphrase(&args[1..]),
         "backup" => backup(&args[1..]),
         "restore" => restore(&args[1..]),
         "path" => path(),
@@ -41,6 +42,43 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "lockbox" => lockbox_command(&args[1..]),
         _ => Err(Error::InvalidInput(format!("unknown vault command: {command}")).into()),
     }
+}
+
+fn change_passphrase(args: &[String]) -> CliResult<()> {
+    if !args.is_empty() {
+        return Err(
+            Error::InvalidInput("vault passphrase does not accept arguments".to_string()).into(),
+        );
+    }
+    let path = default_vault_path()?;
+    if !path.exists() {
+        return Err(Error::VaultUnavailable(
+            "local vault is not initialized; run `lockbox vault init` first".to_string(),
+        )
+        .into());
+    }
+
+    let old_password = read_vault_password("Current vault pass phrase: ")?;
+    match VaultDirectory::unlock_or_create_default(&old_password) {
+        Ok(_) => {}
+        Err(Error::InvalidKey) => {
+            return Err(cli_error(
+                "vault open failed: check the current vault pass phrase",
+            ));
+        }
+        Err(err) => return Err(err.into()),
+    }
+
+    let backup_path = passphrase_change_backup_path()?;
+    backup_default_vault(&backup_path, false)?;
+    let new_password = read_replacement_vault_password()?;
+    VaultDirectory::change_default_password(&old_password, &new_password)?;
+    remember_default_vault_password(&new_password)?;
+
+    println!("Vault pass phrase changed successfully.");
+    println!("Backup:");
+    println!("  {}", backup_path.display());
+    Ok(())
 }
 
 fn share_command(args: &[String]) -> CliResult<()> {
@@ -206,6 +244,13 @@ fn absolute_path(path: &std::path::Path) -> CliResult<PathBuf> {
     } else {
         Ok(std::env::current_dir()?.join(path))
     }
+}
+
+fn passphrase_change_backup_path() -> CliResult<PathBuf> {
+    Ok(default_vault_dir()?.join(format!(
+        "local-vault-before-passphrase-change-{}.lockbox-backup",
+        unix_ms_now()
+    )))
 }
 
 fn restore(args: &[String]) -> CliResult<()> {

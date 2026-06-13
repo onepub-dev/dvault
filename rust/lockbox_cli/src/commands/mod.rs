@@ -524,6 +524,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             push_flag(&mut args, sub, "overwrite", "--overwrite");
             args.push(value(sub, "backup"));
         }
+        "passphrase" => {}
         "path" => {}
         "publish" => {
             push_share_publish_options(&mut args, sub);

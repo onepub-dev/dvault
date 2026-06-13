@@ -1066,6 +1066,15 @@ fn vault_command(verbose: bool) -> Command {
                 .arg(required("output", "Backup archive output path.")),
         )
         .subcommand(
+            Command::new("passphrase")
+                .about("Change the local vault pass phrase.")
+                .after_help(verbose_help(
+                    verbose,
+                    "Examples:\n  lockbox vault passphrase",
+                    "Context:\n  The command verifies the current vault pass phrase, creates an encrypted backup of the vault file, then replaces the vault pass phrase. Store the new pass phrase safely; reVault cannot recover the vault without it.",
+                )),
+        )
+        .subcommand(
             Command::new("restore")
                 .about("Restore the local vault from an encrypted backup archive.")
                 .after_help(verbose_help(

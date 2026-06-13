@@ -214,6 +214,14 @@ pub(crate) fn read_new_vault_password() -> CliResult<SecretString> {
     }
 }
 
+pub(crate) fn read_replacement_vault_password() -> CliResult<SecretString> {
+    if let Some(password) = SecretString::try_from_env("LOCKBOX_NEW_VAULT_PASSWORD")? {
+        validate_new_vault_pass_phrase(&password)?;
+        return Ok(password);
+    }
+    read_new_vault_password()
+}
+
 fn read_vault_pass_phrase_mode() -> CliResult<String> {
     println!("Vault pass phrase:");
     println!("  1. Generate a strong pass phrase");

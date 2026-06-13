@@ -209,6 +209,11 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(vault_init_verbose_help.contains("Context:"));
     assert!(vault_init_verbose_help.contains("A new vault also gets a default identity."));
 
+    let vault_passphrase_help = run_output(bin, &["vault", "passphrase", "--help"]);
+    assert_success(&vault_passphrase_help);
+    let vault_passphrase_help = String::from_utf8_lossy(&vault_passphrase_help.stdout);
+    assert!(vault_passphrase_help.contains("Change the local vault pass phrase."));
+
     let vault_identity_create_help = run_output(bin, &["vault", "identity", "create", "--help"]);
     assert_success(&vault_identity_create_help);
     let vault_identity_create_help = String::from_utf8_lossy(&vault_identity_create_help.stdout);
@@ -2427,6 +2432,74 @@ fn vault_init_overwrite_replaces_existing_vault_with_warning() {
     let after = String::from_utf8_lossy(&after.stdout);
     assert!(after.contains("default"));
     assert!(!after.contains("extra"));
+}
+
+#[test]
+fn vault_passphrase_changes_password_and_creates_backup() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-passphrase-change");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    let new_password = "new-test-vault-password";
+
+    run_without_content_key(bin, &["vault", "init"], &vault_root, &agent_root);
+    run_without_content_key(
+        bin,
+        &["vault", "identity", "create", "extra"],
+        &vault_root,
+        &agent_root,
+    );
+
+    let changed = Command::new(bin)
+        .args(["vault", "passphrase"])
+        .env("LOCKBOX_PASSWORD", "test-lockbox-password")
+        .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
+        .env("LOCKBOX_NEW_VAULT_PASSWORD", new_password)
+        .env("LOCKBOX_SESSION_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(&agent_root))
+        .env("LOCKBOX_VAULT_DIR", &vault_root)
+        .output()
+        .unwrap();
+    assert_success(&changed);
+    let changed = String::from_utf8_lossy(&changed.stdout);
+    assert!(changed.contains("Vault pass phrase changed successfully."));
+    assert!(changed.contains("Backup:"));
+    assert!(fs::read_dir(&vault_root).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("local-vault-before-passphrase-change-")
+    }));
+
+    let old_password = Command::new(bin)
+        .args(["vault", "init", "--verify"])
+        .env("LOCKBOX_PASSWORD", "test-lockbox-password")
+        .env("LOCKBOX_VAULT_PASSWORD", "test-vault-password")
+        .env("LOCKBOX_SESSION_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(&agent_root))
+        .env("LOCKBOX_VAULT_DIR", &vault_root)
+        .output()
+        .unwrap();
+    assert!(!old_password.status.success());
+    assert!(String::from_utf8_lossy(&old_password.stderr)
+        .contains("vault open failed: check the vault pass phrase"));
+
+    let new_password_list = Command::new(bin)
+        .args(["vault", "identity", "list", "--format", "tsv"])
+        .env("LOCKBOX_PASSWORD", "test-lockbox-password")
+        .env("LOCKBOX_VAULT_PASSWORD", new_password)
+        .env("LOCKBOX_SESSION_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(&agent_root))
+        .env("LOCKBOX_VAULT_DIR", &vault_root)
+        .output()
+        .unwrap();
+    assert_success(&new_password_list);
+    let new_password_list = String::from_utf8_lossy(&new_password_list.stdout);
+    assert!(new_password_list.contains("default"));
+    assert!(new_password_list.contains("extra"));
 }
 
 #[test]
