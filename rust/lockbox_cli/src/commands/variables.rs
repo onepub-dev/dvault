@@ -52,7 +52,7 @@ pub(crate) fn run(args: &[String], access: &Access) -> CliResult<()> {
             lb.visit_variables(|name, value| match value {
                 VariableValueRef::Normal(value) => {
                     if let Some(name) = request.export_name(name.as_str()) {
-                        println!("{}", request.format.format_assignment(name, value));
+                        println!("{}", request.format.format_assignment(&name, value));
                     }
                     Ok(())
                 }
@@ -424,13 +424,13 @@ enum VariableExportFormat {
 }
 
 struct VariableExportRequest {
-    path: String,
+    path: Option<String>,
     format: VariableExportFormat,
 }
 
 impl VariableExportRequest {
     fn parse(args: &[String]) -> CliResult<Self> {
-        let mut path = "/".to_string();
+        let mut path = None;
         let mut saw_path = false;
         let mut format = VariableExportFormat::Posix;
         let mut index = 0;
@@ -442,7 +442,7 @@ impl VariableExportRequest {
                         VariableExportFormat::parse_value(args.get(index).map(String::as_str))?;
                 }
                 value if !saw_path => {
-                    path = validate_export_path(value)?;
+                    path = Some(validate_export_path(value)?);
                     saw_path = true;
                 }
                 _ => {
@@ -457,21 +457,32 @@ impl VariableExportRequest {
         Ok(Self { path, format })
     }
 
-    fn export_name<'a>(&self, name: &'a str) -> Option<&'a str> {
-        if self.path == "/" {
+    fn export_name(&self, name: &str) -> Option<String> {
+        let Some(path) = self.path.as_deref() else {
+            return export_all_name(name);
+        };
+        if path == "/" {
             let name = name.strip_prefix('/')?;
             if name.contains('/') {
                 return None;
             }
-            return Some(name);
+            return Some(name.to_string());
         }
-        let rest = name.strip_prefix(&self.path)?;
+        let rest = name.strip_prefix(path)?;
         let rest = rest.strip_prefix('/')?;
         if rest.contains('/') {
             return None;
         }
-        Some(rest)
+        Some(rest.to_string())
     }
+}
+
+fn export_all_name(name: &str) -> Option<String> {
+    let name = name.strip_prefix('/').unwrap_or(name);
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.replace('/', "_"))
 }
 
 impl VariableExportFormat {

@@ -3543,8 +3543,9 @@ fn cli_secret_variables_require_explicit_source_and_redact_export() {
     assert_success(&export);
     let export = String::from_utf8_lossy(&export.stdout);
     assert!(export.contains("APP_MODE='prod'"));
-    assert!(!export.contains("prod-path"));
-    assert!(!export.contains("staging-path"));
+    assert!(export.contains("production_APP_MODE='prod-path'"));
+    assert!(export.contains("production_database_DATABASE_URL='postgres://localhost/app'"));
+    assert!(export.contains("staging_APP_MODE='staging-path'"));
     assert!(!export.contains("API_TOKEN"));
     assert!(!export.contains("file-secret"));
 
@@ -3604,6 +3605,7 @@ fn cli_secret_variables_require_explicit_source_and_redact_export() {
     assert_success(&json_export);
     let json_export = String::from_utf8_lossy(&json_export.stdout);
     assert!(json_export.contains("{\"name\":\"APP_MODE\",\"value\":\"prod\"}"));
+    assert!(json_export.contains("{\"name\":\"production_APP_MODE\",\"value\":\"prod-path\"}"));
 
     let secret_get = run_output(
         bin,
