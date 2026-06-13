@@ -12,10 +12,11 @@ mod vault;
 mod visualize;
 
 use clap::ArgMatches;
-use context::{Access, CliResult};
+use context::{cli_error, ensure_lockbox_path_accessible, Access, CliResult};
 use lockbox_core::{Error, SecretVec, WorkerPolicy};
 use lockbox_vault::SecretActivityKind;
 use std::env as std_env;
+use std::path::Path;
 
 pub(crate) fn run() -> CliResult<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -61,7 +62,7 @@ pub(crate) fn run() -> CliResult<()> {
         "access" => keys::access(&access_args(command_matches)?, &access)?,
         "vault" => vault::run(&vault_args(command_matches)?)?,
         "add" => files::add(
-            &add_args(command_matches),
+            &add_args(command_matches)?,
             &access,
             read_worker_policy(command_matches)?,
         )?,
@@ -187,13 +188,45 @@ fn recover_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
     Ok(args)
 }
 
-fn add_args(matches: &ArgMatches) -> Vec<String> {
-    let mut args = two_args(matches, "lockbox", "source");
+fn add_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
+    let first = value(matches, "lockbox-or-source");
+    let second = matches.get_one::<String>("source-or-lockbox-path").cloned();
+    let third = matches.get_one::<String>("lockbox-path").cloned();
+    let mut args = match (second, third) {
+        (None, None) => vec![active_lockbox_for_add()?, first],
+        (Some(second), None) => {
+            if looks_like_lockbox_path(&first) {
+                vec![first, second]
+            } else {
+                vec![active_lockbox_for_add()?, first, second]
+            }
+        }
+        (Some(second), Some(third)) => vec![first, second, third],
+        (None, Some(_)) => unreachable!("clap does not provide third positional without second"),
+    };
     push_flag(&mut args, matches, "recursive", "--recursive");
-    if let Some(path) = matches.get_one::<String>("lockbox-path") {
-        args.push(path.clone());
-    }
-    args
+    Ok(args)
+}
+
+fn active_lockbox_for_add() -> CliResult<String> {
+    active_lockbox_for_add_if_set()?
+        .ok_or_else(|| cli_error("missing lockbox; pass a .lbox path or activate a lockbox"))
+}
+
+fn active_lockbox_for_add_if_set() -> CliResult<Option<String>> {
+    let Some(active) = session::active_lockbox_or_none()? else {
+        return Ok(None);
+    };
+    ensure_lockbox_path_accessible(&active)
+        .map_err(|_| cli_error(format!("active lockbox not found: {active}")))?;
+    Ok(Some(active))
+}
+
+fn looks_like_lockbox_path(value: &str) -> bool {
+    value.ends_with(".lbox")
+        || Path::new(value)
+            .extension()
+            .is_some_and(|ext| ext == "lbox")
 }
 
 fn open_key_args(matches: &ArgMatches) -> Vec<String> {

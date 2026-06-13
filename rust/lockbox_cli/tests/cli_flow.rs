@@ -45,8 +45,8 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let add_help = String::from_utf8_lossy(&add_help.stdout);
     assert!(add_help.contains("Usage: lockbox add"));
     assert!(add_help.contains("-r, --recursive"));
-    assert!(add_help.contains("<lockbox>"));
-    assert!(add_help.contains("<source>"));
+    assert!(add_help.contains("<lockbox-or-source>"));
+    assert!(add_help.contains("[source-or-lockbox-path]"));
     assert!(add_help.contains("[lockbox-path]"));
     assert!(!add_help.contains("--jobs"));
 
@@ -1125,7 +1125,13 @@ fn remove_requires_confirmation_and_reports_count() {
 fn missing_lockbox_errors_are_cli_specific() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("missing-lockbox");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
     let missing = dir.join("missing.lbox");
+    let source = dir.join("source.txt");
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+    fs::write(&source, "missing lockbox source").unwrap();
 
     let output = run_output(bin, &["visualize", missing.to_str().unwrap()]);
     assert!(!output.status.success());
@@ -1133,6 +1139,17 @@ fn missing_lockbox_errors_are_cli_specific() {
     assert!(stderr.contains("lockbox not found:"));
     assert!(!stderr.contains("os error 2"));
     assert!(!stderr.contains("another process is using the file"));
+
+    let add_missing = run_output_without_content_key(
+        bin,
+        &["add", missing.to_str().unwrap(), source.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!add_missing.status.success());
+    let stderr = String::from_utf8_lossy(&add_missing.stderr);
+    assert!(stderr.contains(&format!("lockbox not found: {}", missing.display())));
+    assert!(!stderr.contains("no creation open method"));
 }
 
 #[test]
@@ -2650,7 +2667,7 @@ fn session_and_close_report_empty_cache_and_already_closed_state() {
 }
 
 #[test]
-fn session_activate_sets_default_lockbox_for_list() {
+fn session_activate_sets_default_lockbox_for_commands() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = short_target_dir("active");
     let _ = fs::remove_dir_all(&dir);
@@ -2677,11 +2694,81 @@ fn session_activate_sets_default_lockbox_for_list() {
     let session = run_output_without_content_key(bin, &["session"], &vault_root, &agent_root);
     assert_success(&session);
     let session = String::from_utf8_lossy(&session.stdout);
+    let active_lockbox = lockbox.canonicalize().unwrap();
     assert!(session.contains("Active lockbox:"));
-    assert!(session.contains(lockbox.to_str().unwrap()));
+    assert!(session.contains(active_lockbox.to_str().unwrap()));
 
     let listing = run_output_without_content_key(bin, &["list"], &vault_root, &agent_root);
     assert_success(&listing);
+
+    let missing_add = run_output_without_content_key(
+        bin,
+        &["add", dir.join("missing.md").to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!missing_add.status.success());
+    assert!(String::from_utf8_lossy(&missing_add.stderr).contains("file not found:"));
+    assert!(!String::from_utf8_lossy(&missing_add.stderr).contains("unsupported host path"));
+
+    let source = dir.join("readme.md");
+    fs::write(&source, "active lockbox add\n").unwrap();
+    let add = run_output_without_content_key(
+        bin,
+        &["add", source.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&add);
+
+    let listing = run_output_without_content_key(bin, &["list"], &vault_root, &agent_root);
+    assert_success(&listing);
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("readme.md"));
+
+    let explicit = dir.join("explicit.lbox");
+    run_without_content_key(
+        bin,
+        &["create", "--password", explicit.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    let explicit_source = dir.join("explicit.txt");
+    fs::write(&explicit_source, "explicit lockbox add\n").unwrap();
+    let explicit_add = run_output_without_content_key(
+        bin,
+        &[
+            "add",
+            explicit.to_str().unwrap(),
+            explicit_source.to_str().unwrap(),
+        ],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&explicit_add);
+
+    let explicit_listing = run_output_without_content_key(
+        bin,
+        &["list", explicit.to_str().unwrap()],
+        &vault_root,
+        &agent_root,
+    );
+    assert_success(&explicit_listing);
+    assert!(String::from_utf8_lossy(&explicit_listing.stdout).contains("explicit.txt"));
+
+    fs::remove_file(&lockbox).unwrap();
+    let missing_active = run_output_without_content_key(
+        bin,
+        &["add", source.to_str().unwrap(), "/after-delete.md"],
+        &vault_root,
+        &agent_root,
+    );
+    assert!(!missing_active.status.success());
+    let stderr = String::from_utf8_lossy(&missing_active.stderr);
+    assert!(stderr.contains(&format!(
+        "active lockbox not found: {}",
+        active_lockbox.display()
+    )));
+    assert!(!stderr.contains("Check the supplied value"));
 }
 
 #[test]

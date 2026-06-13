@@ -150,8 +150,8 @@ pub(crate) fn command(verbose: bool) -> Command {
             file_command("add", "Add a file or directory to a lockbox.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox add secrets.lbox ./notes.txt\n  lockbox add --recursive secrets.lbox ./project /project\n  lockbox add -r secrets.lbox ./large-dir /archive",
-                    "Context:\n  Add imports a host file into an open lockbox. Pass --recursive when the source is a directory. If no destination path is supplied, files keep their filename at the lockbox root and recursive directory imports go under the root. Use --jobs in verbose mode to tune large imports.",
+                    "Examples:\n  lockbox add ./notes.txt\n  lockbox add secrets.lbox ./notes.txt\n  lockbox add --recursive ./project /project\n  lockbox add -r secrets.lbox ./large-dir /archive",
+                    "Context:\n  Add imports a host file into an open lockbox. With an active lockbox, omit the lockbox path and pass the source first. Pass --recursive when the source is a directory. If no destination path is supplied, files keep their filename at the lockbox root and recursive directory imports go under the root. Use --jobs in verbose mode to tune large imports.",
                 ))
                 .arg(
                     Arg::new("recursive")
@@ -167,8 +167,14 @@ pub(crate) fn command(verbose: bool) -> Command {
                         .hide(!verbose)
                         .help("Set import worker count."),
                 )
-                .arg(required("lockbox", "Lockbox path."))
-                .arg(required("source", "Source file or directory."))
+                .arg(required(
+                    "lockbox-or-source",
+                    "Lockbox path, or source file/directory when an active lockbox is set.",
+                ))
+                .arg(optional(
+                    "source-or-lockbox-path",
+                    "Source file/directory, or destination path when an active lockbox is set.",
+                ))
                 .arg(optional(
                     "lockbox-path",
                     "Destination path inside the lockbox. Defaults to root.",

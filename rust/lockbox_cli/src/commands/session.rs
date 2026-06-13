@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use lockbox_core::Error;
 use lockbox_vault::{
@@ -39,7 +39,9 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
 fn activate(args: &[String]) -> CliResult<()> {
     let lockbox_path = require_arg(args, 0, "lockbox")?;
     ensure_lockbox_path_accessible(lockbox_path)?;
-    write_active_lockbox(lockbox_path)?;
+    let lockbox_path = fs::canonicalize(lockbox_path)?;
+    let lockbox_path = lockbox_path.to_string_lossy().into_owned();
+    write_active_lockbox(&lockbox_path)?;
     println!("Active lockbox: {lockbox_path}");
     Ok(())
 }
@@ -238,10 +240,19 @@ pub(crate) fn active_lockbox_or_none() -> CliResult<Option<String>> {
 }
 
 pub(crate) fn deactivate_if_active(path: &str) -> CliResult<()> {
-    if active_lockbox()?.as_deref() == Some(path) {
+    let Some(active) = active_lockbox()? else {
+        return Ok(());
+    };
+    if active == path || canonical_path_matches(&active, path) {
         clear_active_lockbox()?;
     }
     Ok(())
+}
+
+fn canonical_path_matches(active: &str, path: &str) -> bool {
+    fs::canonicalize(path)
+        .map(|path| path == Path::new(active))
+        .unwrap_or(false)
 }
 
 fn yes_no(value: bool) -> &'static str {

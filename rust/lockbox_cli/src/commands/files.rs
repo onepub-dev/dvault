@@ -1,4 +1,4 @@
-use super::context::{open_existing, open_or_create, require_arg, Access, CliResult};
+use super::context::{cli_error, open_existing, open_or_create, require_arg, Access, CliResult};
 use super::output::{output_format_from_args, print_records};
 use lockbox_core::{
     Error, ExtractPolicy, ListOptions, Lockbox, LockboxPath, WorkerPolicy, WorkloadProfile,
@@ -19,11 +19,11 @@ pub(crate) fn add(args: &[String], access: &Access, worker_policy: WorkerPolicy)
     let lockbox_path = require_arg(&args, 0, "lockbox")?;
     let source = require_arg(&args, 1, "source")?;
     let source_path = Path::new(source);
-    if source_path.is_dir() && !recursive {
-        return Err(Error::InvalidInput(
-            "source is a directory; pass --recursive to import its files".to_string(),
-        )
-        .into());
+    let source_metadata = source_metadata(source_path)?;
+    if source_metadata.is_dir() && !recursive {
+        return Err(cli_error(
+            "source is a directory; pass --recursive to import its files",
+        ));
     }
     let path = match args.get(2) {
         Some(path) => path.clone(),
@@ -55,6 +55,20 @@ pub(crate) fn add(args: &[String], access: &Access, worker_policy: WorkerPolicy)
         );
     }
     Ok(())
+}
+
+fn source_metadata(source: &Path) -> CliResult<fs::Metadata> {
+    match fs::metadata(source) {
+        Ok(metadata) if metadata.is_file() || metadata.is_dir() => Ok(metadata),
+        Ok(_) => Err(Error::UnsupportedHostPath(source.display().to_string()).into()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            Err(cli_error(format!("file not found: {}", source.display())))
+        }
+        Err(err) => Err(cli_error(format!(
+            "cannot access source {}: {err}",
+            source.display()
+        ))),
+    }
 }
 
 pub(crate) fn extract(args: &[String], access: &Access) -> CliResult<()> {

@@ -140,9 +140,7 @@ pub(crate) fn open_or_create(path: &str, access: &Access) -> CliResult<Lockbox> 
                 mirror_key_directory(&lockbox, path)?;
                 Ok(lockbox)
             }
-            Access::CacheOnly => Err(cli_error(
-                "lockbox does not exist and no creation open method was supplied",
-            )),
+            Access::CacheOnly => Err(cli_error(format!("lockbox not found: {path}"))),
         }
     }
 }
