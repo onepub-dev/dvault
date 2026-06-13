@@ -2152,7 +2152,7 @@ fn vault_init_can_generate_pass_phrase_and_requires_confirmation() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("Generated vault pass phrase:"));
     assert!(stdout.contains("Store this in your password manager before continuing."));
-    assert!(stdout.contains("Type the generated vault pass phrase to confirm:"));
+    assert!(stdout.contains("Retype the generated vault pass phrase to confirm:"));
     assert!(stderr.contains("pass phrases do not match"));
     assert!(!vault_root.join("local-vault.lbox").exists());
 }
