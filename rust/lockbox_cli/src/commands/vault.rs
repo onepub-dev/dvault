@@ -261,6 +261,9 @@ fn init(args: &[String]) -> CliResult<()> {
             if default_forms > 0 {
                 println!("Default forms: {default_forms}");
             }
+            if generated {
+                print_default_identity_backup(&vault)?;
+            }
             return Ok(());
         }
         if verify {
@@ -305,6 +308,9 @@ fn init(args: &[String]) -> CliResult<()> {
     }
     if default_forms > 0 {
         println!("Default forms: {default_forms}");
+    }
+    if generated {
+        print_default_identity_backup(&vault)?;
     }
     println!();
     println!("Pass phrase reminder:");
@@ -1216,6 +1222,41 @@ fn ensure_default_private_key(vault: &VaultDirectory) -> CliResult<bool> {
         &RecipientKeyPair::generate()?,
     )?;
     Ok(true)
+}
+
+fn print_default_identity_backup(vault: &VaultDirectory) -> CliResult<()> {
+    let identity = VaultDirectory::DEFAULT_KEY_NAME;
+    let keypair = vault.load_private_key(identity)?;
+    let public_key = keypair.public_key();
+    let public_bytes = export_public_key(&public_key, KeyFormat::LockboxPem)?;
+    let private_bytes = export_private_key(&keypair, KeyFormat::LockboxPem)?;
+    let fingerprint = public_key_fingerprint(&public_key);
+
+    println!();
+    println!("Emergency identity backup:");
+    println!("  Identity: {identity}");
+    println!(
+        "  Public key fingerprint: {}",
+        format_hex_pairs(&fingerprint)
+    );
+    println!("  Store this private key and your vault pass phrase somewhere safe.");
+    println!("  Anyone with the private key can open lockboxes granted to this identity.");
+    println!();
+    println!("--- reVault identity public key backup ({identity}) ---");
+    io::stdout().write_all(&public_bytes)?;
+    if !public_bytes.ends_with(b"\n") {
+        println!();
+    }
+    println!("--- end reVault identity public key backup ({identity}) ---");
+    println!("--- reVault identity private key backup ({identity}) ---");
+    private_bytes.with_bytes(|bytes| io::stdout().write_all(bytes))??;
+    private_bytes.with_bytes(|bytes| {
+        if !bytes.ends_with(b"\n") {
+            println!();
+        }
+    })?;
+    println!("--- end reVault identity private key backup ({identity}) ---");
+    Ok(())
 }
 
 fn export_public(args: &[String]) -> CliResult<()> {

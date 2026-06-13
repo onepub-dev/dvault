@@ -2501,6 +2501,13 @@ fn password_create_requires_explicit_vault_init() {
     assert!(init.contains("Directory:\n  "));
     assert!(init.contains("Identity: default"));
     assert!(init.contains("Default forms: 7"));
+    assert!(init.contains("Emergency identity backup:"));
+    assert!(init.contains("Public key fingerprint:"));
+    assert!(init.contains("Store this private key and your vault pass phrase somewhere safe."));
+    assert!(init.contains("--- reVault identity public key backup (default) ---"));
+    assert!(init.contains("-----BEGIN LOCKBOX PUBLIC KEY-----"));
+    assert!(init.contains("--- reVault identity private key backup (default) ---"));
+    assert!(init.contains("-----BEGIN LOCKBOX PRIVATE KEY-----"));
     assert!(init.contains(
         "Pass phrase reminder:\n  Store the vault pass phrase somewhere safe.\n  If it is lost, reVault cannot recover this vault."
     ));
@@ -2520,6 +2527,9 @@ fn password_create_requires_explicit_vault_init() {
             "Directory:",
             "Identity: default",
             "Default forms: 7",
+            "Emergency identity backup:",
+            "-----BEGIN LOCKBOX PUBLIC KEY-----",
+            "-----BEGIN LOCKBOX PRIVATE KEY-----",
             "Pass phrase reminder:",
             "If it is lost, reVault cannot recover this vault.",
         ],
