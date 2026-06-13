@@ -26,7 +26,7 @@ pub(crate) fn add(args: &[String], access: &Access, worker_policy: WorkerPolicy)
         ));
     }
     let path = match args.get(2) {
-        Some(path) => path.clone(),
+        Some(path) => destination_lockbox_path(source_path, &source_metadata, path)?,
         None => default_lockbox_path_for_source(source_path)?,
     };
     let creates_lockbox = !Path::new(lockbox_path).exists();
@@ -212,6 +212,32 @@ fn default_lockbox_path_for_source(source: &Path) -> CliResult<String> {
     if source.is_dir() {
         return Ok("/".to_string());
     }
+    Ok(format!("/{}", source_file_name(source)?))
+}
+
+fn destination_lockbox_path(
+    source: &Path,
+    source_metadata: &fs::Metadata,
+    destination: &str,
+) -> CliResult<String> {
+    if source_metadata.is_file() && destination_looks_like_directory(destination) {
+        let path = format!(
+            "{}/{}",
+            destination.trim_end_matches('/'),
+            source_file_name(source)?
+        );
+        LockboxPath::new(&path)?;
+        return Ok(path);
+    }
+    LockboxPath::new(destination)?;
+    Ok(destination.to_string())
+}
+
+fn destination_looks_like_directory(destination: &str) -> bool {
+    destination == "/" || destination.ends_with('/') || !leaf_name(destination).contains('.')
+}
+
+fn source_file_name(source: &Path) -> CliResult<&str> {
     let Some(name) = source.file_name().and_then(|name| name.to_str()) else {
         return Err(Error::UnsupportedHostPath(format!(
             "source path is not valid UTF-8: {}",
@@ -219,7 +245,7 @@ fn default_lockbox_path_for_source(source: &Path) -> CliResult<String> {
         ))
         .into());
     };
-    Ok(format!("/{name}"))
+    Ok(name)
 }
 
 pub(crate) fn remove(args: &[String], access: &Access) -> CliResult<()> {

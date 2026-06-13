@@ -1807,6 +1807,15 @@ fn add_can_default_destination_and_list_recursively() {
             source_file.to_str().unwrap(),
         ],
     );
+    run(
+        bin,
+        &[
+            "add",
+            lockbox.to_str().unwrap(),
+            source_file.to_str().unwrap(),
+            "/some/path",
+        ],
+    );
     let directory_without_recursive = run_output(
         bin,
         &[
@@ -1841,8 +1850,13 @@ fn add_can_default_destination_and_list_recursively() {
     assert_success(&recursive);
     let recursive = String::from_utf8_lossy(&recursive.stdout);
     assert!(recursive.contains("/alpha.txt"));
+    assert!(recursive.contains("/some/path/alpha.txt"));
     assert!(recursive.contains("/copy/one.txt"));
     assert!(recursive.contains("/copy/two.txt"));
+
+    let nested = run_output(bin, &["ls", lockbox.to_str().unwrap(), "/some/path"]);
+    assert_success(&nested);
+    assert!(String::from_utf8_lossy(&nested.stdout).contains("alpha.txt"));
 }
 
 #[test]
