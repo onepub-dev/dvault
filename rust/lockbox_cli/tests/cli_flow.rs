@@ -2119,7 +2119,7 @@ fn vault_init_prompt_mentions_minimum_pass_phrase_length() {
 }
 
 #[test]
-fn vault_init_can_generate_pass_phrase_and_requires_confirmation() {
+fn vault_init_generated_pass_phrase_requires_stored_confirmation() {
     let bin = env!("CARGO_BIN_EXE_lockbox");
     let dir = unique_dir_named("vault-pass-phrase-generated");
     let _ = fs::remove_dir_all(&dir);
@@ -2139,12 +2139,7 @@ fn vault_init_can_generate_pass_phrase_and_requires_confirmation() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(b"\nnot-the-generated-phrase\n")
-        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"\n\n").unwrap();
     let output = child.wait_with_output().unwrap();
 
     assert!(!output.status.success());
@@ -2152,9 +2147,41 @@ fn vault_init_can_generate_pass_phrase_and_requires_confirmation() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("Generated vault pass phrase:"));
     assert!(stdout.contains("Store this in your password manager before continuing."));
-    assert!(stdout.contains("Retype the generated vault pass phrase to confirm:"));
-    assert!(stderr.contains("pass phrases do not match"));
+    assert!(stdout.contains("Continue after storing it? [y/N]:"));
+    assert!(stderr.contains("vault pass phrase was not confirmed as stored"));
     assert!(!vault_root.join("local-vault.lbox").exists());
+}
+
+#[test]
+fn vault_init_generated_pass_phrase_accepts_stored_confirmation() {
+    let bin = env!("CARGO_BIN_EXE_lockbox");
+    let dir = unique_dir_named("vault-pass-phrase-generated-yes");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let vault_root = dir.join("vault");
+    let agent_root = dir.join("agent");
+
+    let mut child = Command::new(bin)
+        .args(["vault", "init"])
+        .env("LOCKBOX_PASSWORD", "test-lockbox-password")
+        .env_remove("LOCKBOX_VAULT_PASSWORD")
+        .env("LOCKBOX_SESSION_AGENT_DIR", &agent_root)
+        .env("LOCKBOX_SESSION_AGENT_LOG", agent_log_path(&agent_root))
+        .env("LOCKBOX_VAULT_DIR", &vault_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"\ny\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Generated vault pass phrase:"));
+    assert!(stdout.contains("Continue after storing it? [y/N]:"));
+    assert!(stdout.contains("Vault created successfully."));
+    assert!(vault_root.join("local-vault.lbox").exists());
 }
 
 #[test]

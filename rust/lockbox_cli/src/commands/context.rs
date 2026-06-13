@@ -11,7 +11,7 @@ use lockbox_vault::{
 };
 use std::fmt;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::Path;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -233,33 +233,21 @@ fn read_generated_vault_pass_phrase() -> CliResult<SecretString> {
     println!();
     let password = SecretString::try_from_bytes(phrase.as_bytes().to_vec())?;
     validate_new_vault_pass_phrase(&password)?;
-    let mut confirm = prompt_visible_secret("Retype the generated vault pass phrase to confirm: ")?;
-    if password != confirm {
-        confirm.zeroize()?;
-        return Err(Error::InvalidInput("pass phrases do not match".to_string()).into());
+    if !confirm_generated_vault_pass_phrase_stored()? {
+        return Err(Error::InvalidInput(
+            "vault pass phrase was not confirmed as stored".to_string(),
+        )
+        .into());
     }
-    confirm.zeroize()?;
     Ok(password)
 }
 
-fn prompt_visible_secret(prompt: &str) -> CliResult<SecretString> {
-    print!("{prompt}");
+fn confirm_generated_vault_pass_phrase_stored() -> CliResult<bool> {
+    print!("Continue after storing it? [y/N]: ");
     io::stdout().flush()?;
-    let mut secret = SecretString::new();
-    let mut stdin = io::stdin().lock();
-    let mut buffer = [0u8; 1];
-    loop {
-        let read = stdin.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        if matches!(buffer[0], b'\n' | b'\r') {
-            break;
-        }
-        secret.try_extend_from_slice(&buffer[..read])?;
-        buffer.fill(0);
-    }
-    Ok(secret)
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
 }
 
 fn read_manual_vault_pass_phrase() -> CliResult<SecretString> {
