@@ -1180,7 +1180,7 @@ fn vault_command(verbose: bool) -> Command {
                         .after_help(verbose_help(
                             verbose,
                             "Examples:\n  lockbox vault contact list\n  lockbox vault contact list --format json",
-                            "Context:\n  Contact list shows public keys you have saved for other identities. Use these names with access add when granting lockbox access.",
+                            "Context:\n  Contact list shows public keys you have saved for other identities. Saved contacts have already passed fingerprint verification during import or receive; there is no separate trust-state that changes over time. Use these names with access add when granting lockbox access.",
                         ))
                         .arg(output_format_arg()),
                 )

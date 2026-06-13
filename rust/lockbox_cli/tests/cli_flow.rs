@@ -315,6 +315,13 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(vault_contact_verbose_help.contains("opening requires the matching private identity"));
     assert!(!vault_contact_verbose_help.contains("on this machine"));
 
+    let contact_list_verbose_help =
+        run_output(bin, &["vault", "contact", "list", "--help", "--verbose"]);
+    assert_success(&contact_list_verbose_help);
+    let contact_list_verbose_help = String::from_utf8_lossy(&contact_list_verbose_help.stdout);
+    assert!(contact_list_verbose_help.contains("already passed fingerprint verification"));
+    assert!(contact_list_verbose_help.contains("no separate trust-state"));
+
     let access_help = run_output(bin, &["access", "--help"]);
     assert_success(&access_help);
     let access_help = String::from_utf8_lossy(&access_help.stdout);
