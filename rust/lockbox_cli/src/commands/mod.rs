@@ -19,7 +19,7 @@ use std::env as std_env;
 use std::path::Path;
 
 pub(crate) fn run() -> CliResult<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = normalize_form_define_separator(std::env::args().skip(1).collect());
     if args.first().map(String::as_str) == Some("__agent") {
         return Ok(lockbox_vault::serve_agent()?);
     }
@@ -79,6 +79,16 @@ pub(crate) fn run() -> CliResult<()> {
     }
 
     Ok(())
+}
+
+fn normalize_form_define_separator(mut args: Vec<String>) -> Vec<String> {
+    if args.first().map(String::as_str) != Some("form")
+        || args.get(1).map(String::as_str) != Some("define")
+    {
+        return args;
+    }
+    args.retain(|arg| arg != "--");
+    args
 }
 
 fn command_secret_activity(command: &str) -> Option<SecretActivityKind> {

@@ -602,11 +602,11 @@ fn form_command(verbose: bool) -> Command {
             Command::new("define")
                 .about("Create or revise a form definition.")
                 .override_usage(
-                    "lockbox form define <lockbox> [alias] --field <FIELD[:KIND[:required[:LABEL]]]>...\n\nExample:\n  lockbox form define secrets.lbox login --field username:text --field password:secret",
+                    "lockbox form define <lockbox> [alias] --field <NAME[:KIND[:required[:LABEL]]]>...\n\nExample:\n  lockbox form define secrets.lbox login --field username:text --field password:secret",
                 )
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form define secrets.lbox login --name Login --field username:text:required:User --field password:secret:required:Password\n\nField form:\n  FIELD[:KIND[:required[:LABEL]]]\n\nKinds:\n  text, secret, password, url, email, date, month, notes, number",
+                    "Examples:\n  lockbox form define secrets.lbox login --field username:text --field password:secret\n  lockbox form define secrets.lbox login --name Login --field username:text:required:User --field password:secret:required:Password\n\nField form:\n  NAME[:KIND[:required[:LABEL]]]\n\nKinds:\n  text, secret, password, url, email, date, month, notes, number",
                     "Context:\n  Define creates a new form definition for a new alias. If the alias already resolves to exactly one definition, define appends a new revision. If an imported shared lockbox has conflicting aliases, pass --definition-id to revise the intended definition explicitly.",
                 ))
                 .arg(
@@ -632,7 +632,7 @@ fn form_command(verbose: bool) -> Command {
                 .arg(
                     Arg::new("field")
                         .long("field")
-                        .value_name("FIELD[:KIND[:required[:LABEL]]]")
+                        .value_name("NAME[:KIND[:required[:LABEL]]]")
                         .action(ArgAction::Append)
                         .required(true)
                         .help("Add one field to the definition."),

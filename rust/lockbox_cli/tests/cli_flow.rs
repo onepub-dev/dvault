@@ -101,11 +101,13 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert_success(&form_define_help);
     let form_define_help = String::from_utf8_lossy(&form_define_help.stdout);
     assert!(form_define_help.contains("--definition-id <DEFINITION_ID>"));
+    assert!(form_define_help.contains("--field <NAME[:KIND[:required[:LABEL]]]>"));
     assert!(!form_define_help.contains("--type-id"));
 
     let form_define_verbose_help = run_output(bin, &["form", "define", "--help", "--verbose"]);
     assert_success(&form_define_verbose_help);
     let form_define_verbose_help = String::from_utf8_lossy(&form_define_verbose_help.stdout);
+    assert!(form_define_verbose_help.contains("NAME[:KIND[:required[:LABEL]]]"));
     assert!(!form_define_verbose_help.contains("otp"));
 
     let form_define_error = run_output(bin, &["form", "define", "test.lbox"]);
@@ -129,6 +131,26 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(!form_otp_error.status.success());
     assert!(String::from_utf8_lossy(&form_otp_error.stderr)
         .contains("unsupported form field kind: otp"));
+
+    let dir = unique_dir_named("form-define-separator");
+    fs::create_dir_all(&dir).unwrap();
+    let lockbox = dir.join("forms.lbox");
+    let form_define_with_separator = run_output(
+        bin,
+        &[
+            "form",
+            "define",
+            lockbox.to_str().unwrap(),
+            "login",
+            "--",
+            "--field",
+            "username:text",
+            "--field",
+            "password:secret",
+        ],
+    );
+    assert_success(&form_define_with_separator);
+    assert!(String::from_utf8_lossy(&form_define_with_separator.stdout).contains("fields: 2"));
 
     let form_set_help = run_output(bin, &["form", "set", "--help"]);
     assert_success(&form_set_help);
