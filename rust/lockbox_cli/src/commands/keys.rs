@@ -4,7 +4,7 @@ use super::context::{
     read_new_password, read_password, require_arg, Access, CliResult,
 };
 use super::output::{output_format_from_args, print_records};
-use super::session::{clear_active_lockbox, deactivate_if_active};
+use super::session::deactivate_if_active;
 use lockbox_core::vault_bridge::VaultUnlock;
 use lockbox_core::{
     Error, Lockbox, LockboxKeySlotProtection, LockboxProtection, LockboxUnlock, RecipientKeyPair,
@@ -173,20 +173,20 @@ fn remember_lockbox_password_if_enabled(
 }
 
 pub(crate) fn close(args: &[String]) -> CliResult<()> {
-    if args.first().map(String::as_str) == Some("--all") {
-        local_vault().lock_all()?;
-        clear_active_lockbox()?;
-        println!("All lockboxes closed.");
+    let lockbox_path = require_arg(args, 0, "lockbox")?;
+    if lockbox_path == "--all" {
+        return Err(Error::InvalidInput(
+            "close --all has been removed; use `lockbox session close-all`".to_string(),
+        )
+        .into());
+    }
+    let was_open = lockbox_is_open(lockbox_path);
+    local_vault().lock_lockbox(lockbox_path)?;
+    deactivate_if_active(lockbox_path)?;
+    if was_open {
+        println!("Lockbox closed: {lockbox_path}");
     } else {
-        let lockbox_path = require_arg(args, 0, "lockbox")?;
-        let was_open = lockbox_is_open(lockbox_path);
-        local_vault().lock_lockbox(lockbox_path)?;
-        deactivate_if_active(lockbox_path)?;
-        if was_open {
-            println!("Lockbox closed: {lockbox_path}");
-        } else {
-            println!("Lockbox was already closed: {lockbox_path}");
-        }
+        println!("Lockbox was already closed: {lockbox_path}");
     }
     Ok(())
 }

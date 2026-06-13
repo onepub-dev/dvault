@@ -394,6 +394,20 @@ fn help_is_grouped_and_commands_have_specific_help() {
     let unlock_verbose_help = String::from_utf8_lossy(&unlock_verbose_help.stdout);
     assert!(unlock_verbose_help.contains("Close the lockbox when you have finished working"));
     assert!(unlock_verbose_help.contains("automatically close the lockbox after 30 minutes"));
+
+    let close_help = run_output(bin, &["close", "--help"]);
+    assert_success(&close_help);
+    let close_help = String::from_utf8_lossy(&close_help.stdout);
+    assert!(close_help.contains("Close the lockbox."));
+    assert!(close_help.contains("lockbox close secrets.lbox"));
+    assert!(close_help.contains("lockbox close"));
+    assert!(!close_help.contains("--all"));
+
+    let close_verbose_help = run_output(bin, &["close", "--help", "--verbose"]);
+    assert_success(&close_verbose_help);
+    let close_verbose_help = String::from_utf8_lossy(&close_verbose_help.stdout);
+    assert!(close_verbose_help.contains("Closes the given lockbox or the active lockbox"));
+    assert!(close_verbose_help.contains("automatically close the lockbox after 30 minutes"));
 }
 
 #[test]
@@ -1626,7 +1640,7 @@ fn doctor_lockbox_reports_closed_metadata_and_unlock_guidance() {
         &vault_root,
         &agent_root,
     );
-    run_without_content_key(bin, &["close", "--all"], &vault_root, &agent_root);
+    run_without_content_key(bin, &["session", "close-all"], &vault_root, &agent_root);
 
     let doctor = run_output_without_lockbox_password(
         bin,
@@ -3178,6 +3192,10 @@ fn session_and_close_report_empty_cache_and_already_closed_state() {
     assert_success(&closed);
     assert!(String::from_utf8_lossy(&closed.stdout).contains("already closed"));
 
+    let close_all =
+        run_output_without_content_key(bin, &["close", "--all"], &vault_root, &agent_root);
+    assert!(!close_all.status.success());
+
     let closed = run_output_without_content_key(
         bin,
         &["close", lockbox.to_str().unwrap()],
@@ -3713,7 +3731,7 @@ fn unlock_accepts_password_sources_and_session_duration() {
         &vault_root,
         &agent_root,
     );
-    run_without_content_key(bin, &["close", "--all"], &vault_root, &agent_root);
+    run_without_content_key(bin, &["session", "close-all"], &vault_root, &agent_root);
 
     let env_unlock = run_output_without_lockbox_password(
         bin,

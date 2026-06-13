@@ -95,20 +95,10 @@ pub(crate) fn command(verbose: bool) -> Command {
             archive_command("close", "Close the lockbox.")
                 .after_help(verbose_help(
                     verbose,
-                    "Examples:\n  lockbox close secrets.lbox\n  lockbox close --all",
-                    "Context:\n  Close removes cached open access from the session agent. It does not change encrypted lockbox contents; it only makes later commands require open access again.",
+                    "Examples:\n  lockbox close secrets.lbox\n  lockbox close",
+                    "Context:\n  Closes the given lockbox or the active lockbox if no argument is given. On supported platforms the Lockbox Session Agent will automatically close the lockbox after 30 minutes.",
                 ))
-                .arg(
-                    Arg::new("all")
-                        .long("all")
-                        .action(ArgAction::SetTrue)
-                        .conflicts_with("lockbox")
-                        .help("Close all lockboxes."),
-                )
-                .arg(
-                    optional("lockbox", "Lockbox path. Defaults to the active lockbox.")
-                        .conflicts_with("all"),
-                ),
+                .arg(optional("lockbox", "Lockbox path. Defaults to the active lockbox.")),
             archive_command("recover", "Recover readable entries from a damaged lockbox.")
                 .after_help(verbose_help(
                     verbose,

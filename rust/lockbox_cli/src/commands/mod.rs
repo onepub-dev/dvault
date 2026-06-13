@@ -176,11 +176,7 @@ fn create_args(matches: &ArgMatches) -> Vec<String> {
 }
 
 fn close_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
-    if matches.get_flag("all") {
-        Ok(vec!["--all".to_string()])
-    } else {
-        Ok(vec![optional_lockbox_value(matches, "lockbox")?])
-    }
+    Ok(vec![optional_lockbox_value(matches, "lockbox")?])
 }
 
 fn open_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
