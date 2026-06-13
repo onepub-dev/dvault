@@ -348,6 +348,11 @@ fn help_is_grouped_and_commands_have_specific_help() {
     assert!(!vault_help.contains("platform-store"));
     assert!(!vault_help.contains("  open"));
     assert!(!vault_help.contains("  help"));
+    assert!(!vault_help.contains("path"));
+
+    let vault_path = run_output(bin, &["vault", "path"]);
+    assert!(!vault_path.status.success());
+    assert!(String::from_utf8_lossy(&vault_path.stderr).contains("unrecognized subcommand"));
 
     let sessions_help = run_output(bin, &["session", "--help"]);
     assert_success(&sessions_help);
@@ -1729,14 +1734,21 @@ fn cli_env_rename_and_visualize_flow() {
             vault_public.to_str().unwrap(),
         ],
     );
+    let contact_fingerprint = encode_hex(&public_key_fingerprint(
+        &import_public_key(&fs::read(&vault_public).unwrap()).unwrap(),
+    ));
     run(
         bin,
         &[
             "vault",
             "contact",
-            "add",
+            "import",
             "default",
             vault_public.to_str().unwrap(),
+            "--fingerprint",
+            &contact_fingerprint,
+            "--fingerprint-channel",
+            "phone-call-to-owner",
         ],
     );
     let identity_list = run_output(bin, &["vault", "identity", "list", "--format", "tsv"]);
@@ -3375,7 +3387,7 @@ fn session_active_lockbox_applies_to_lockbox_argument_variants() {
     );
     assert_success(&exported);
     assert!(String::from_utf8_lossy(&exported.stdout)
-        .contains("{\"name\":\"API_KEY\",\"value\":\"normal-key\"}"));
+        .contains("{\"name\":\"prod_API_KEY\",\"value\":\"normal-key\"}"));
     run_in(
         bin,
         &["variables", "rm", "/prod/API_KEY"],

@@ -46,7 +46,6 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         "passphrase" => change_passphrase(&args[1..]),
         "backup" => backup(&args[1..]),
         "restore" => restore(&args[1..]),
-        "path" => path(),
         "identity" => identity_command(&args[1..]),
         "contact" => contact_command(&args[1..]),
         "form" => form_command(&args[1..]),
@@ -368,11 +367,6 @@ fn restore(args: &[String]) -> CliResult<()> {
     println!("vault_size={}", manifest.vault_size);
     println!("vault_sha256={}", manifest.vault_sha256);
     println!("Vault restored successfully.");
-    Ok(())
-}
-
-fn path() -> CliResult<()> {
-    println!("{}", default_vault_dir()?.display());
     Ok(())
 }
 

@@ -1129,11 +1129,6 @@ fn vault_command(verbose: bool) -> Command {
                 )
                 .arg(required("backup", "Backup archive input path.")),
         )
-        .subcommand(
-            Command::new("path")
-                .about("Print the local vault directory.")
-                .hide(!verbose),
-        )
         .subcommand(vault_identity_command(verbose))
         .subcommand(
             Command::new("form")

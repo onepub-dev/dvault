@@ -538,7 +538,6 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             args.push(value(sub, "backup"));
         }
         "passphrase" => {}
-        "path" => {}
         "identity" => {
             let (identity_command, identity_sub) = sub
                 .subcommand()
