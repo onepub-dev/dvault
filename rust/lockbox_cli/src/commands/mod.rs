@@ -600,7 +600,7 @@ fn vault_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
                         args.push(value(contact_sub, "public-key"));
                     }
                     "list" | "ls" => push_option(&mut args, contact_sub, "format", "--format"),
-                    "receive" | "fetch" => {
+                    "receive" => {
                         push_share_transport_options(&mut args, contact_sub);
                         push_option(&mut args, contact_sub, "fingerprint", "--fingerprint");
                         push_option(

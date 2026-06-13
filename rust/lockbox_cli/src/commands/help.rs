@@ -1242,7 +1242,6 @@ fn vault_command(verbose: bool) -> Command {
                 .subcommand(
                     Command::new("receive")
                         .about("Receive a published identity and save it as a contact.")
-                        .visible_alias("fetch")
                         .after_help(verbose_help(
                             verbose,
                             "Examples:\n  lockbox vault contact receive <share-code>\n  lockbox vault contact receive <share-code> alice",
