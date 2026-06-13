@@ -22,8 +22,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SHARE_RECEIVE_VERIFICATION_ADVICE: &str = concat!(
-    "verify the fingerprint by asking the publisher over a trusted channel you initiated; ",
-    "if the publisher sends you the fingerprint before you ask, do not accept it"
+    "public key received; verify it by asking the publisher for the full fingerprint. ",
+    "You must initiate the communication over a channel you already trust. ",
+    "If the publisher sends you the fingerprint before you ask, do not accept it."
 );
 const SHARE_FINGERPRINT_SECURITY_NOTE: &str = concat!(
     "use the full fingerprint; short PINs are only accidental-error checks ",
@@ -1418,8 +1419,8 @@ mod tests {
 
     #[test]
     fn share_receive_advice_requires_recipient_initiated_trusted_channel() {
-        assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("trusted channel"));
-        assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("you initiated"));
+        assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("channel you already trust"));
+        assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("You must initiate"));
         assert!(SHARE_RECEIVE_VERIFICATION_ADVICE.contains("do not accept it"));
     }
 

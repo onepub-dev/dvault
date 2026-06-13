@@ -1223,9 +1223,11 @@ fn vault_command(verbose: bool) -> Command {
                             concat!(
                                 "Context:\n  Receive saves the shared public key and signing key as a local contact. ",
                                 "The key server must have verified the publisher email first. Enter the ",
-                                "full fingerprint received through a receiver-initiated second channel. Short PINs are ",
-                                "only accidental-error checks and are too small to authenticate a public key ",
-                                "against substitution. Email and owner-initiated messages are rejected.",
+                                "full fingerprint by asking the publisher over a communications channel that you ",
+                                "already trust. You must initiate the communication. If the publisher sends you ",
+                                "the fingerprint before you ask, do not accept it. Short PINs are only ",
+                                "accidental-error checks and are too small to authenticate a public key against ",
+                                "substitution. Email, newly supplied channels, and owner-initiated messages are rejected.",
                             ),
                         ))
                         .arg(key_server_arg())

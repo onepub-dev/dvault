@@ -237,6 +237,8 @@ fn help_is_grouped_and_commands_have_specific_help() {
         String::from_utf8_lossy(&contact_receive_verbose_help.stdout);
     assert!(contact_receive_verbose_help.contains("Short PINs"));
     assert!(contact_receive_verbose_help.contains("authenticate a public key"));
+    assert!(contact_receive_verbose_help.contains("You must initiate the communication"));
+    assert!(contact_receive_verbose_help.contains("do not accept it"));
     for removed in ["share", "publish", "receive", "remove"] {
         let output = run_output(bin, &["vault", removed, "--help"]);
         assert!(!output.status.success());
