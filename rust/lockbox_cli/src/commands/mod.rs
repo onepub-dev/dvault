@@ -529,10 +529,13 @@ fn session_args(matches: &ArgMatches) -> CliResult<Vec<String>> {
             "activate" => args.push(value(sub, "lockbox")),
             "deactivate" | "close-all" | "stop" => {}
             "auto-open" => {
-                let (auto_command, auto_sub) = sub.subcommand().unwrap_or(("status", sub));
-                args.push(auto_command.to_string());
-                if auto_command == "status" {
-                    push_option(&mut args, auto_sub, "format", "--format");
+                if let Some((auto_command, auto_sub)) = sub.subcommand() {
+                    args.push(auto_command.to_string());
+                    if auto_command == "status" {
+                        push_option(&mut args, auto_sub, "format", "--format");
+                    }
+                } else {
+                    args.push("status".to_string());
                 }
             }
             _ => {

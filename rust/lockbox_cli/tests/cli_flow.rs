@@ -1279,6 +1279,12 @@ fn doctor_and_session_report_agent_state() {
             "vault\t",
         ],
     );
+
+    let auto_open_default = run_output_in(bin, &["session", "auto-open"], &vault_root, &agent_root);
+    assert_success(&auto_open_default);
+    let auto_open_default = String::from_utf8_lossy(&auto_open_default.stdout);
+    assert!(auto_open_default.contains("supported"));
+    assert!(auto_open_default.contains("scope"));
 }
 
 #[test]
